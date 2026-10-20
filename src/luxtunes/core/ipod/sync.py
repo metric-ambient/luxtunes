@@ -54,6 +54,7 @@ class SyncReport:
     problems: list[str] = field(default_factory=list)
     cancelled: bool = False
     photos: int = 0
+    phone_playlists: object = None     # Android: changes.PlaylistResult from the phone
 
 
 @dataclass

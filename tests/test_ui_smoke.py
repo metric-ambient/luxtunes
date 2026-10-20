@@ -238,6 +238,7 @@ def test_menus_duplicates_recent_and_adding(window, tmp_path):
     (folder / "song.mp3").write_bytes((b"\xff\xfb\x90\x64" + b"\x00" * 413) * 30)
     before = library.count_tracks(window.conn, "music")
     window._add_paths([str(folder)])
+    _wait_for_adding(window)
     assert library.count_tracks(window.conn, "music") == before + 1
     assert window.model.rowCount() == before + 1
 
@@ -1310,3 +1311,78 @@ def test_ejecting_a_phone_doesnt_open_it_again(window, tmp_path, monkeypatch):
     assert ejected == [phone]
     window._auto_mount_phones()
     assert opened == []
+
+
+def _wait_for_adding(window, seconds=30):
+    import time
+
+    from PySide6.QtWidgets import QApplication
+
+    deadline = time.time() + seconds
+    while window._add_worker is not None and time.time() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.02)
+    assert window._add_worker is None
+
+
+def test_adding_a_folder_runs_in_the_background_and_can_be_stopped(window, tmp_path, monkeypatch):
+    import threading
+
+    from luxtunes.core import add_files, library
+
+    folder = tmp_path / "lots"
+    for i in range(5):
+        song = folder / f"Artist {i}" / f"{i:02d} song.mp3"
+        song.parent.mkdir(parents=True)
+        song.write_bytes((b"\xff\xfb\x90\x64" + b"\x00" * 413) * 30)
+    before = library.count_tracks(window.conn, "music")
+    # The third file is slow (e.g. a drive that stalls): stopping still works.
+    real_add_file = add_files.add_file
+    reached = threading.Event()
+
+    def slow(conn, path, *a, **k):
+        if "02 song" in path:
+            reached.set()
+            stop = k.get("stop") or a[-1]
+            stop.wait(10)
+            raise add_files.AddStopped()
+        return real_add_file(conn, path, *a, **k)
+
+    monkeypatch.setattr(add_files, "add_file", slow)
+    window._add_paths([str(folder)])
+    assert reached.wait(10)
+    assert window.lcd.showing_task == "add"              # the window stays usable meanwhile
+    window._stop_task("add")
+    _wait_for_adding(window)
+    assert library.count_tracks(window.conn, "music") == before + 2      # the first two stay
+    monkeypatch.setattr(add_files, "add_file", real_add_file)
+    window._add_paths([str(folder)])                     # again: carries on from there
+    _wait_for_adding(window)
+    assert library.count_tracks(window.conn, "music") == before + 5
+
+
+def test_playlist_deletions_from_a_phone_are_asked_about(window, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    answers = []
+
+    class FakeWorker:
+        def answer(self, ok):
+            answers.append(ok)
+
+    window._sync_worker = FakeWorker()
+    window._sync_name = "Pixel 7"
+    shown = []
+
+    chosen = []
+
+    def fake_exec(box):
+        shown.append(box.text())
+        chosen.append(next(b for b in box.buttons() if b.text() == "Keep Playlists"))
+        return 0
+
+    monkeypatch.setattr(QMessageBox, "exec", fake_exec)
+    monkeypatch.setattr(QMessageBox, "clickedButton", lambda box: chosen[-1])
+    window._confirm_phone_deletions(["Road Trip"])
+    window._sync_worker = None
+    assert answers == [False] and "Road Trip" in shown[0]

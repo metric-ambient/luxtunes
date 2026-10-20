@@ -123,3 +123,37 @@ def test_changing_the_media_kind(tmp_path):
     assert library.load_track(conn, song)["bookmarkable"] == 0                 # your choice wins
     with pytest.raises(ValueError):
         library.update_track_fields(conn, song, {"media_kind": "ringtone"})
+
+
+def test_a_stopped_copy_leaves_no_half_file(tmp_path):
+    import threading
+
+    source = tmp_path / "big.mp3"
+    source.write_bytes(b"x" * (3 * add_files.CHUNK))
+    target = tmp_path / "copy.mp3"
+    stop = threading.Event()
+    stop.set()
+    with pytest.raises(add_files.AddStopped):
+        add_files.copy_file(str(source), target, stop)
+    assert not target.exists()
+    add_files.copy_file(str(source), target)
+    assert target.read_bytes() == source.read_bytes()
+
+
+def test_one_odd_file_doesnt_stop_the_rest(tmp_path, monkeypatch):
+    conn, root = setup(tmp_path)
+    for i in range(3):
+        mp3(tmp_path / "In" / f"{i}.mp3", name=f"Song {i}", artist="A")
+    real = add_files.read_fields
+
+    def odd(path):
+        if path.endswith("1.mp3"):
+            raise RuntimeError("a file mutagen chokes on")
+        return real(path)
+
+    monkeypatch.setattr(add_files, "read_fields", odd)
+    seen = []
+    result = add_files.add_paths(conn, [str(tmp_path / "In")],
+                                 progress=lambda done, total, path: seen.append(path) or True)
+    assert len(result.added) == 2 and len(result.failed) == 1 and len(seen) == 3
+    assert "RuntimeError" in result.failed[0] and not result.stopped

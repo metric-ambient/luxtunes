@@ -32,13 +32,16 @@ import os
 import secrets
 import shutil
 import sqlite3
+import struct
 import tempfile
-from datetime import datetime, timezone
+import time
 from pathlib import Path
 
 from luxtunes import __version__
 from luxtunes.core import artwork as artwork_reader
 from luxtunes.core import library, organize
+from luxtunes.core.android import changes as phone_changes
+from luxtunes.core.android.changes import CHANGES
 from luxtunes.core.android.device import Phone
 from luxtunes.core.ipod import plan as ipod_plan
 from luxtunes.core.ipod import settings as ipod_settings
@@ -52,9 +55,8 @@ FOLDER = "LuxTunes"
 MEDIA = "LuxTunes Media"
 PLAYLISTS = "Playlists"
 DATABASE = "library.db"
-CHANGES = "changes.json"
 MANIFEST = ".luxtunes-sync.json"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2          # 2: smart rules, reference playlists, playlists back
 
 
 # ---- The library's own id (so a phone knows which library it came from) ------------------
@@ -166,46 +168,64 @@ def existing_files(root: Path) -> set[str]:
     return found
 
 
-# ---- Plays, skips and ratings from a player on the phone --------------------------------------
+# ---- What the phone sends back --------------------------------------------------------------
 
-def _unix(text) -> int:
-    if not text:
-        return 0
+def _empty_changes(root: Path, merged: phone_changes.PhoneChanges) -> None:
+    """Right after merging: empty changes.json, so nothing counts twice, keeping
+    anything the phone added since it was read."""
+    if merged.text is None:
+        return
     try:
-        return int(datetime.strptime(str(text), "%Y-%m-%dT%H:%M:%SZ")
-                   .replace(tzinfo=timezone.utc).timestamp())
-    except ValueError:
-        return 0
+        now = (root / CHANGES).read_text(encoding="utf-8")
+    except OSError:
+        now = None
+    _write(root, CHANGES, json.dumps(phone_changes.emptied(merged, now)).encode("utf-8"))
 
 
-def read_changes(root: Path) -> list[stats.IPodTrackStats]:
-    """changes.json, in the same shape the iPod's play counts take, so the
-    same rules apply (plays and skips only ever added; ratings only when
-    changed on the phone)."""
-    try:
-        data = json.loads((root / CHANGES).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-    items = []
-    for entry in data.get("tracks") or []:
-        try:
-            dbid = int(entry["id"], 16)
-        except (KeyError, TypeError, ValueError):
-            continue
-        rated = "rating" in entry
-        items.append(stats.IPodTrackStats(
-            dbid=dbid, recent_plays=max(0, int(entry.get("plays") or 0)),
-            recent_skips=max(0, int(entry.get("skips") or 0)),
-            last_played=_unix(entry.get("last_played")), last_skipped=_unix(entry.get("last_skipped")),
-            rating=int(entry.get("rating") or 0) if rated else 0,
-            rating_at_sync=-1 if rated else 0))
-    return items
+def _log_phone_changes(conn, root: Path, merged) -> None:
+    """What the phone sent, for the terminal (run LuxTunes from one to see it)."""
+    if merged.text is None:
+        log.info("no %s on the phone (%s): nothing to bring back", CHANGES, root / CHANGES)
+        return
+    entries = sum(1 for _ in merged.tracks)
+    known = sum(1 for t in merged.tracks if conn.execute(
+        "SELECT 1 FROM tracks WHERE persistent_id = ?",
+        (stats.persistent_id(t.dbid),)).fetchone())
+    same = merged.library_id == library_id(conn)
+    log.info("%s on the phone: %d song entries (%d found in this library), %d playlist "
+             "changes, library_id %s", CHANGES, entries, known, len(merged.playlists),
+             "matches" if same else f"{merged.library_id!r} doesn't match {library_id(conn)!r}")
 
 
-def clear_changes(root: Path) -> None:
-    """After the changes are in the library: an empty file, so they can't count twice."""
-    if (root / CHANGES).exists():
-        _write(root, CHANGES, json.dumps({"version": FORMAT_VERSION, "tracks": []}).encode())
+def _apply_phone_playlists(conn, root: Path, merged, manifest: dict, record, report,
+                           confirm_playlists) -> None:
+    """Playlists made, changed or deleted on the phone (format v2)."""
+    if not merged.playlists:
+        return
+    if merged.library_id != library_id(conn):
+        report.problems.append("Playlist changes on the phone were made for a different "
+                               "LuxTunes library, so they weren't applied.")
+        return
+    sent = {p.upper() for p in manifest.get("sent_playlists") or []}
+    on_phone = {pid.upper() for pid in manifest["files"]}
+    doomed = phone_changes.deletions(conn, merged, sent)
+    allow = True
+    if doomed and confirm_playlists is not None:
+        allow = bool(confirm_playlists(doomed))
+    result = phone_changes.apply_playlists(conn, merged, sent, on_phone, allow, report.problems)
+    report.phone_playlists = result
+    settings = record.settings
+    if result.new_ids:
+        if not settings.sync_music:
+            report.problems.append(
+                "Playlists made on the phone were added to your library, but Sync Music is "
+                "off for this phone, so they won't go back to it: " + ", ".join(result.created))
+        elif settings.music_mode != "all":
+            # A new playlist must stay on the phone that made it.
+            settings.playlists = list(dict.fromkeys(settings.playlists + result.new_ids))
+            ipod_settings.save_settings(conn, record.id, settings)
+    log.info("phone playlists: %d created, %d changed, %d deleted, %d kept", len(result.created),
+             len(result.updated), len(result.deleted), len(result.kept))
 
 
 # ---- Where each song goes ------------------------------------------------------------------
@@ -240,16 +260,64 @@ TRACK_COLUMNS = (
     "skip_count", "skip_date", "date_added", "compilation", "comments", "lyrics", "bookmarkable",
     "bookmark_time", "skip_when_shuffling", "start_time", "stop_time", "volume_adjustment",
     "show", "season", "episode_number", "sort_name", "sort_artist", "sort_album",
-    "sort_album_artist", "sort_composer", "enabled")
+    "sort_album_artist", "sort_composer", "enabled",
+    # v2: everything else a smart playlist rule can test (smart.FIELDS)
+    "bpm", "kind", "date_modified", "purchased")
 
 SCHEMA = """
 CREATE TABLE info (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE tracks (id TEXT PRIMARY KEY, path TEXT NOT NULL, artwork TEXT, {columns});
 CREATE TABLE playlists (id TEXT PRIMARY KEY, name TEXT NOT NULL, is_smart INTEGER,
-                        position INTEGER, file TEXT);
+                        position INTEGER, file TEXT, smart_info BLOB, smart_criteria BLOB);
 CREATE TABLE playlist_items (playlist_id TEXT, position INTEGER, track_id TEXT);
 CREATE INDEX playlist_items_by_list ON playlist_items (playlist_id, position);
+CREATE TABLE reference_playlists (id TEXT PRIMARY KEY, name TEXT NOT NULL, is_smart INTEGER,
+                                  is_folder INTEGER);
+CREATE TABLE reference_items (playlist_id TEXT, track_id TEXT);
 """
+
+
+def _referenced(group, found: set[str]) -> set[str]:
+    """Persistent ids that "Playlist is …" rules in this group point to."""
+    from luxtunes.core import smart
+    for rule in group.rules:
+        if isinstance(rule, smart.Group):
+            _referenced(rule, found)
+        elif rule.known and rule.field == 0x28 and rule.value:
+            found.add(str(rule.value).upper())
+    return found
+
+
+def _write_references(out, conn, playlists: list[dict], placed: dict) -> None:
+    """Playlists that synced smart playlists' rules point to but that aren't
+    synced themselves: their songs (those on the phone), for evaluating the
+    rules there. Not shown as playlists."""
+    from luxtunes.core import smart
+    synced = {p["persistent_id"].upper() for p in playlists}
+    wanted: set[str] = set()
+    for p in playlists:
+        if p.get("is_smart"):
+            row = conn.execute("SELECT smart_info, smart_criteria FROM playlists WHERE "
+                               "persistent_id = ?", (p["persistent_id"],)).fetchone()
+            try:
+                rules = smart.decode(row[0], row[1]).rules if row else None
+            except (smart.SmartFormatError, struct.error):
+                rules = None
+            if rules is not None:
+                _referenced(rules, wanted)
+    by_id = {r[0]: r[1] for r in conn.execute("SELECT id, persistent_id FROM tracks")}
+    now = time.time()
+    for pid in sorted(wanted - synced):
+        row = conn.execute("SELECT name, is_smart, is_folder FROM playlists WHERE "
+                           "upper(persistent_id) = ?", (pid,)).fetchone()
+        if row is None:
+            continue
+        out.execute("INSERT INTO reference_playlists VALUES (?, ?, ?, ?)",
+                    (pid, row[0], int(row[1] or 0), int(row[2] or 0)))
+        members = smart.playlist_members(conn, pid, now)
+        out.executemany("INSERT INTO reference_items VALUES (?, ?)",
+                        [(pid, by_id[t]) for t in sorted(members)
+                         if by_id.get(t) in placed])
 
 
 def build_database(path: str, conn: sqlite3.Connection, placed: dict, covers: dict,
@@ -275,13 +343,17 @@ def build_database(path: str, conn: sqlite3.Connection, placed: dict, covers: di
         marks = ", ".join("?" for _ in range(3 + len(columns)))
         out.executemany(f"INSERT INTO tracks VALUES ({marks})", rows)
         for position, entry in enumerate(playlists):
-            out.execute("INSERT INTO playlists VALUES (?, ?, ?, ?, ?)",
+            blobs = conn.execute("SELECT smart_info, smart_criteria FROM playlists WHERE "
+                                 "persistent_id = ? AND is_smart", (entry["persistent_id"],)
+                                 ).fetchone() or (None, None)
+            out.execute("INSERT INTO playlists VALUES (?, ?, ?, ?, ?, ?, ?)",
                         (entry["persistent_id"], entry["name"], int(entry.get("is_smart") or 0),
-                         position, lists_files.get(entry["persistent_id"])))
+                         position, lists_files.get(entry["persistent_id"]), blobs[0], blobs[1]))
             ids = [t["persistent_id"] for t in library.load_tracks_by_ids(conn, entry["track_ids"])]
             out.executemany("INSERT INTO playlist_items VALUES (?, ?, ?)",
                             [(entry["persistent_id"], i, pid) for i, pid in enumerate(ids)
                              if pid in placed])
+        _write_references(out, conn, playlists, placed)
         out.commit()
     finally:
         out.close()
@@ -304,10 +376,12 @@ def playlist_text(entry: dict, tracks: list[dict], placed: dict) -> str:
 # ---- The sync ---------------------------------------------------------------------------
 
 def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRecord,
-         progress=None, confirm=None) -> SyncReport:
+         progress=None, confirm=None, confirm_playlists=None) -> SyncReport:
     """Sync this phone. progress(text, done, total) may return False to stop
     copying; confirm(adding, removing, removals) is asked before anything on the
-    phone changes. Raises OSError if the phone can't be written to."""
+    phone changes; confirm_playlists(names) before deleting playlists the phone
+    deleted (no: they're kept, and go back to the phone). Raises OSError if the
+    phone can't be written to."""
     report = SyncReport()
     settings = record.settings
 
@@ -325,8 +399,16 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
     manifest = read_manifest(root)
     files: dict = manifest["files"]
 
-    # 1. Plays, skips and ratings from a player on the phone.
-    report.stats = stats.merge(conn, read_changes(root))
+    # 1. What a player on the phone sends back: plays, skips and ratings, then
+    # its playlist changes; then changes.json is emptied straight away.
+    merged = phone_changes.read(root)
+    report.problems += merged.problems
+    _log_phone_changes(conn, root, merged)
+    report.stats = stats.merge(conn, merged.tracks)
+    log.info("from the phone: %d plays, %d skips, %d ratings added to the library",
+             report.stats.plays, report.stats.skips, report.stats.ratings)
+    _apply_phone_playlists(conn, root, merged, manifest, record, report, confirm_playlists)
+    _empty_changes(root, merged)
 
     # 2. What should be there.
     from luxtunes.core import smart
@@ -399,7 +481,6 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
         if pid is not None:
             del files[pid]
         report.removed += 1
-    clear_changes(root)                   # (the changes are in the library now)
 
     # 4. Copy new and changed songs.
     taken = {f["path"].casefold() for f in files.values()}      # incl. kept ones
@@ -464,6 +545,7 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
     # 6. Playlists as .m3u8 files.
     tell("Writing playlists…", can_stop=False)
     lists_files = _write_playlists(conn, root, the_plan.playlists, placed, manifest)
+    manifest["sent_playlists"] = [p["persistent_id"] for p in the_plan.playlists]
     report.playlists = len(lists_files)
 
     # 7. The database for players that want everything.

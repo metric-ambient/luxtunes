@@ -20,6 +20,7 @@ from luxtunes.core.ipod import gpod, settings as ipod_settings, sync as ipod_syn
 class SyncWorker(QThread):
     progress = Signal(str, int, int)          # text, done, total
     confirm_needed = Signal(int, int, object)  # songs to add, to remove, [Removal]
+    playlists_confirm_needed = Signal(object)  # names of playlists the phone deleted
     succeeded = Signal(object)                # SyncReport
     failed = Signal(str)
 
@@ -50,6 +51,12 @@ class SyncWorker(QThread):
         self.progress.emit(text, done, total)
         return not self._stop.is_set()
 
+    def _confirm_playlists(self, names):
+        self._answered.clear()
+        self.playlists_confirm_needed.emit(list(names))
+        self._answered.wait()
+        return self._answer and not self._stop.is_set()
+
     def _confirm(self, adding, removing, removals=()):
         self._answered.clear()
         self.confirm_needed.emit(adding, removing, list(removals))
@@ -63,7 +70,8 @@ class SyncWorker(QThread):
             if self.device_key.startswith("android:"):
                 from luxtunes.core.android import sync as android_sync
                 record = android_sync.load_record(conn, self.ipod)
-                report = android_sync.sync(conn, self.ipod, record, self._progress, self._confirm)
+                report = android_sync.sync(conn, self.ipod, record, self._progress, self._confirm,
+                                           self._confirm_playlists)
             else:
                 record = ipod_settings.load_device(conn, self.device_key, self.ipod.name,
                                                    self.ipod.model_number, self.ipod.serial)
