@@ -292,12 +292,21 @@ class DevicePage(QWidget):
 
     # ---- Loading an iPod -------------------------------------------------------------------
 
-    def set_device(self, conn, ipod: ipod_device.IPod, record: DeviceRecord):
+    @property
+    def is_android(self) -> bool:
+        return getattr(self.ipod, "key", "").startswith("android:")
+
+    def set_device(self, conn, ipod, record: DeviceRecord):
+        """Show an iPod (ipod_device.IPod) or an Android device (android.device.Phone)."""
         self.conn, self.ipod, self.record = conn, ipod, record
         from luxtunes.core import smart
         smart.refresh_all(conn)              # the counts include smart playlists' current songs
         self.settings = copy.deepcopy(record.settings)
-        self._space = ipod_device.space(ipod)
+        self._apply_kind()
+        if self.is_android:
+            self._measure_phone()
+        else:
+            self._space = ipod_device.space(ipod)
         self._loading = True
         try:
             self._fill_summary()
@@ -307,6 +316,31 @@ class DevicePage(QWidget):
             self._loading = False
         self._update_buttons()
         self._refresh_plan()
+
+    def _apply_kind(self):
+        """Show only what applies: phones have no iPod picture, version box,
+        disk use, manual mode, Photos or Games, but choose a storage."""
+        android = self.is_android
+        self.device_heading.setText("Phone" if android else "iPod")
+        self.picture.setVisible(not android)
+        for widget in self._ipod_only:
+            widget.setVisible(not android)
+        self.summary_labels["Format"].setVisible(not android)
+        self.summary_values["Format"].setVisible(not android)
+        self.storage_label.setVisible(android)
+        self.storage.setVisible(android)
+        self.delete_unselected.setVisible(android)
+        for i, name in enumerate(TABS):
+            if name in ("Photos", "Games"):
+                self.tab_group.button(i).setVisible(not android)
+        if android and TABS[self.pages.currentIndex()] in ("Photos", "Games"):
+            self.tab_group.button(0).setChecked(True)
+            self._show_tab(0)
+        device_word = "phone" if android else "iPod"
+        tip = (f"Songs above this rate (and lossless ones) are converted on their way to the "
+               f"{device_word}. The files in your library are never changed.")
+        self.convert.setToolTip(tip)
+        self.convert_kbps.setToolTip(tip)
 
     @property
     def dirty(self) -> bool:
@@ -333,6 +367,23 @@ class DevicePage(QWidget):
         self._read_controls()
         self._update_buttons()
         self._refresh_timer.start()
+
+    def _storage_changed(self, *_):
+        """Another storage chosen: its free space is what counts now."""
+        if self._loading or not self.is_android:
+            return
+        self._read_controls()
+        self._measure_phone()
+        capacity = self._space.capacity
+        self.summary_values["Capacity"].setText(ipod_device.format_gb(capacity) if capacity
+                                                else "Unknown")
+        self._changed()
+
+    def _measure_phone(self):
+        from luxtunes.core.android import device as android_device
+        from luxtunes.core.android import sync as android_sync
+        storage = self.ipod.storage(self.settings.android_storage)
+        self._space = android_device.space(storage, android_sync.media_bytes(storage))
 
     def set_syncing(self, key: str | None):
         """The iPod that's syncing (None: none). Its page can't start another
@@ -368,7 +419,8 @@ class DevicePage(QWidget):
         column = QVBoxLayout(page)
         column.setContentsMargins(40, 20, 40, 20)
 
-        column.addWidget(heading("iPod"))
+        self.device_heading = heading("iPod")
+        column.addWidget(self.device_heading)
         frame, inner = box()
         row = QHBoxLayout()
         self.picture = IPodPicture()
@@ -377,6 +429,7 @@ class DevicePage(QWidget):
         row.addSpacing(40)
         grid = QGridLayout()
         self.summary_values = {}
+        self.summary_labels = {}
         for i, name in enumerate(("Name", "Capacity", "Software Version", "Serial Number",
                                   "Model", "Format")):
             label = QLabel(f"<b>{name}:</b>")
@@ -386,14 +439,24 @@ class DevicePage(QWidget):
             grid.addWidget(label, i, 0)
             grid.addWidget(value, i, 1)
             self.summary_values[name] = value
+            self.summary_labels[name] = label
+        # Android devices: which storage the LuxTunes folder goes on.
+        self.storage_label = QLabel("<b>Sync to:</b>")
+        self.storage_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.storage = QComboBox()
+        self.storage.currentIndexChanged.connect(self._storage_changed)
+        grid.addWidget(self.storage_label, 6, 0)
+        grid.addWidget(self.storage, 6, 1)
         row.addLayout(grid)
         row.addStretch(2)
         inner.addLayout(row)
         column.addWidget(frame)
 
         column.addSpacing(10)
-        column.addWidget(heading("Version"))
+        version_heading = heading("Version")
+        column.addWidget(version_heading)
         frame, inner = box()
+        self._ipod_only = [version_heading, frame]       # hidden for Android devices
         grid = QGridLayout()
         update = QPushButton("Check for Update")
         restore = QPushButton("Restore")
@@ -435,18 +498,28 @@ class DevicePage(QWidget):
         self.convert_kbps.currentIndexChanged.connect(self._changed)
         self.manual = QCheckBox("Manually manage music and videos")
         self.disk_use = QCheckBox("Enable disk use")
+        self._ipod_only += [self.open_on_connect, self.manual, self.disk_use]
+        # Phones only (an iPod's database is always kept to the selection).
+        self.delete_unselected = QCheckBox("Delete media not in this selection")
+        self.delete_unselected.setToolTip(
+            "At each sync, songs and videos you no longer sync are taken off the phone. "
+            "Only the LuxTunes folder on the phone is ever cleaned; nothing else is touched.")
         inner.addWidget(self.open_on_connect)
         inner.addWidget(self.only_checked)
         inner.addLayout(convert_row)
+        inner.addWidget(self.delete_unselected)
         inner.addWidget(self.manual)
         inner.addWidget(self.disk_use)
         column.addWidget(frame)
         column.addStretch(1)
-        for widget in (self.only_checked, self.manual, self.disk_use):
+        for widget in (self.only_checked, self.manual, self.disk_use, self.delete_unselected):
             widget.toggled.connect(self._changed)
         return page
 
     def _fill_summary(self):
+        if self.is_android:
+            self._fill_phone_summary()
+            return
         ipod = self.ipod
         self.picture.colour = ipod.colour or "black"
         self.picture.update()
@@ -460,6 +533,25 @@ class DevicePage(QWidget):
         }
         for key, value in values.items():
             self.summary_values[key].setText(value)
+
+    def _fill_phone_summary(self):
+        phone = self.ipod
+        values = {"Name": self.record.name or phone.name,
+                  "Capacity": ipod_device.format_gb(self._space.capacity)
+                  if self._space.capacity else "Unknown",
+                  "Software Version": "Android",
+                  "Serial Number": phone.serial or "Unknown",
+                  "Model": phone.model_name}
+        for key, value in values.items():
+            self.summary_values[key].setText(value)
+        self.storage.blockSignals(True)
+        self.storage.clear()
+        for name in sorted(phone.storages, key=lambda n: (0 if "internal" in n.lower() else 1, n)):
+            self.storage.addItem(name, name)
+        chosen = self.settings.android_storage
+        index = self.storage.findData(chosen) if chosen else 0
+        self.storage.setCurrentIndex(max(0, index))
+        self.storage.blockSignals(False)
 
     # ---- Music -------------------------------------------------------------------------------
 
@@ -859,7 +951,7 @@ class DevicePage(QWidget):
     # ---- Settings <-> controls ---------------------------------------------------------------
 
     def _fill_lists(self):
-        choices = ipod_plan.library_choices(self.conn)
+        choices = ipod_plan.library_choices(self.conn, phone=self.is_android)
         s = self.settings
         lists = (self.playlist_list, self.artist_list, self.genre_list, self.album_list,
                  self.movie_list, self.podcast_shows, self.book_list)
@@ -905,6 +997,7 @@ class DevicePage(QWidget):
         self.convert_kbps.setCurrentIndex(max(0, self.convert_kbps.findData(s.convert_kbps)))
         self.manual.setChecked(s.manual)
         self.disk_use.setChecked(s.disk_use)
+        self.delete_unselected.setChecked(s.android_delete_unselected)
         self.sync_music.setChecked(s.sync_music)
         (self.music_all if s.music_mode == "all" else self.music_selected).setChecked(True)
         self.music_videos.setChecked(s.include_music_videos)
@@ -930,10 +1023,14 @@ class DevicePage(QWidget):
     def _read_controls(self):
         s = self.settings
         s.only_checked = self.only_checked.isChecked()
+        if self.is_android and self.storage.currentData():
+            s.android_storage = self.storage.currentData()
         s.convert = self.convert.isChecked()
         s.convert_kbps = self.convert_kbps.currentData() or s.convert_kbps
         s.manual = self.manual.isChecked()
         s.disk_use = self.disk_use.isChecked()
+        if self.is_android:
+            s.android_delete_unselected = self.delete_unselected.isChecked()
         s.sync_music = self.sync_music.isChecked()
         s.music_mode = "all" if self.music_all.isChecked() else "selected"
         s.include_music_videos = self.music_videos.isChecked()
@@ -1015,7 +1112,12 @@ class DevicePage(QWidget):
         free = None
         if self._space is not None:
             free = self._space.capacity - self._space.other - self._space.photos
-        return ipod_plan.build_plan(self.conn, self.settings, free_space=free, seed=0)
+        kbps_for = None
+        if self.is_android:
+            from luxtunes.core.android import sync as android_sync
+            kbps_for = android_sync.transfer_kbps
+        return ipod_plan.build_plan(self.conn, self.settings, free_space=free, seed=0,
+                                    kbps_for=kbps_for, phone=self.is_android)
 
     def _refresh_plan(self):
         if self.conn is None or self._space is None:

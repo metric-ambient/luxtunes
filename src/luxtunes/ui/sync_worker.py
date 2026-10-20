@@ -1,4 +1,4 @@
-"""Runs an iPod sync in the background, so LuxTunes stays usable meanwhile.
+"""Runs an iPod or phone sync in the background, so LuxTunes stays usable meanwhile.
 
 The sync gets its own connection to the library (SQLite connections can't be
 shared between threads). It reports progress with signals; the main window
@@ -60,9 +60,14 @@ class SyncWorker(QThread):
         conn = None
         try:
             conn = db.connect(self.db_path)
-            record = ipod_settings.load_device(conn, self.device_key, self.ipod.name,
-                                               self.ipod.model_number, self.ipod.serial)
-            report = ipod_sync.sync(conn, self.ipod, record, self._progress, self._confirm)
+            if self.device_key.startswith("android:"):
+                from luxtunes.core.android import sync as android_sync
+                record = android_sync.load_record(conn, self.ipod)
+                report = android_sync.sync(conn, self.ipod, record, self._progress, self._confirm)
+            else:
+                record = ipod_settings.load_device(conn, self.device_key, self.ipod.name,
+                                                   self.ipod.model_number, self.ipod.serial)
+                report = ipod_sync.sync(conn, self.ipod, record, self._progress, self._confirm)
             self.succeeded.emit(report)
         except ipod_sync.SyncCancelled:
             report = ipod_sync.SyncReport(cancelled=True)

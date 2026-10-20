@@ -71,6 +71,8 @@ from luxtunes.ui.cover_flow import CoverFlow
 from luxtunes.ui.cd_page import CdPage
 from luxtunes.ui.device_page import DevicePage
 from luxtunes.ui.video_panel import VideoPanel
+from luxtunes.core.android import device as android_device
+from luxtunes.core.android import sync as android_sync
 from luxtunes.core.ipod import device as ipod_device
 from luxtunes.core.ipod import settings as ipod_settings
 from luxtunes.ui.get_info import InfoDialog, MultiInfoDialog
@@ -159,6 +161,9 @@ class MainWindow(QMainWindow):
         self._resort_pending = False            # songs were edited: re-sort the list soon
         self._ipods: dict[str, ipod_device.IPod] = {}   # plugged-in iPods by key
         self._ipod_mounts: set[str] = set()
+        self._phones: dict[str, android_device.Phone] = {}   # Android devices by key
+        self._phone_names: set[str] = set()
+        self._phone_tries: dict[str, int] = {}  # phone address -> times we tried to open it
         self._mount_tries: dict[str, int] = {}  # iPod partition -> times we tried to mount it
         self._mount_ejected: set[str] = set()   # ejected here: left alone until replugged
         self._sync_worker = None                # the iPod sync running in the background
@@ -460,7 +465,7 @@ class MainWindow(QMainWindow):
         self.duplicates_action = self._action(file_menu, "Display Duplicates", self._display_duplicates)
         self.missing_action = self._action(file_menu, "Display Missing", self._display_missing)
         file_menu.addSeparator()
-        self.sync_action = self._action(file_menu, "Sync iPod", self._sync_device)
+        self.sync_action = self._action(file_menu, "Sync Device", self._sync_device)
         file_menu.addSeparator()
         quit_action = self._action(file_menu, "Quit", self.close)
         quit_action.setShortcuts([QKeySequence(QKeySequence.StandardKey.Quit), QKeySequence("Ctrl+W")])
@@ -619,7 +624,7 @@ class MainWindow(QMainWindow):
         look = appearance(self.settings)            # Preferences → General → Sources
         has_movies = look["show_movies"]            # shown even while empty
         has_tv = look["show_tv_shows"]
-        devices = [(key, self._device_name(ipod)) for key, ipod in self._ipods.items()]
+        devices = [(key, self._device_name(ipod)) for key, ipod in self._players.items()]
         devices += [(key, disc.name) for key, disc in self._discs.items()]
         self.sidebar.populate(playlists, has_movies, theme.section_color(self.dark_action.isChecked()),
                               len(self.player.up_next), devices, has_tv,
@@ -2126,10 +2131,15 @@ class MainWindow(QMainWindow):
         list of mounted drives, and reads an iPod's details once, when it appears."""
         self._scan_cds()
         self._auto_mount()
+        phones_changed = self._scan_phones()
         mounted = {mountpoint: (dev, fs) for dev, mountpoint, fs in ipod_device.mounted_filesystems()
                    if not mountpoint.startswith(("/proc", "/sys", "/dev"))}
         ipod_mounts = {m for m in mounted if m in self._ipod_mounts or ipod_device.is_ipod(m)}
         if ipod_mounts == self._ipod_mounts:
+            if phones_changed:
+                self._forget_missing_source()
+                self.reload_library()
+                self._update_device_actions()
             return
         self._ipod_mounts = ipod_mounts
         known = {ipod.mountpoint: key for key, ipod in self._ipods.items()}
@@ -2145,10 +2155,56 @@ class MainWindow(QMainWindow):
             self._ipods[ipod.key] = ipod
             ipod_settings.load_device(self.conn, ipod.key, ipod.name, ipod.model_number, ipod.serial)
             self.statusBar().showMessage(f"“{ipod.name}” is connected.", 5000)
-        if self._current_source and self._current_source[0] == "device" \
-                and self._current_source[1] not in self._ipods:
-            self._current_source = SOURCE_MUSIC
+        self._forget_missing_source()
         self.reload_library()
+        self._update_device_actions()       # Sync and Eject right away, not at the next check
+
+    def _forget_missing_source(self):
+        if self._current_source and self._current_source[0] == "device" \
+                and not self._current_source[1].startswith("cd:") \
+                and self._current_source[1] not in self._players:
+            self._current_source = SOURCE_MUSIC
+
+    @property
+    def _players(self) -> dict:
+        """iPods and phones, by key."""
+        return {**self._ipods, **self._phones}
+
+    def _scan_phones(self) -> bool:
+        """Notice Android devices (unlocked, in File transfer mode). True if the
+        list changed. A phone's storage shows up only once it's unlocked, so a
+        phone without one is looked at again each time."""
+        self._auto_mount_phones()
+        names = android_device.mounted_names()
+        waiting = any(not p.storages for p in self._phones.values())
+        if names == self._phone_names and not waiting:
+            return False
+        self._phone_names = names
+        before = {k: sorted(p.storages) for k, p in self._phones.items()}
+        phones = {p.key: p for p in android_device.find_phones()}
+        if self._sync_worker is not None and self._sync_ipod.key in self._phones \
+                and self._sync_ipod.key in phones:
+            phones[self._sync_ipod.key] = self._sync_ipod      # keep the one syncing
+        for key, phone in phones.items():
+            if key not in self._phones:
+                android_sync.load_record(self.conn, phone)
+                self.statusBar().showMessage(f"“{self._device_name(phone)}” is connected.", 5000)
+        self._phones = phones
+        return before != {k: sorted(p.storages) for k, p in phones.items()}
+
+    def _auto_mount_phones(self):
+        """Open a phone the desktop knows about but didn't open by itself, a few
+        times (it may still be asking whether to allow access)."""
+        waiting = android_device.unmounted_phones()
+        for uri in list(self._phone_tries):
+            if uri not in waiting:
+                del self._phone_tries[uri]       # unplugged (or open): start afresh next time
+        for uri in waiting:
+            tries = self._phone_tries.get(uri, 0)
+            if tries < 0 or tries >= self.MOUNT_TRIES:
+                continue                         # ejected here, or given up
+            self._phone_tries[uri] = tries + 1
+            android_device.mount(uri)
 
     MOUNT_TRIES = 5
 
@@ -2174,19 +2230,27 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage(
                     f"Couldn't open the iPod: {error}. Try clicking it in the file manager.", 20000)
 
-    def _device_name(self, ipod: ipod_device.IPod) -> str:
+    def _device_name(self, ipod) -> str:
+        if ipod.key.startswith("android:"):
+            return android_sync.load_record(self.conn, ipod).name or ipod.name
         record = ipod_settings.load_device(self.conn, ipod.key, ipod.name)
         return record.name or ipod.name
+
+    def _record(self, device):
+        if device.key.startswith("android:"):
+            return android_sync.load_record(self.conn, device)
+        return ipod_settings.load_device(self.conn, device.key, device.name, device.model_number,
+                                         device.serial)
 
     def _show_device(self, key: str):
         if key.startswith("cd:"):
             self._show_cd(key)
             return
-        ipod = self._ipods.get(key)
+        ipod = self._players.get(key)
         if ipod is None:
             self.sidebar.select_source(SOURCE_MUSIC)
             return
-        record = ipod_settings.load_device(self.conn, key, ipod.name, ipod.model_number, ipod.serial)
+        record = self._record(ipod)
         if self._drilled:
             self._leave_drill(show_grid=False)
         self.cover_flow.hide()
@@ -2194,28 +2258,33 @@ class MainWindow(QMainWindow):
         self.views.setCurrentWidget(self.device_page)
         self.search.setEnabled(False)
         self.summary_label.setText(f"{record.name} — {ipod.model_name or 'iPod'}")
+        self._update_device_actions()
 
     def _on_device_renamed(self, key: str, name: str):
-        ipod = self._ipods.get(key)
+        ipod = self._players.get(key)
         if ipod is None or not name.strip():
             QTimer.singleShot(0, self.reload_library)
             return
-        record = ipod_settings.load_device(self.conn, key, ipod.name)
+        record = self._record(ipod)
         ipod_settings.rename_device(self.conn, record.id, name)
-        self.statusBar().showMessage(f"The new name is written to the iPod at the next sync.", 6000)
+        if key in self._ipods:
+            self.statusBar().showMessage("The new name is written to the iPod at the next sync.",
+                                         6000)
         QTimer.singleShot(0, self.reload_library)
 
-    def _current_device(self) -> ipod_device.IPod | None:
+    def _current_device(self):
+        """The iPod or phone on show, or the only one plugged in."""
+        players = self._players
         if self._current_source and self._current_source[0] == "device":
-            return self._ipods.get(self._current_source[1])
-        return next(iter(self._ipods.values()), None) if len(self._ipods) == 1 else None
+            return players.get(self._current_source[1])
+        return next(iter(players.values()), None) if len(players) == 1 else None
 
     def _sync_source(self, source):
         """Sidebar → Sync: sync that iPod (the one right-clicked, not the one on show)."""
-        self._sync_device(self._ipods.get(source[1]))
+        self._sync_device(self._players.get(source[1]))
 
     def _sync_device(self, ipod=None):
-        """Sync the iPod in the background; progress shows in the Now Playing display."""
+        """Sync the iPod or phone in the background; progress shows in the Now Playing display."""
         ipod = ipod or self._current_device()
         if ipod is None:
             return
@@ -2231,14 +2300,20 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Sync", text)
             return
         from luxtunes.core.ipod import gpod
-        if not gpod.available():
+        phone = ipod.key.startswith("android:")
+        if phone and not ipod.storages:
+            QMessageBox.information(
+                self, "Sync", f"Can't see “{self._device_name(ipod)}”'s storage yet. Unlock "
+                "it, and in its USB notification choose “File transfer”.")
+            return
+        if not phone and not gpod.available():
             QMessageBox.warning(
                 self, "Sync",
                 "Syncing iPods needs libgpod, which isn't installed.\n\n"
                 "Install it from a terminal with:\n    sudo apt install libgpod-common")
             return
         from luxtunes.ui.sync_worker import SyncWorker
-        record = ipod_settings.load_device(self.conn, ipod.key, ipod.name, ipod.model_number, ipod.serial)
+        record = self._record(ipod)
         db_path = self.conn.execute("PRAGMA database_list").fetchone()[2]
         worker = SyncWorker(db_path, ipod, ipod.key, self)
         self._sync_worker = worker
@@ -2302,23 +2377,27 @@ class MainWindow(QMainWindow):
         if report.stats:
             for track_id in report.stats.changed:
                 self._after_edit(track_id)
-        try:
-            refreshed = ipod_device.read_ipod(ipod.mountpoint, ipod.device, ipod.filesystem)
-        except OSError:
+        phone = ipod.key.startswith("android:")
+        if phone:
             refreshed = ipod
-        self._ipods[ipod.key] = refreshed
+        else:
+            try:
+                refreshed = ipod_device.read_ipod(ipod.mountpoint, ipod.device, ipod.filesystem)
+            except OSError:
+                refreshed = ipod
+            self._ipods[ipod.key] = refreshed
         self.reload_library()
         if report.cancelled:
             self._lcd_finished("sync", f"Sync stopped: {report.added:,} copied, {report.removed:,} removed.")
         else:
-            self._lcd_finished("sync", f"iPod sync is complete. {report.added:,} added, "
-                                 f"{report.removed:,} removed.")
+            self._lcd_finished("sync", f"{'Phone' if phone else 'iPod'} sync is complete. "
+                                 f"{report.added:,} added, {report.removed:,} removed.")
             if appearance(self.settings)["sync_done_sound"]:
                 from luxtunes.core import sounds
                 sounds.play_done_sound()            # the desktop's "done" sound
         if report.stats and report.stats.plays:
             self.statusBar().showMessage(
-                f"{report.stats.plays:,} plays were read from “{refreshed.name}”.", 8000)
+                f"{report.stats.plays:,} plays were read from “{self._sync_name}”.", 8000)
         if report.problems:
             QMessageBox.warning(self, "Sync", "Some items couldn't be synced:\n\n"
                                 + "\n".join(report.problems[:20]))
@@ -2340,7 +2419,7 @@ class MainWindow(QMainWindow):
                 and self._current_source[1].startswith("cd:"):
             self._eject_device(self._current_source[1])
             return
-        if len(self._discs) == 1 and not self._ipods:
+        if len(self._discs) == 1 and not self._players:
             self._eject_device(next(iter(self._discs)))
             return
         ipod = self._current_device()
@@ -2351,14 +2430,33 @@ class MainWindow(QMainWindow):
         if key.startswith("cd:"):
             self._eject_cd(key)
             return
-        ipod = self._ipods.get(key)
+        ipod = self._players.get(key)
         if ipod is None:
             return
         if self._sync_worker is not None and self._sync_ipod.key == key:
-            QMessageBox.information(self, "Eject", f"“{ipod.name}” is syncing. Stop the sync "
-                                    "(✕ in the display) or let it finish, then eject.")
+            QMessageBox.information(self, "Eject", f"“{self._device_name(ipod)}” is syncing. "
+                                    "Stop the sync (✕ in the display) or let it finish, then eject.")
+            return
+        if key.startswith("android:"):
+            self._eject_phone(ipod)
             return
         self._try_eject(ipod, 1)
+
+    def _eject_phone(self, phone):
+        name = self._device_name(phone)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            error = android_device.eject(phone)
+        except (OSError, subprocess.SubprocessError) as problem:
+            error = str(problem)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if error:
+            QMessageBox.warning(self, "Eject", f"“{name}” couldn't be ejected.\n\n{error}")
+            return
+        self._phone_tries[phone.uri] = -1        # don't open it again until it's replugged
+        self.statusBar().showMessage(f"“{name}” can now be disconnected.", 6000)
+        self._scan_devices()
 
     EJECT_TRIES, EJECT_WAIT_MS = 5, 1500
 
@@ -2754,19 +2852,21 @@ class MainWindow(QMainWindow):
         be used (in the menus and for their shortcuts). Runs on every device
         check, when playback starts or stops, and when a sync or import ends."""
         try:
-            ipod = self._current_device() or next(iter(self._ipods.values()), None)
+            ipod = self._current_device() or next(iter(self._players.values()), None)
         except Exception:
             ipod = None
-        self.sync_action.setText(f"Sync “{self._device_name(ipod)}”" if ipod else "Sync iPod")
+        self.sync_action.setText(f"Sync “{self._device_name(ipod)}”" if ipod else "Sync Device")
         syncing_this = self._sync_worker is not None and ipod is not None \
             and self._sync_ipod.key == ipod.key
         self.sync_action.setEnabled(ipod is not None and not syncing_this)
         busy_ipod = self._sync_ipod.key if self._sync_worker is not None else None
-        ejectable = [k for k in self._ipods if k != busy_ipod] + \
+        ejectable = [k for k in self._players if k != busy_ipod] + \
                     [k for k in self._discs if k != self._import_key]
         self.eject_action.setEnabled(bool(ejectable))
         disc = any(k.startswith("cd:") for k in ejectable)
-        self.eject_action.setText("Eject Disc" if disc or not ejectable else "Eject iPod")
+        self.eject_action.setText("Eject Disc" if disc or not ejectable else
+                                  "Eject Phone" if ejectable[0].startswith("android:") else
+                                  "Eject iPod")
         playing = self.player.current is not None
         for action in (self.next_action, self.previous_action, self.current_song_action):
             action.setEnabled(playing)

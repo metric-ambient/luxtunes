@@ -73,6 +73,12 @@ class SyncSettings:
     photos_mode: str = "all"            # "all" folders or "selected"
     photo_folders: list = field(default_factory=list)
     full_resolution: bool = False
+    # Android devices: which storage the LuxTunes folder goes on (its name, e.g.
+    # "Internal shared storage" or the SD card's; empty = the phone's own)
+    android_storage: str = ""
+    # Android devices: take off media that's no longer chosen (only ever from
+    # the LuxTunes folder). Off: it stays until this is turned on.
+    android_delete_unselected: bool = True
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True)

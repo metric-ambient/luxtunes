@@ -5,15 +5,15 @@
 > ("vibe-coded"). For copyright purposes, **metric-ambient is the author** of this software.
 >
 > The code has not been reviewed line by line by a person. It reads and writes your music
-> files and their tags, organizes folders, writes to iPods and talks to the internet when you
-> allow it. Bugs could lose or damage data: **keep backups of your music and your iPod**
+> files and their tags, organizes folders, writes to iPods and phones and talks to the internet when you
+> allow it. Bugs could lose or damage data: **keep backups of your music and your devices**
 > before using it.
 >
 > LuxTunes is provided **"as is", without warranty of any kind**, express or implied,
 > including fitness for a particular purpose. You run it at your own risk; the author is not
 > liable for any damage or data loss. See the [GPL-3.0 license](LICENSE), sections 15 and 16.
 
-A native Linux music manager for your library, your CDs and your iPod Classic, built for Linux Mint.
+A native Linux music manager for your library, your CDs, your iPod Classic and your Android phone, built for Linux Mint.
 
 ## What it does
 
@@ -29,6 +29,9 @@ A native Linux music manager for your library, your CDs and your iPod Classic, b
   Lossless, AIFF, WAV), movies, TV shows, podcasts and audiobooks.
 - Syncs iPod Classic (5G–7G) on stock firmware: music, videos, podcasts, audiobooks and
   photos (one way, from a folder), reading play counts back from the iPod.
+- Syncs Android phones over USB: songs, videos, podcasts, audiobooks, artwork and playlists
+  go into one `LuxTunes` folder that any music player can use, with a small database for
+  players that want ratings and play counts ([format](docs/android-library-format.md)).
 - Nothing goes online without asking you first (CD names, track info, updates).
 
 ## Download (no terminal needed)
@@ -118,10 +121,12 @@ file). `--media-folder` is the folder that holds your copied `Music/` folder.
 src/luxtunes/
     core/        library database, tags, organizing, smart playlists, CDs, updates
     core/ipod/   iPod Classic sync (libgpod)
+    core/android/  Android sync (over USB file transfer)
     importer/    iTunes library XML import
     ui/          Qt interface
     resources/   icon and licence
 packaging/       install.sh / uninstall.sh, appimage/ (the ready-to-run app)
+docs/            the LuxTunes folder format on Android devices
 tests/
     fixtures/    small FAKE test data only. Never real music or real library files
 ```
