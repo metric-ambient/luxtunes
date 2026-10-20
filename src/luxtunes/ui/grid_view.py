@@ -129,6 +129,7 @@ class GridView(QWidget):
     group_opened = Signal(dict)       # double-click: show its songs
     group_play = Signal(dict)         # hover play button
     grouping_changed = Signal()       # a different tab was picked
+    menu_requested = Signal(dict, QPoint)   # right-click: the tile and where
 
     TAB_TITLES = {"albums": "Albums", "artists": "Artists",
                   "genres": "Genres", "composers": "Composers"}
@@ -173,6 +174,8 @@ class GridView(QWidget):
         self.list.viewport().installEventFilter(self)
         self.list.clicked.connect(lambda i: self.group_selected.emit(i.data(GroupRole)))
         self.list.doubleClicked.connect(lambda i: self.group_opened.emit(i.data(GroupRole)))
+        self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._on_context_menu)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -195,6 +198,15 @@ class GridView(QWidget):
         self.grouping = grouping
         self.set_tracks(self._tracks)
         self.grouping_changed.emit()
+
+    def _on_context_menu(self, pos):
+        index = self.list.indexAt(pos)
+        if not index.isValid():
+            return
+        self.list.setCurrentIndex(index)
+        group = index.data(GroupRole)
+        self.group_selected.emit(group)
+        self.menu_requested.emit(group, self.list.viewport().mapToGlobal(pos))
 
     def eventFilter(self, obj, event):
         # A click on the hover play button plays instead of selecting.

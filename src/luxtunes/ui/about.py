@@ -37,7 +37,7 @@ from luxtunes.core import organize
 
 RESOURCES = Path(__file__).resolve().parent.parent / "resources"
 # Shown under the version in the About tab.
-COPYRIGHT = "Entirely vibe-coded by Claude Opus 5.5"
+COPYRIGHT = "Copyright © 2026 metric-ambient. Written entirely by Claude Opus 5.5."
 DESCRIPTION = "A native Linux music manager for your library, your CDs and your iPod Classic."
 
 # (name, what LuxTunes uses it for, licence, link)
@@ -132,7 +132,10 @@ def system_info(conn: sqlite3.Connection | None) -> list[tuple[str, str]]:
 
 def _which_copy() -> str:
     from luxtunes.core import updater
-    if updater.installed_copy():
+    kind = updater.kind()
+    if kind == "appimage":
+        return f"AppImage at {updater.running_appimage()} (updates from Help → Check for Updates…)"
+    if kind == "installed":
         return f"installed in {updater.app_dir()} (updates from Help → Check for Updates…)"
     return f"running from its source folder ({Path(__file__).resolve().parents[3]}; update with git pull)"
 

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Starts LuxTunes from inside the AppImage.
+HERE="$(dirname "$(readlink -f "$0")")"
+exec "$HERE/usr/lib/luxtunes/luxtunes" "$@"

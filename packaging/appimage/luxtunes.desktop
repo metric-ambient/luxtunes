@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=LuxTunes
+GenericName=Music Player
+Comment=Play and organize your music, import CDs and sync your iPod
+Exec=luxtunes %U
+Icon=luxtunes
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+Keywords=music;player;library;ipod;cd;
+StartupWMClass=luxtunes

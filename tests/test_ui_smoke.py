@@ -65,6 +65,14 @@ def test_views_and_features(window):
     for grouping in ("artists", "genres", "composers", "albums"):
         window.grid.set_grouping(grouping)
     group = window.grid.model.groups[0]
+    # Right-clicking a tile gives the same menu as the song list, for its songs.
+    menu = window._song_menu(group["tracks"], group["tracks"][0], group["title"], lambda: None)
+    texts = [a.text() for a in menu.actions() if a.text()]
+    for expected in ("Get Info", "Get Track Info Online…", "Rating", "Add to Playlist", "Delete"):
+        assert expected in texts
+    menu.deleteLater()
+    window._grid_group = group
+    assert window._info_targets()[0] == list(group["tracks"])
     window._open_grid_group(group)
     app.processEvents()
     window.grab()
@@ -817,6 +825,7 @@ def test_general_preferences_apply(window, monkeypatch):
         assert item.icon(0).isNull()                         # no source icons
         stack.extend(item.child(i) for i in range(item.childCount()))
     assert "Movies" not in labels
+    assert "TV Shows" in labels                              # shown even with no TV shows
     assert window.table.isColumnHidden(ENABLED_COLUMN)
     assert window.table.verticalHeader().defaultSectionSize() == 23
     assert theme.grid_colors["grid_title"] == theme.GRID_LIGHT["grid_title"]
@@ -829,7 +838,8 @@ def test_check_for_updates(window, monkeypatch):
 
     calls = []
     monkeypatch.setattr(updater, "latest_release", lambda *, approved: calls.append(approved) or
-                        updater.Release("0.0.1", "v0.0.1", "", "luxtunes-0.0.1-py3-none-any.whl", "u", 1, "p"))
+                        updater.Release("0.0.1", "v0.0.1", "", "p",
+                                        [updater.Asset("luxtunes-0.0.1-py3-none-any.whl", "u", 1)]))
     monkeypatch.setattr(window, "_approve_internet", lambda *a: False)
     window._check_for_updates()
     assert calls == [] and window._update_worker is None     # said no: nothing went online
@@ -840,3 +850,6 @@ def test_check_for_updates(window, monkeypatch):
     window._update_worker.wait(10_000)
     QApplication.instance().processEvents()
     assert calls == [True] and "latest version" in shown[0]
+    # A newer version, for a copy running from its source folder: points to git pull.
+    window._on_update_found(updater.Release("99.0.0", "v99.0.0", "", "p", []))
+    assert "git pull" in shown[-1]

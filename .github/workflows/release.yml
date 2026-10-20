@@ -1,8 +1,9 @@
 # Builds a release whenever a version tag is pushed, e.g.:
 #     git tag v0.3.0 && git push origin v0.3.0
-# The tag must match __version__ in src/luxtunes/__init__.py. The release gets
-# the installable package (a .whl "wheel"), which LuxTunes' Help → Check for
-# Updates… downloads, and packaging/install.sh can install directly.
+# The tag must match __version__ in src/luxtunes/__init__.py. The release gets:
+#   * LuxTunes-x86_64.AppImage: the ready-to-run app (packaging/appimage/build.sh)
+#   * a .whl package, for copies installed with packaging/install.sh
+# Help → Check for Updates… in LuxTunes downloads whichever one it needs.
 name: Release
 
 on:
@@ -14,7 +15,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -45,3 +46,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" dist/* --title "LuxTunes ${GITHUB_REF_NAME#v}" --generate-notes
+
+  appimage:
+    needs: release
+    runs-on: ubuntu-24.04      # the oldest system it runs on: Ubuntu 24.04 / Mint 22
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the AppImage
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q libxcb-cursor0 desktop-file-utils
+          python -m pip install -q . pyinstaller
+          bash packaging/appimage/build.sh
+
+      - name: Add it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/LuxTunes-x86_64.AppImage --clobber
