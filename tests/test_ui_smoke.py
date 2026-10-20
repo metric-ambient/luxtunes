@@ -39,6 +39,13 @@ def window(tmp_path, monkeypatch):
     app = QApplication.instance() or QApplication([])
     # A real CD in this computer's drive mustn't pop up "Import this CD?" mid-test.
     monkeypatch.setattr("luxtunes.core.cd.drives", lambda: [])
+    # Nor may an iPod plugged into this computer show up (or be mounted) in a test:
+    # the window's own device checks see no drives. Tests add fake iPods themselves.
+    from luxtunes.core.ipod import device as ipod_device
+    real_mounts = ipod_device.mounted_filesystems
+    monkeypatch.setattr(ipod_device, "mounted_filesystems",
+                        lambda mounts_file=None: [] if mounts_file is None else real_mounts(mounts_file))
+    monkeypatch.setattr(ipod_device, "apple_usb_connected", lambda *a, **k: False)
     from luxtunes.core import db
     from luxtunes.importer.itunes_xml import import_library
     from luxtunes.ui.main_window import MainWindow
@@ -337,18 +344,62 @@ def test_ipod_device_page(window, tmp_path):
 def test_sync_progress_in_the_display(window):
     lcd = window.lcd
     lcd.show_track({"name": "Robbers", "artist": "The 1975", "total_time": 1000})
-    lcd.start_sync("Test iPod")
-    assert lcd.showing_sync and lcd.toggle_button.isVisibleTo(lcd)
-    lcd.update_sync("Copying “Robbers”", 0, 3)
+    lcd.start_task("sync", "Syncing “Test iPod”", "Preparing to sync…", "Stop syncing")
+    assert lcd.showing_task == "sync" and lcd.toggle_button.isVisibleTo(lcd)
+    lcd.update_count("sync", "Copying “Robbers”", 0, 3)
     lcd.show_track({"name": "Chocolate", "total_time": 1000})     # a new song doesn't hide the sync
-    assert lcd.showing_sync
+    assert lcd.showing_task == "sync"
     lcd.toggle()
-    assert not lcd.showing_sync and lcd.title.text() == "Chocolate"
+    assert lcd.showing_task is None and lcd.title.text() == "Chocolate"
     lcd.toggle()
-    assert lcd.showing_sync
-    lcd.finish_sync("iPod sync is complete.")
-    lcd.end_sync()
-    assert not lcd.showing_sync and not lcd.toggle_button.isVisibleTo(lcd)
+    assert lcd.showing_task == "sync"
+    lcd.finish_task("sync", "iPod sync is complete.")
+    lcd.end_task("sync")
+    assert lcd.showing_task is None and not lcd.toggle_button.isVisibleTo(lcd)
+
+
+def test_display_steps_through_a_sync_and_an_import(window):
+    lcd = window.lcd
+    lcd.show_track({"name": "Robbers", "total_time": 1000})
+    lcd.start_task("sync", "Syncing “Test iPod”", "Preparing to sync…", "Stop syncing")
+    lcd.start_task("import", "Importing “The City”", "Starting…", "Stop importing")
+    assert lcd.showing_task == "import"
+    lcd.update_count("sync", "Copying “Robbers”", 4, 10)      # kept up to date while hidden
+    seen = []
+    for _ in range(6):
+        lcd.toggle()
+        seen.append(lcd.showing_task)
+    assert seen == [None, "sync", "import", None, "sync", "import"]
+    lcd.toggle(); lcd.toggle()
+    assert lcd.showing_task == "sync" and lcd.sync_detail.text() == "Copying “Robbers” (5 of 10)"
+    stopped = []
+    lcd.stop_requested.connect(stopped.append)
+    lcd.stop_button.click()                                   # ✕ stops the one on show
+    assert stopped == ["sync"]
+    lcd.end_task("sync")                                      # the next one takes its place
+    assert lcd.showing_task == "import" and lcd.sync_title.text() == "Importing “The City”"
+    lcd.end_task("import")
+    assert lcd.showing_task is None and lcd.title.text() == "Robbers"
+
+
+def test_one_ipod_syncs_at_a_time(window, monkeypatch):
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QMessageBox
+
+    shown = []
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: shown.append(a[2])))
+    monkeypatch.setattr(window, "_device_name", lambda ipod: ipod.name)
+    window._sync_worker = object()                            # "Red iPod" is syncing
+    window._sync_ipod = SimpleNamespace(key="red", name="Red iPod")
+    window._sync_name = "Red iPod"
+    try:
+        window._sync_device(SimpleNamespace(key="blue", name="Blue iPod"))
+        window._sync_device(SimpleNamespace(key="red", name="Red iPod"))
+    finally:
+        window._sync_worker = None
+    assert shown == ["“Red iPod” has to finish syncing before you can sync “Blue iPod”.",
+                     "“Red iPod” is already syncing."]
 
 
 def test_movie_list_hides_when_syncing_all_movies(window, tmp_path):
@@ -366,12 +417,19 @@ def test_movie_list_hides_when_syncing_all_movies(window, tmp_path):
     page = window.device_page
     page._show_tab(2)                                   # the Movies tab
     QApplication.instance().processEvents()
+    rule_box = page.movies_auto.parentWidget()
+    page.sync_movies.setChecked(True)
+    QApplication.instance().processEvents()
+    size = rule_box.size()
     page.movies_auto.setChecked(True)
     page.movies_rule.setCurrentText("all")
-    assert page.movie_list.isHidden() and page.movies_heading.isHidden()
+    QApplication.instance().processEvents()
+    assert not page.movie_list.isVisibleTo(page) and not page.movies_heading.isVisibleTo(page)
+    assert rule_box.size() == size                      # only the list hides; the box stays put
     page.movies_auto.setChecked(False)
-    assert not page.movie_list.isHidden() and not page.movies_heading.isHidden()
-    assert page.movie_list.isVisibleTo(page)
+    QApplication.instance().processEvents()
+    assert page.movie_list.isVisibleTo(page) and page.movies_heading.isVisibleTo(page)
+    assert rule_box.size() == size
 
 
 def test_background_sync_with_libgpod(window, tmp_path, monkeypatch):
@@ -397,7 +455,7 @@ def test_background_sync_with_libgpod(window, tmp_path, monkeypatch):
     window.sidebar.select_source(("device", ipod.key))
     app.processEvents()
     window._sync_device()
-    assert window.lcd.showing_sync
+    assert window.lcd.showing_task == "sync"
     deadline = time.time() + 60
     while window._sync_worker is not None and time.time() < deadline:
         app.processEvents()                 # the window stays usable while it syncs
@@ -590,8 +648,11 @@ def test_audio_cd_import(window, tmp_path, monkeypatch):
     assert window.sidebar.currentItem().text(0) == "The 1975"
 
     page.table.item(1, 3).setText("Money")                  # a correction before importing
+    from luxtunes.core import sounds
+    played = []
+    monkeypatch.setattr(sounds, "play_done_sound", lambda: played.append(True))
     window._start_import(key)
-    assert window._lcd_task == "import" and window.sidebar.is_busy(key)
+    assert window.lcd.showing_task == "import" and window.sidebar.is_busy(key)
     assert page.import_button.text() == "Stop Importing"
     worker = window._import_worker
     assert worker.wait(60_000), "the import didn't finish"  # runs in the background
@@ -600,6 +661,7 @@ def test_audio_cd_import(window, tmp_path, monkeypatch):
     assert library.count_tracks(window.conn, "music") == before + 2
     names = {r[0] for r in window.conn.execute("SELECT name FROM tracks WHERE album = 'The 1975'")}
     assert names == {"The City", "Money"}
+    assert played == [True]                                  # "done" sound, once
     assert not window.sidebar.is_busy(key) and page.import_button.text() == "Import CD"
     assert page.table.item(0, 1).icon().isNull() is False            # the green tick
 
@@ -786,15 +848,21 @@ def test_new_and_edited_smart_playlists(window, monkeypatch):
 
 
 def test_things_that_cant_be_done_are_greyed_out(window):
-    window._update_file_menu()
+    # Without opening any menu: Sync, Eject and playback items are already greyed.
     assert not window.sync_action.isEnabled()                 # no iPod plugged in
-    assert not window.edit_smart_action.isEnabled()           # not on a smart playlist
-    window._update_controls_menu()
     assert not window.eject_action.isEnabled()                # nothing to eject
     assert not window.next_action.isEnabled()                 # nothing playing
+    window._update_file_menu()
+    assert not window.edit_smart_action.isEnabled()           # not on a smart playlist
+    window._update_controls_menu()
     window._file_menu_closed()
-    window._controls_menu_closed()
-    assert window.sync_action.isEnabled() and window.eject_action.isEnabled()   # shortcuts still work
+    assert not window.sync_action.isEnabled() and not window.eject_action.isEnabled()
+    window._discs["cd:/dev/sr0"] = object()                   # a CD goes in
+    window._update_device_actions()
+    assert window.eject_action.isEnabled() and window.eject_action.text() == "Eject Disc"
+    del window._discs["cd:/dev/sr0"]
+    window._update_device_actions()
+    assert not window.eject_action.isEnabled()
 
 
 def test_general_preferences_apply(window, monkeypatch):
@@ -853,3 +921,169 @@ def test_check_for_updates(window, monkeypatch):
     # A newer version, for a copy running from its source folder: points to git pull.
     window._on_update_found(updater.Release("99.0.0", "v99.0.0", "", "p", []))
     assert "git pull" in shown[-1]
+
+
+def test_rating_takes_a_second_click(window, monkeypatch):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+
+    from luxtunes.ui.track_model import RATING_COLUMN, TrackRole
+
+    table = window.table
+    table.setColumnHidden(RATING_COLUMN, False)
+    table.clearSelection()
+    QApplication.processEvents()
+    delegate = table.itemDelegateForColumn(RATING_COLUMN)
+    index = table.model().index(0, RATING_COLUMN)
+    rect = table.visualRect(index)
+    star = table.fontMetrics().horizontalAdvance(delegate.STAR)
+    third_star = QPoint(rect.left() + delegate.PADDING + int(star * 2.5), rect.center().y())
+
+    def rating():
+        return (table.model().data(index, TrackRole) or {}).get("rating") or 0
+
+    def click(pos):
+        QTest.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=pos, delay=600)
+
+    before = rating()
+    # The click that brings the window to the front changes nothing.
+    monkeypatch.setattr(delegate, "_window_was_in_front", lambda widget: False)
+    click(third_star)
+    assert rating() == before
+    monkeypatch.setattr(delegate, "_window_was_in_front", lambda widget: True)
+    table.clearSelection()
+    click(third_star)                                   # first click: selects the song
+    assert rating() == before and table.selectionModel().isRowSelected(0, index.parent())
+    click(third_star)                                   # second click: sets the rating
+    assert rating() == 60
+    click(QPoint(rect.left() + 1, rect.center().y()))
+    assert rating() == 0
+
+
+def test_sync_warning_lists_the_songs_it_removes(window):
+    from luxtunes.core.ipod.sync import Removal
+    from luxtunes.ui.sync_confirm_dialog import SyncConfirmDialog
+
+    removals = [Removal("Song B", "Artist B", "Album B", "Not in your sync settings"),
+                Removal("Song A", "Artist A", "Album A", "Not in your LuxTunes library")]
+    dialog = SyncConfirmDialog("Test iPod", 5, removals, window)
+    assert dialog.table.isHidden()
+    dialog.details.setChecked(True)                      # Show Details
+    assert not dialog.table.isHidden() and dialog.table.rowCount() == 2
+    assert dialog.table.item(0, 1).text() == "Artist A"  # sorted by artist
+    assert dialog.list_text().splitlines()[1] == \
+        "Song A\tArtist A\tAlbum A\tNot in your LuxTunes library"
+    dialog.details.setChecked(False)
+    assert dialog.table.isHidden()
+    dialog.deleteLater()
+
+
+def test_eject_waits_while_the_ipod_is_busy(window, monkeypatch):
+    import time
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from luxtunes.core.ipod import device
+
+    ipod = SimpleNamespace(key="ipod", name="Test iPod", device="/dev/sdz1", mountpoint="/nowhere")
+    window._ipods["ipod"] = ipod
+    answers = ["DeviceBusy: target is busy", "DeviceBusy: target is busy", None]
+    monkeypatch.setattr(device, "eject", lambda i: answers.pop(0))
+    monkeypatch.setattr(window, "EJECT_WAIT_MS", 10)
+    monkeypatch.setattr(window, "_scan_devices", lambda: None)
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: warnings.append(a[2])))
+    window._eject_device("ipod")
+    deadline = time.time() + 5
+    while answers and time.time() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.01)
+    assert not answers and not warnings                  # third try worked, no error shown
+    assert "/dev/sdz1" in window._mount_ejected
+
+    # Still busy after every try: the message names who's using it.
+    monkeypatch.setattr(device, "eject", lambda i: "DeviceBusy: target is busy")
+    monkeypatch.setattr(device, "users_of", lambda m: [(4242, "nemo", "/nowhere/iPod_Control")])
+    window._eject_device("ipod")
+    deadline = time.time() + 5
+    while not warnings and time.time() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.01)
+    assert "nemo (process 4242)" in warnings[0]
+    del window._ipods["ipod"]
+
+
+def test_starting_luxtunes_again_shows_the_open_window(window, tmp_path):
+    import time
+
+    from PySide6.QtWidgets import QApplication
+
+    from luxtunes.ui import app as app_module
+
+    name = app_module.server_name(tmp_path / "library.db")
+    assert not app_module.tell_running_copy(name)              # nothing running yet
+    app_module.listen_for_others(name, window)
+    window.showMinimized()
+    QApplication.processEvents()
+    assert app_module.tell_running_copy(name)                  # the second start stops here
+    deadline = time.time() + 5
+    while window.isMinimized() and time.time() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.01)
+    assert not window.isMinimized()
+    window._stop_single_instance()                             # e.g. restarting after an update
+    assert not app_module.tell_running_copy(name)
+
+
+def test_unusable_menu_items_look_greyed_out(window):
+    from PySide6.QtGui import QPalette
+    from PySide6.QtWidgets import QApplication
+
+    palette = QApplication.instance().palette()
+    for dark in (False, True):
+        window._toggle_dark_mode(dark)
+        palette = QApplication.instance().palette()
+        for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text,
+                     QPalette.ColorRole.ButtonText):
+            assert palette.color(QPalette.ColorGroup.Disabled, role) != \
+                palette.color(QPalette.ColorGroup.Active, role)
+    window._toggle_dark_mode(False)
+    assert not window.eject_action.isEnabled()               # and Eject is one of them
+
+
+def test_media_keys(window, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    calls = []
+    monkeypatch.setattr(window.player, "next", lambda: calls.append("next"))
+    monkeypatch.setattr(window, "_start_in_current_list", lambda: calls.append("start"))
+    window._media_play_pause()                               # nothing playing: starts the list
+    assert calls == ["start"]
+
+    volume = window.volume.value()
+    window._toggle_mute()
+    assert window.volume.value() == 0
+    window._toggle_mute()
+    assert window.volume.value() == volume
+
+    # The desktop's side (MPRIS): what it reads, and its requests.
+    mpris = window._mpris
+    assert mpris is not None, "the MPRIS player couldn't be created"
+    assert mpris.status() == "Stopped"
+    song = {"id": 7, "name": "Robbers", "artist": "The 1975", "album": "The 1975",
+            "total_time": 254000}
+    monkeypatch.setattr(type(window.player), "current", property(lambda self: song))
+    data = mpris.metadata()
+    assert data["xesam:title"] == "Robbers" and data["xesam:artist"] == ["The 1975"]
+    assert data["mpris:length"] == 254_000_000
+    if mpris.active:                                         # a desktop session is running
+        from PySide6.QtDBus import QDBusConnection, QDBusInterface
+        from luxtunes.ui import mpris as mpris_module
+        player = QDBusInterface(mpris.service, mpris_module.PATH,
+                                mpris_module.PLAYER_INTERFACE, QDBusConnection.sessionBus())
+        player.call("Next")
+        QApplication.processEvents()
+        assert calls[-1] == "next"
+        mpris.changed()                                      # mustn't raise

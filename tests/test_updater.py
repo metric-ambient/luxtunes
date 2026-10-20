@@ -169,6 +169,7 @@ def test_menu_entry_for_the_appimage(monkeypatch, tmp_path):
     assert target.read_bytes() == appimage_bytes() and os.access(target, os.X_OK)
     entry = di.desktop_file().read_text()
     assert f'Exec="{target}" %U' in entry and di.MARKER in entry
+    assert "MimeType=x-content/audio-player;" in entry          # offered for "Music player"
     assert (home / ".local/share/icons/hicolor/128x128/apps/luxtunes.png").exists()
     assert not di.should_offer(target)          # already in the menu
     assert downloaded.exists()                  # the download is left for the user

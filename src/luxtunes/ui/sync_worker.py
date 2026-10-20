@@ -19,7 +19,7 @@ from luxtunes.core.ipod import gpod, settings as ipod_settings, sync as ipod_syn
 
 class SyncWorker(QThread):
     progress = Signal(str, int, int)          # text, done, total
-    confirm_needed = Signal(int, int)         # songs to add, songs to remove
+    confirm_needed = Signal(int, int, object)  # songs to add, to remove, [Removal]
     succeeded = Signal(object)                # SyncReport
     failed = Signal(str)
 
@@ -50,9 +50,9 @@ class SyncWorker(QThread):
         self.progress.emit(text, done, total)
         return not self._stop.is_set()
 
-    def _confirm(self, adding, removing):
+    def _confirm(self, adding, removing, removals=()):
         self._answered.clear()
-        self.confirm_needed.emit(adding, removing)
+        self.confirm_needed.emit(adding, removing, list(removals))
         self._answered.wait()
         return self._answer and not self._stop.is_set()
 

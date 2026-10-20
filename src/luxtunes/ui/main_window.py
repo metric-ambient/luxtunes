@@ -157,7 +157,8 @@ class MainWindow(QMainWindow):
         self._resort_pending = False            # songs were edited: re-sort the list soon
         self._ipods: dict[str, ipod_device.IPod] = {}   # plugged-in iPods by key
         self._ipod_mounts: set[str] = set()
-        self._mount_tried: set[str] = set()     # iPod partitions we already tried to mount
+        self._mount_tries: dict[str, int] = {}  # iPod partition -> times we tried to mount it
+        self._mount_ejected: set[str] = set()   # ejected here: left alone until replugged
         self._sync_worker = None                # the iPod sync running in the background
         self._discs: dict[str, cd.Disc] = {}    # audio CDs in the drives, by "cd:/dev/sr0"
         self._cd_unreadable: set[str] = set()   # drives we couldn't open (told you once)
@@ -168,7 +169,6 @@ class MainWindow(QMainWindow):
         self._import_key: str | None = None
         self._import_eject = False
         self._import_failures: list[str] = []
-        self._lcd_task: str | None = None       # what the display's progress page shows: sync/import
         self._song_lookup = None                # Get Track Info Online… running in the background
         self._smart_refresh_pending = False     # a live smart playlist on show may need updating
         self._update_worker = None              # Help → Check for Updates… in the background
@@ -185,8 +185,10 @@ class MainWindow(QMainWindow):
         # Look for iPods now and every 2 seconds (just a glance at what's mounted).
         self._device_timer = QTimer(self)
         self._device_timer.timeout.connect(self._scan_devices)
+        self._device_timer.timeout.connect(self._update_device_actions)
         self._device_timer.start(2000)
         QTimer.singleShot(0, self._scan_devices)
+        self._update_device_actions()
         QTimer.singleShot(800, self._offer_desktop_integration)
 
     # ======================================================================
@@ -485,13 +487,12 @@ class MainWindow(QMainWindow):
         self.dark_action.setCheckable(True)
 
         controls = menus.addMenu("&Controls")
-        self._action(controls, "Play / Pause", self._on_play_clicked)  # Space: see _connect
+        self.play_action = self._action(controls, "Play / Pause", self._on_play_clicked)  # Space: see _connect
         self.next_action = self._action(controls, "Next", self.player.next, "Ctrl+Right")
         self.previous_action = self._action(controls, "Previous", self.player.previous, "Ctrl+Left")
         self.current_song_action = self._action(controls, "Go to Current Song",
                                                 self._go_to_current_song, "Ctrl+L")
         controls.aboutToShow.connect(self._update_controls_menu)
-        controls.aboutToHide.connect(self._controls_menu_closed)
         self.recent_menu = controls.addMenu("Play Recent")
         self.recent_menu.aboutToShow.connect(self._fill_recent_menu)
         controls.addSeparator()
@@ -530,7 +531,9 @@ class MainWindow(QMainWindow):
         self.sidebar.source_selected.connect(self.show_source)
         self.sidebar.tracks_dropped.connect(self._on_tracks_dropped)
         self.search.textChanged.connect(self._on_search)
-        self.table.doubleClicked.connect(lambda index: self._play_row(index.row()))
+        # Double-clicking the stars rates the song (a quick second click); it doesn't play it.
+        self.table.doubleClicked.connect(
+            lambda index: index.column() == RATING_COLUMN or self._play_row(index.row()))
         enter = QShortcut(QKeySequence(Qt.Key.Key_Return), self.table)
         enter.setContext(Qt.ShortcutContext.WidgetShortcut)  # only when the song list has focus
         enter.activated.connect(self._play_selected)
@@ -580,6 +583,9 @@ class MainWindow(QMainWindow):
         self.player.playing_changed.connect(self._on_playing_changed)
         self.player.position_changed.connect(self._on_position)
         self.player.stopped.connect(self._on_stopped)
+        self.player.track_started.connect(lambda *_: self._update_device_actions())
+        self.player.stopped.connect(lambda *_: self._update_device_actions())
+        self._setup_media_keys()
         self.player.file_missing.connect(self._on_file_missing)
         self.player.track_unavailable.connect(lambda t: self.model.set_missing(t["id"], True))
         self.player.relocated.connect(self._save_location)
@@ -589,7 +595,7 @@ class MainWindow(QMainWindow):
         self.sidebar.device_renamed.connect(self._on_device_renamed)
         self.sidebar.eject_requested.connect(self._eject_device)
         self.device_page.sync_requested.connect(self._sync_device)
-        self.lcd.stop_sync_requested.connect(self._stop_sync)
+        self.lcd.stop_requested.connect(self._stop_task)
         self.cd_page.import_clicked.connect(self._cd_import_clicked)
         self.cd_page.settings_clicked.connect(self._edit_import_settings)
         self.cd_page.lookup_clicked.connect(
@@ -740,6 +746,65 @@ class MainWindow(QMainWindow):
         else:
             icon = self._pause_icon if self.player.is_playing else self._play_icon
         self.play_button.setIcon(icon)
+
+    # ---- Media keys (Play/Pause, Next, Previous, Stop, Mute) ------------------------------
+
+    def _setup_media_keys(self):
+        """The keyboard's media keys. The desktop usually catches them and passes
+        them on over MPRIS (ui/mpris.py), which works while LuxTunes is in the
+        background too; if a key reaches the window directly, these handle it."""
+        keys = ((Qt.Key.Key_MediaTogglePlayPause, self._media_play_pause),
+                (Qt.Key.Key_MediaPlay, self._media_play_pause),
+                (Qt.Key.Key_MediaPause, self._media_play_pause),
+                (Qt.Key.Key_MediaNext, lambda: self.player.next()),
+                (Qt.Key.Key_MediaPrevious, lambda: self.player.previous()),
+                (Qt.Key.Key_MediaStop, lambda: self.player.stop()),
+                (Qt.Key.Key_VolumeMute, self._toggle_mute))
+        for key, slot in keys:
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            shortcut.activated.connect(slot)
+        self._volume_before_mute = None
+        self._mpris = None
+        try:
+            from luxtunes.ui.mpris import Mpris
+            self._mpris = Mpris({
+                "play_pause": self._media_play_pause, "stop": lambda: self.player.stop(),
+                "next": lambda: self.player.next(), "previous": lambda: self.player.previous(),
+                "raise": self._bring_to_front, "quit": self.close,
+                "current": lambda: self.player.current,
+                "playing": lambda: self.player.is_playing,
+                "volume": self.volume.value}, self)
+        except Exception as error:           # media keys are a nicety; never stop the app
+            import logging
+            logging.getLogger(__name__).warning("media keys unavailable: %s", error)
+            self._mpris = None
+        if self._mpris is not None:
+            for signal in (self.player.track_started, self.player.playing_changed,
+                           self.player.stopped):
+                signal.connect(lambda *_: self._mpris and self._mpris.changed())
+
+    def _media_play_pause(self):
+        """Play/Pause key: pause or resume, or start the list on screen."""
+        if self.player.current is not None:
+            self.player.toggle()
+        else:
+            self._start_in_current_list()
+
+    def _toggle_mute(self):
+        if self._volume_before_mute is None:
+            self._volume_before_mute = self.volume.value()
+            self.volume.setValue(0)
+        else:
+            self.volume.setValue(self._volume_before_mute or 50)
+            self._volume_before_mute = None
+
+    def _bring_to_front(self):
+        if self.isMinimized():
+            self.showNormal()
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     def _on_play_clicked(self):
         if self._stop_mode():
@@ -1502,8 +1567,8 @@ class MainWindow(QMainWindow):
             eject.setEnabled(not busy)
         elif source[0] == "device":
             syncing = self._sync_worker is not None
-            sync = menu.addAction("Sync", self._sync_device)
-            sync.setEnabled(not syncing)
+            sync = menu.addAction("Sync", lambda: self._sync_source(source))
+            sync.setEnabled(not (syncing and self._sync_ipod.key == source[1]))
             menu.addAction("Rename", lambda: self.sidebar.rename_source(source))
             menu.addSeparator()
             eject = menu.addAction("Eject", lambda: self._eject_device(source[1]))
@@ -2051,20 +2116,29 @@ class MainWindow(QMainWindow):
             self._current_source = SOURCE_MUSIC
         self.reload_library()
 
+    MOUNT_TRIES = 5
+
     def _auto_mount(self):
         """Mount a plugged-in iPod that the desktop didn't mount by itself (like
-        clicking it in the file manager). Each one is tried once per plug-in."""
+        clicking it in the file manager). Right after it's plugged in the system
+        may still be busy with it, so it's tried a few times, one device check
+        (2 s) apart."""
         if not ipod_device.apple_usb_connected():
-            self._mount_tried.clear()
+            self._mount_tries.clear()
+            self._mount_ejected.clear()
             return
         for partition in ipod_device.unmounted_ipod_partitions():
-            if partition in self._mount_tried:
+            tries = self._mount_tries.get(partition, 0)
+            if partition in self._mount_ejected or tries >= self.MOUNT_TRIES:
                 continue
-            self._mount_tried.add(partition)
+            self._mount_tries[partition] = tries + 1
             mountpoint, error = ipod_device.mount(partition)
-            if error:
-                self.statusBar().showMessage(f"Couldn't open the iPod ({error}). "
-                                             "Try clicking it in the file manager.", 8000)
+            if error is None:
+                # Mounted: if it's later unmounted elsewhere, leave it that way.
+                self._mount_tries[partition] = self.MOUNT_TRIES
+            elif tries + 1 == self.MOUNT_TRIES:
+                self.statusBar().showMessage(
+                    f"Couldn't open the iPod: {error}. Try clicking it in the file manager.", 20000)
 
     def _device_name(self, ipod: ipod_device.IPod) -> str:
         record = ipod_settings.load_device(self.conn, ipod.key, ipod.name)
@@ -2102,13 +2176,25 @@ class MainWindow(QMainWindow):
             return self._ipods.get(self._current_source[1])
         return next(iter(self._ipods.values()), None) if len(self._ipods) == 1 else None
 
-    def _sync_device(self):
+    def _sync_source(self, source):
+        """Sidebar → Sync: sync that iPod (the one right-clicked, not the one on show)."""
+        self._sync_device(self._ipods.get(source[1]))
+
+    def _sync_device(self, ipod=None):
         """Sync the iPod in the background; progress shows in the Now Playing display."""
-        ipod = self._current_device()
+        ipod = ipod or self._current_device()
         if ipod is None:
             return
         if self._sync_worker is not None:
-            self.statusBar().showMessage("An iPod is already syncing.", 4000)
+            # One sync at a time: libgpod and the library's play counts are
+            # handled by one sync, start to finish.
+            busy = self._sync_name
+            if self._sync_ipod.key == ipod.key:
+                text = f"“{busy}” is already syncing."
+            else:
+                text = (f"“{busy}” has to finish syncing before you can sync "
+                        f"“{self._device_name(ipod)}”.")
+            QMessageBox.information(self, "Sync", text)
             return
         from luxtunes.core.ipod import gpod
         if not gpod.available():
@@ -2123,6 +2209,7 @@ class MainWindow(QMainWindow):
         worker = SyncWorker(db_path, ipod, ipod.key, self)
         self._sync_worker = worker
         self._sync_ipod = ipod
+        self._update_device_actions()
         self._sync_first_time = record.last_sync is None
         self._sync_name = record.name or ipod.name
         worker.progress.connect(self._on_sync_progress)
@@ -2130,62 +2217,47 @@ class MainWindow(QMainWindow):
         worker.succeeded.connect(self._sync_finished)
         worker.failed.connect(self._sync_failed)
         worker.finished.connect(self._sync_thread_done)
-        self.lcd.start_sync(self._sync_name)
-        self._lcd_task = "sync"
-        self.device_page.set_syncing(True)
+        self.lcd.start_task("sync", f"Syncing “{self._sync_name}”", "Preparing to sync…",
+                            "Stop syncing")
+        self.device_page.set_syncing(ipod.key)
         self.sidebar.set_syncing(ipod.key)
         worker.start()
 
     def _on_sync_progress(self, text: str, done: int, total: int):
-        if self._lcd_task == "sync":
-            self.lcd.update_sync(text, done, total)
+        self.lcd.update_count("sync", text, done, total)
 
     def _lcd_finished(self, task: str, message: str, seconds: int = 6):
-        """A sync or import ended: show how, unless the other one is showing (or
-        still running, in which case the display goes back to it)."""
-        if self._lcd_task != task:
+        """A sync or import ended: the display says how. If another task is on
+        show, the message also goes to the status bar."""
+        if self.lcd.showing_task != task:
             self.statusBar().showMessage(message, 8000)
-            return
-        if task == "import" and self._sync_worker is not None:
-            self._lcd_task = "sync"
-            self.lcd.start_sync(self._sync_name)
-            self.statusBar().showMessage(message, 8000)
-        elif task == "sync" and self._import_worker is not None:
-            self._lcd_task = "import"
-            self.lcd.start_task("Importing", "", "Stop importing",
-                                "Switch between the CD import and Now Playing")
-            self.statusBar().showMessage(message, 8000)
-        else:
-            self._lcd_task = None
-            self.lcd.finish_sync(message, seconds)
+        self.lcd.finish_task(task, message, seconds)
+
+    def _stop_task(self, key: str):
+        """The ✕ in the display: stops the task on show."""
+        if key == "import":
+            self._stop_import()
+        elif key == "sync":
+            self._stop_sync()
 
     def _stop_sync(self):
-        """The ✕ in the display: stops whatever it's showing."""
-        if self._lcd_task == "import" and self._import_worker is not None:
-            self._stop_import()
-            return
         if self._sync_worker is not None:
-            self.lcd.update_sync("Stopping after the current song…", 0, 0)
-            self.lcd.stop_button.setEnabled(False)
+            self.lcd.set_stopping("sync", "Stopping after the current song…")
             self._sync_worker.stop()
 
-    def _confirm_sync(self, adding: int, removing: int):
+    def _confirm_sync(self, adding: int, removing: int, removals=()):
         """Asked by the sync before it changes the iPod. Only the first LuxTunes
-        sync that takes songs off an iPod (or a very big removal) needs a yes."""
+        sync that takes songs off an iPod (or a very big removal) needs a yes.
+        Show Details lists each song that would come off, and why."""
         worker = self._sync_worker
         if worker is None:
             return
         if removing == 0 or (not self._sync_first_time and removing < 100):
             worker.answer(True)
             return
-        answer = QMessageBox.question(
-            self, "Sync",
-            f"This sync will remove {removing:,} song{'s' if removing != 1 else ''} from "
-            f"“{self._sync_name}” and copy {adding:,} from your library.\n\n"
-            "Songs that aren't in your sync settings are removed from the iPod only; "
-            "your LuxTunes library isn't changed.",
-            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
-        worker.answer(answer == QMessageBox.StandardButton.Ok)
+        from luxtunes.ui.sync_confirm_dialog import SyncConfirmDialog
+        dialog = SyncConfirmDialog(self._sync_name, adding, list(removals), self)
+        worker.answer(dialog.exec() == QDialog.DialogCode.Accepted)
 
     def _sync_finished(self, report):
         ipod = self._sync_ipod
@@ -2222,8 +2294,9 @@ class MainWindow(QMainWindow):
         if self._sync_worker is not None:
             self._sync_worker.deleteLater()
         self._sync_worker = None
-        self.device_page.set_syncing(False)
+        self.device_page.set_syncing(None)
         self.sidebar.set_syncing(None)
+        self._update_device_actions()
 
     def _eject_current_device(self):
         if self._current_source and self._current_source[0] == "device" \
@@ -2248,17 +2321,47 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Eject", f"“{ipod.name}” is syncing. Stop the sync "
                                     "(✕ in the display) or let it finish, then eject.")
             return
+        self._try_eject(ipod, 1)
+
+    EJECT_TRIES, EJECT_WAIT_MS = 5, 1500
+
+    def _try_eject(self, ipod, attempt: int):
+        """Eject, and if something still has the iPod open (often the system
+        finishing up just after a sync), wait a moment and try again."""
+        if self._ipods.get(ipod.key) is not ipod:
+            return                                  # gone meanwhile (ejected elsewhere)
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             error = ipod_device.eject(ipod)
         finally:
             QApplication.restoreOverrideCursor()
-        if error:
-            QMessageBox.warning(self, "Eject", f"“{ipod.name}” couldn't be ejected:\n\n{error}")
+        if error and ipod_device.is_busy_error(error) and attempt < self.EJECT_TRIES:
+            self.statusBar().showMessage(f"Waiting for “{ipod.name}” to be free…")
+            QTimer.singleShot(self.EJECT_WAIT_MS, lambda: self._try_eject(ipod, attempt + 1))
             return
-        self._mount_tried.add(ipod.device)      # don't mount it again until it's replugged
+        self.statusBar().clearMessage()
+        if error:
+            QMessageBox.warning(self, "Eject", self._eject_problem(ipod, error))
+            return
+        self._mount_ejected.add(ipod.device)    # don't mount it again until it's replugged
         self.statusBar().showMessage(f"“{ipod.name}” can now be disconnected.", 6000)
         self._scan_devices()
+
+    def _eject_problem(self, ipod, error: str) -> str:
+        text = f"“{ipod.name}” couldn't be ejected."
+        if not ipod_device.is_busy_error(error):
+            return f"{text}\n\n{error}"
+        users = ipod_device.users_of(ipod.mountpoint)
+        if not users:
+            return (f"{text} The system says it's still in use, but no program of yours has "
+                    "files open on it. Wait a few seconds and eject again.\n\n" + error)
+        lines = []
+        for pid, name, path in users:
+            who = "LuxTunes" if pid == os.getpid() else name
+            lines.append(f"• {who} (process {pid}): {path}")
+        return (f"{text} These programs are still using it:\n\n" + "\n".join(lines)
+                + "\n\nClose them (for a file manager, close its windows showing the iPod) "
+                "and eject again.")
 
     # ======================================================================
     # Audio CDs: Import CD
@@ -2471,6 +2574,7 @@ class MainWindow(QMainWindow):
         self._import_worker = worker
         self._import_key = key
         self._import_eject = eject_after
+        self._update_device_actions()
         self._import_failures = []
         worker.track_started.connect(self._on_import_track_started)
         worker.progress.connect(self._on_import_progress)
@@ -2479,9 +2583,7 @@ class MainWindow(QMainWindow):
         worker.all_done.connect(self._on_import_done)
         worker.finished.connect(worker.deleteLater)
         first = next(t.name for t in disc.tracks if t.checked)
-        self.lcd.start_task(f"Importing “{first}”", "Starting…", "Stop importing",
-                            "Switch between the CD import and Now Playing")
-        self._lcd_task = "import"
+        self.lcd.start_task("import", f"Importing “{first}”", "Starting…", "Stop importing")
         self.sidebar.set_busy(key, True)
         if self.cd_page.disc is not None and self.cd_page.disc.key == key:
             for number in numbers:
@@ -2492,8 +2594,7 @@ class MainWindow(QMainWindow):
 
     def _stop_import(self):
         if self._import_worker is not None:
-            self.lcd.update_task(self.lcd.sync_title.text(), "Stopping…", None)
-            self.lcd.stop_button.setEnabled(False)
+            self.lcd.set_stopping("import", "Stopping…")
             self._import_worker.stop()
 
     def _import_page_shows(self) -> bool:
@@ -2502,15 +2603,13 @@ class MainWindow(QMainWindow):
     def _on_import_track_started(self, number: int, name: str):
         if self._import_page_shows():
             self.cd_page.set_track_state(number, "importing")
-        if self._lcd_task == "import":
-            self.lcd.update_task(f"Importing “{name}”", "Time remaining: calculating…", 0.0)
+        self.lcd.update_task("import", f"Importing “{name}”", "Time remaining: calculating…", 0.0)
 
     def _on_import_progress(self, number: int, name: str, fraction: float, remaining: float,
                             speed: float):
-        if self._lcd_task == "import":
-            left = formatting.format_duration(int(remaining * 1000))
-            self.lcd.update_task(f"Importing “{name}”", f"Time remaining: {left} ({speed:.1f}x)",
-                                 fraction)
+        left = formatting.format_duration(int(remaining * 1000))
+        self.lcd.update_task("import", f"Importing “{name}”",
+                             f"Time remaining: {left} ({speed:.1f}x)", fraction)
 
     def _on_import_track_done(self, number: int, track_id: int):
         if self._import_page_shows():
@@ -2528,6 +2627,7 @@ class MainWindow(QMainWindow):
         self._import_worker = None
         self._import_key = None
         self.sidebar.set_busy(key, False)
+        self._update_device_actions()
         disc = self._discs.get(key)
         if self.cd_page.disc is not None and self.cd_page.disc.key == key:
             self.cd_page.set_importing(False)
@@ -2541,6 +2641,9 @@ class MainWindow(QMainWindow):
         else:
             message = f"Import complete: {songs} added to your library."
         self._lcd_finished("import", message)
+        if not stopped and imported and appearance(self.settings)["import_done_sound"]:
+            from luxtunes.core import sounds
+            sounds.play_done_sound()            # the desktop's "done" sound
         self.reload_library()
         if failures:
             QMessageBox.warning(self, "Import CD", "Some songs couldn't be imported:\n\n"
@@ -2582,34 +2685,41 @@ class MainWindow(QMainWindow):
         if tracks:
             self.reveal_action.setEnabled(find_file(tracks[0].get("location")) is not None)
         self.edit_smart_action.setEnabled(self._current_smart_id() is not None)
-        # Sync: only with an iPod plugged in, and not while one is syncing.
-        ipod = self._current_device() or next(iter(self._ipods.values()), None)
-        self.sync_action.setText(f"Sync “{self._device_name(ipod)}”" if ipod else "Sync iPod")
-        self.sync_action.setEnabled(ipod is not None and self._sync_worker is None)
+        self._update_device_actions()
 
     def _update_controls_menu(self):
-        """Grey out what can't be done right now."""
-        playing = self.player.current is not None
-        for action in (self.next_action, self.previous_action, self.current_song_action):
-            action.setEnabled(playing)
         self.recent_menu.setEnabled(bool(self._recent))
+        self._update_device_actions()
+
+    def _update_device_actions(self):
+        """Keep Sync, Eject and the playback items greyed out whenever they can't
+        be used (in the menus and for their shortcuts). Runs on every device
+        check, when playback starts or stops, and when a sync or import ends."""
+        try:
+            ipod = self._current_device() or next(iter(self._ipods.values()), None)
+        except Exception:
+            ipod = None
+        self.sync_action.setText(f"Sync “{self._device_name(ipod)}”" if ipod else "Sync iPod")
+        syncing_this = self._sync_worker is not None and ipod is not None \
+            and self._sync_ipod.key == ipod.key
+        self.sync_action.setEnabled(ipod is not None and not syncing_this)
         busy_ipod = self._sync_ipod.key if self._sync_worker is not None else None
         ejectable = [k for k in self._ipods if k != busy_ipod] + \
                     [k for k in self._discs if k != self._import_key]
         self.eject_action.setEnabled(bool(ejectable))
-
-    def _controls_menu_closed(self):
-        # Shortcuts stay usable (each checks for itself) once the menu is closed.
-        for action in (self.next_action, self.previous_action, self.current_song_action,
-                       self.eject_action):
-            action.setEnabled(True)
+        disc = any(k.startswith("cd:") for k in ejectable)
+        self.eject_action.setText("Eject Disc" if disc or not ejectable else "Eject iPod")
+        playing = self.player.current is not None
+        for action in (self.next_action, self.previous_action, self.current_song_action):
+            action.setEnabled(playing)
+        on_list = self.views.currentWidget() not in (self.device_page, self.cd_page)
+        self.play_action.setEnabled(playing or (on_list and self.model.rowCount() > 0))
 
     def _file_menu_closed(self):
         # Re-enable after the menu closes so the keyboard shortcuts always work
         # (each one checks for a selection itself).
         for action in (self.info_action, self.reveal_action, self.from_selection_action,
-                       self.duplicates_action, self.missing_action, self.edit_smart_action,
-                       self.sync_action):
+                       self.duplicates_action, self.missing_action, self.edit_smart_action):
             action.setEnabled(True)
 
     def _reveal_selected(self):
@@ -3077,6 +3187,7 @@ class MainWindow(QMainWindow):
         if answer == QMessageBox.StandardButton.Yes:
             command = updater.launcher()
             from PySide6.QtCore import QProcess
+            self._stop_single_instance()
             if QProcess.startDetached(command[0], command[1:]):
                 self.close()
 
@@ -3115,6 +3226,7 @@ class MainWindow(QMainWindow):
             "LuxTunes is now in your applications menu. It will restart from its new place; "
             f"you can delete the file you downloaded ({appimage.name} in {appimage.parent}).")
         from PySide6.QtCore import QProcess
+        self._stop_single_instance()
         if QProcess.startDetached(str(target), []):
             self.close()
 
@@ -3138,6 +3250,17 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "Remove LuxTunes", "LuxTunes has been removed. "
                                 "It will close now.")
         self.close()
+
+    def _stop_single_instance(self):
+        """Before restarting: let the new LuxTunes start instead of just
+        bringing this window to the front (see ui/app.py), and hand it the
+        media keys."""
+        if self._mpris is not None:
+            self._mpris.close()
+        from PySide6.QtNetwork import QLocalServer
+        server = self.findChild(QLocalServer)
+        if server is not None:
+            server.close()
 
     def _about(self):
         AboutDialog(self.conn, self).exec()
@@ -3186,6 +3309,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self._device_timer.stop()            # no more looking for iPods and CDs
+        if self._mpris is not None:
+            self._mpris.close()              # media keys go to other players now
         self._cd_pending.clear()             # and no "Import this CD?" after closing
         if self._sync_worker is not None:
             # Let the sync stop safely (it saves the iPod's database first).

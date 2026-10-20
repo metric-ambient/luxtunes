@@ -8,7 +8,8 @@ The order of a sync:
   3. Work out the plan (plan.py) and compare it with what's on the iPod:
      remove songs that aren't wanted any more (from the iPod only), copy the
      missing ones, and refresh every song's details (names, ratings, play
-     counts...) from the library.
+     counts...) from the library. A wanted song whose file can't be found on
+     this computer stays on the iPod.
   4. Rebuild the playlists, set the iPod's name, and save the database
      (libgpod adds the 6G/7G signature).
 
@@ -50,6 +51,33 @@ class SyncReport:
     stats: stats.MergeResult | None = None
     problems: list[str] = field(default_factory=list)
     cancelled: bool = False
+
+
+@dataclass
+class Removal:
+    """A song the sync is about to take off the iPod, and why."""
+    name: str
+    artist: str
+    album: str
+    reason: str
+
+
+def describe_removals(to_remove, on_ipod: dict, library_ids: set[int]) -> list[Removal]:
+    removals = []
+    for pointer in to_remove:
+        t = pointer.contents
+        if ctypes.addressof(on_ipod[t.dbid].contents) != ctypes.addressof(t):
+            reason = "A second copy of a song that stays on the iPod"
+        elif t.dbid not in library_ids:
+            reason = "Not in your LuxTunes library"
+            kind = (gpod.get_str(t, "filetype") or "") + (gpod.get_str(t, "ipod_path") or "")
+            if "protected" in kind.lower() or kind.lower().endswith(".m4p"):
+                reason += " (protected file from the iTunes Store)"
+        else:
+            reason = "Not in your sync settings"
+        removals.append(Removal(gpod.get_str(t, "title") or "", gpod.get_str(t, "artist") or "",
+                                gpod.get_str(t, "album") or "", reason))
+    return removals
 
 
 # ---- Small conversions ------------------------------------------------------------------
@@ -183,8 +211,9 @@ def set_aside_play_counts(ipod: IPod) -> list[Path]:
 def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
          confirm=None) -> SyncReport:
     """Sync this iPod. progress(text, done, total) may return False to stop
-    copying. confirm(adding, removing) is asked before anything on the iPod
-    changes and may return False to cancel. Raises gpod.GpodError."""
+    copying. confirm(adding, removing, removals) is asked before anything on
+    the iPod changes (removals: a Removal for each song to come off) and may
+    return False to cancel. Raises gpod.GpodError."""
     report = SyncReport()
 
     def tell(text, done=0, total=0, can_stop=True):
@@ -200,7 +229,10 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
         for pointer in all_tracks:
             on_ipod.setdefault(pointer.contents.dbid, pointer)
 
+        library_by_dbid = {dbid_of(song): song for song in library.load_tracks(conn)}
+
         # What should be on the iPod.
+        keep = set()
         if settings.manual:
             wanted = {}
         else:
@@ -210,15 +242,24 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
             smart.refresh_all(conn)          # smart playlists go over as they are right now
             the_plan = ipod_plan.build_plan(conn, settings, free_space=capacity)
             wanted = {dbid_of(t): t for t in the_plan.tracks if dbid_of(t)}
-            report.problems += [f"{t.get('name')}: file not found" for t in the_plan.missing]
+            keep = set(wanted)
+            for t in the_plan.missing:
+                if dbid_of(t) in on_ipod:     # can't be copied again, so don't take it off
+                    keep.add(dbid_of(t))
+                    report.problems.append(f"{t.get('name')}: file not found on this computer "
+                                           "(the copy on the iPod is kept)")
+                else:
+                    report.problems.append(f"{t.get('name')}: file not found")
         # Unwanted songs, plus any second copy of a song (same ID twice).
         to_remove = [] if settings.manual else [
             p for p in all_tracks
-            if p.contents.dbid not in wanted
+            if p.contents.dbid not in keep
             or ctypes.addressof(on_ipod[p.contents.dbid].contents) != ctypes.addressof(p.contents)]
         to_add = [t for dbid, t in wanted.items() if dbid not in on_ipod]
 
-        if confirm is not None and not confirm(len(to_add), len(to_remove)):
+        if confirm is not None and not confirm(
+                len(to_add), len(to_remove),
+                describe_removals(to_remove, on_ipod, set(library_by_dbid))):
             report.cancelled = True
             return report
 
@@ -241,12 +282,8 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
             report.removed += 1
 
         # 3. Refresh the details of songs that stay.
-        library_by_dbid = {}
-        if wanted or settings.manual:
-            for song in library.load_tracks(conn):
-                library_by_dbid[dbid_of(song)] = song
         kept = {dbid: p for dbid, p in on_ipod.items() if dbid in library_by_dbid
-                and (settings.manual or dbid in wanted)}
+                and (settings.manual or dbid in keep)}
         for dbid, pointer in kept.items():
             fill_track(pointer.contents, library_by_dbid[dbid])
             report.updated += 1

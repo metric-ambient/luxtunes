@@ -16,6 +16,7 @@ LIGHT = {
     "window": "#d9d9d9",
     "text": "#000000",
     "text_dim": "#6f7b88",
+    "text_disabled": "#a3a3a3",     # menu items and buttons that can't be used right now
     "base": "#ffffff",
     "alt_base": "#f1f5fa",
     "highlight": "#3d80df",
@@ -48,6 +49,7 @@ DARK = {
     "window": "#2a2b2e",
     "text": "#e4e4e4",
     "text_dim": "#8b95a1",
+    "text_disabled": "#6b6b6b",
     "base": "#1e1f22",
     "alt_base": "#26272b",
     "highlight": "#2f6fd0",
@@ -348,6 +350,11 @@ def apply_theme(app: QApplication, dark: bool, grid_dark: bool = True) -> None:
     palette.setColor(role.ToolTipBase, QColor(colors["base"]))
     palette.setColor(role.ToolTipText, QColor(colors["text"]))
     palette.setColor(role.PlaceholderText, QColor(colors["text_dim"]))
+    # setColor(role, ...) sets every state, disabled included; give things
+    # that can't be used right now their own, lighter text.
+    disabled = QColor(colors["text_disabled"])
+    for r in (role.WindowText, role.Text, role.ButtonText, role.HighlightedText):
+        palette.setColor(QPalette.ColorGroup.Disabled, r, disabled)
     # Keep the selection blue even when the song list doesn't have focus.
     palette.setColor(QPalette.ColorGroup.Inactive, role.Highlight, QColor(colors["highlight"]))
     palette.setColor(

@@ -97,3 +97,30 @@ def test_unselected_songs_leave_the_ipod_but_not_the_library(tmp_path):
     assert not list((mount / "iPod_Control/Music").rglob("*.mp3"))
     assert conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0] == 3
     assert all((tmp_path / f"{i}.mp3").exists() for i in range(3))
+
+
+def test_you_see_which_songs_come_off_and_why(tmp_path):
+    mount, conn = fake_ipod(tmp_path), small_library(tmp_path)
+    do_sync(conn, mount)
+    # "Robbers" leaves the library, "Chocolate" is no longer chosen, and the
+    # file of "Wasteland" can't be found on this computer.
+    conn.execute("DELETE FROM tracks WHERE name = 'Robbers'")
+    conn.commit()
+    (tmp_path / "2.mp3").unlink()
+    ipod = device.read_ipod(str(mount), "", "vfat")
+    record = settings.load_device(conn, ipod.key, ipod.name)
+    record.settings.music_mode = "selected"
+    record.settings.playlists = []
+    record.settings.artists = ["The 1975"]
+    asked = []
+    conn.execute("UPDATE tracks SET artist = 'Someone Else' WHERE name = 'Chocolate'")
+    conn.commit()
+    report = sync.sync(conn, ipod, record,
+                       confirm=lambda adding, removing, removals: asked.append(removals) or False)
+    assert report.cancelled
+    reasons = {r.name: r.reason for r in asked[0]}
+    assert reasons == {"Robbers": "Not in your LuxTunes library",
+                       "Chocolate": "Not in your sync settings"}       # Wasteland stays
+    assert {r.artist for r in asked[0]} == {"The 1975"} and {r.album for r in asked[0]} == {"The 1975"}
+    with gpod.Database(str(mount)) as ipod_db:                         # cancelled: nothing changed
+        assert len(ipod_db.tracks()) == 3

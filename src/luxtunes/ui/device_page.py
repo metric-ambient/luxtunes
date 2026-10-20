@@ -335,15 +335,18 @@ class DevicePage(QWidget):
         self._update_buttons()
         self._refresh_timer.start()
 
-    def set_syncing(self, syncing: bool):
-        """While a sync runs, the buttons can't start another one."""
-        self._syncing = syncing
-        self.sync_button.setText("Syncing…" if syncing else "Sync")
+    def set_syncing(self, key: str | None):
+        """The iPod that's syncing (None: none). Its page can't start another
+        sync; another iPod's Sync button stays usable and the main window
+        explains that it has to wait."""
+        self._syncing_key = key
         self._update_buttons()
 
     def _update_buttons(self):
         dirty = self.dirty
-        syncing = getattr(self, "_syncing", False)
+        key = getattr(self, "_syncing_key", None)
+        syncing = key is not None and self.ipod is not None and self.ipod.key == key
+        self.sync_button.setText("Syncing…" if syncing else "Sync")
         self.sync_button.setEnabled(not syncing)
         self.apply_button.setEnabled(not syncing)
         self.revert_button.setVisible(dirty)
@@ -526,8 +529,16 @@ class DevicePage(QWidget):
         row.addStretch(1)
         inner.addLayout(row)
         column.addWidget(frame)
+        # The heading and list sit in one area that keeps its space when hidden,
+        # so the boxes above don't change size when "all" movies are synced.
+        self.movie_area = QWidget()
+        area = QVBoxLayout(self.movie_area)
+        area.setContentsMargins(0, 0, 0, 0)
+        policy = self.movie_area.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)
+        self.movie_area.setSizePolicy(policy)
         self.movies_heading = heading("Movies", 1.3)
-        column.addWidget(self.movies_heading)
+        area.addWidget(self.movies_heading)
         self.movie_list = QListWidget()
         self.movie_list.setObjectName("deviceList")
         self.movie_list.setViewMode(QListView.ViewMode.IconMode)
@@ -539,7 +550,8 @@ class DevicePage(QWidget):
         self.movie_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.movie_list.setMinimumHeight(380)
         self.movie_list.itemChanged.connect(self._changed)
-        column.addWidget(self.movie_list, 1)
+        area.addWidget(self.movie_list, 1)
+        column.addWidget(self.movie_area, 1)
         self.sync_movies.toggled.connect(self._changed)
         self.movies_auto.toggled.connect(self._changed)
         self.movies_rule.currentIndexChanged.connect(self._changed)
@@ -884,8 +896,7 @@ class DevicePage(QWidget):
         self.movie_list.setEnabled(movies_on)
         # Picking movies one by one only shows when not syncing "all".
         pick_by_hand = not (s.movies_auto and s.movies_rule == "all")
-        self.movie_list.setVisible(pick_by_hand)
-        self.movies_heading.setVisible(pick_by_hand)
+        self.movie_area.setVisible(pick_by_hand)
         for check, auto, rule in ((self.sync_tv, self.tv_auto, self.tv_rule),
                                   (self.sync_podcasts, self.podcasts_auto, self.podcasts_rule)):
             auto.setEnabled(check.isChecked())

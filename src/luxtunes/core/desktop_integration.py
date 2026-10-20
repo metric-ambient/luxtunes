@@ -110,9 +110,22 @@ def integrate(appimage: Path) -> Path:
         "Terminal=false\n"
         "Categories=AudioVideo;Audio;Player;\n"
         "Keywords=music;player;library;ipod;cd;\n"
+        "MimeType=x-content/audio-player;x-content/audio-cdda;\n"
         "StartupWMClass=luxtunes\n"
         f"{MARKER}\n")
+    _refresh_menu_cache(entry.parent)
     return target
+
+
+def _refresh_menu_cache(folder: Path) -> None:
+    """Lets the desktop see the new entry's media types (best effort)."""
+    import subprocess
+    tool = shutil.which("update-desktop-database")
+    if tool:
+        try:
+            subprocess.run([tool, str(folder)], capture_output=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            pass
 
 
 def remove() -> None:

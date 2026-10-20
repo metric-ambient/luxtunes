@@ -221,3 +221,30 @@ def test_tv_rules_and_ipod_playable_videos(tmp_path):
     off = settings.SyncSettings(sync_music=False, sync_tv=False)
     assert plan.build_plan(conn, off).count("tvshow") == 0
     assert all(m["persistent_id"] != "MKV" for m in plan.library_choices(conn).movies)
+
+
+def test_finds_the_programs_keeping_an_ipod_busy(tmp_path):
+    mount = tmp_path / "media" / "IPOD"
+    (mount / "iPod_Control").mkdir(parents=True)
+    (tmp_path / "home").mkdir()
+    proc = tmp_path / "proc"
+
+    def process(pid, name, cwd, fds=(), maps=""):
+        base = proc / str(pid)
+        (base / "fd").mkdir(parents=True)
+        (base / "comm").write_text(name + "\n")
+        (base / "cwd").symlink_to(cwd)
+        for n, target in enumerate(fds):
+            (base / "fd" / str(n)).symlink_to(target)
+        (base / "maps").write_text(maps)
+
+    process(10, "nemo", tmp_path / "home", fds=[tmp_path / "home", mount / "iPod_Control"])
+    process(11, "bash", mount)                                    # a terminal in the iPod
+    process(12, "player", tmp_path / "home",
+            maps=f"7f00-7f10 r--s 00000000 08:21 123   {mount}/Song One.mp3\n")
+    process(13, "other", tmp_path / "home", fds=[tmp_path / "media" / "IPOD2"])
+    (proc / "self").mkdir()                                       # not a process
+    found = {(pid, name) for pid, name, _ in device.users_of(str(mount), str(proc))}
+    assert found == {(10, "nemo"), (11, "bash"), (12, "player")}
+    assert device.is_busy_error("org.freedesktop.UDisks2.Error.DeviceBusy: target is busy")
+    assert not device.is_busy_error("Not authorized") and not device.is_busy_error(None)
