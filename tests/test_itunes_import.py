@@ -108,3 +108,14 @@ def test_path_mapper_handles_windows_urls(tmp_path):
     mapper = PathMapper("file://localhost/D:/Music/iTunes/iTunes%20Media/", tmp_path)
     mapped = mapper.map("file://localhost/d:/Music/iTunes/iTunes%20Media/Music/A%20B/C.mp3")
     assert mapped == str(tmp_path / "Music" / "A B" / "C.mp3")
+
+
+def test_media_kinds_from_the_xml():
+    from luxtunes.importer.itunes_xml import _media_kind
+    assert _media_kind({"Kind": "MPEG audio file"}) == "music"
+    assert _media_kind({"Podcast": True, "Kind": "MPEG audio file"}) == "podcast"
+    assert _media_kind({"Kind": "Protected AAC audio file",
+                        "Location": "file://localhost/C:/Media/Book.m4b"}) == "audiobook"
+    assert _media_kind({"Kind": "Audible file"}) == "audiobook"
+    assert _media_kind({"TV Show": True, "Has Video": True}) == "tvshow"
+    assert _media_kind({"Movie": True}) == "movie"

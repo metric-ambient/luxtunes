@@ -154,6 +154,8 @@ TRACK_STRINGS = [name for name, kind in Itdb_Track._fields_
 
 MEDIATYPE_AUDIO = 1 << 0
 MEDIATYPE_MOVIE = 1 << 1
+MEDIATYPE_PODCAST = 1 << 2
+MEDIATYPE_AUDIOBOOK = 1 << 3
 MEDIATYPE_MUSICVIDEO = 1 << 5
 MEDIATYPE_TVSHOW = 1 << 6
 
@@ -206,6 +208,8 @@ def _load():
     fn("itdb_playlist_mpl", PPL, PDB)
     fn("itdb_playlist_is_mpl", gboolean, PPL)
     fn("itdb_playlist_is_podcasts", gboolean, PPL)
+    fn("itdb_playlist_podcasts", PPL, PDB)
+    fn("itdb_playlist_set_podcasts", None, PPL)
     fn("itdb_device_set_sysinfo", None, c_void_p, c_char_p, c_char_p)
     fn("itdb_device_get_sysinfo", c_void_p, c_void_p, c_char_p)
     fn("itdb_device_write_sysinfo", gboolean, c_void_p, PERR)
@@ -369,6 +373,24 @@ class Database:
 
     def is_podcasts(self, playlist) -> bool:
         return bool(_lib.itdb_playlist_is_podcasts(playlist))
+
+    def podcasts_playlist(self, create: bool = True):
+        """The iPod's special Podcasts playlist (what its Podcasts menu shows),
+        made if it isn't there yet (with create). None if there's none."""
+        playlist = _lib.itdb_playlist_podcasts(self.db)
+        if not playlist and not create:
+            return None
+        if not playlist:
+            playlist = _lib.itdb_playlist_new(b"Podcasts", 0)
+            _lib.itdb_playlist_set_podcasts(playlist)
+            _lib.itdb_playlist_add(self.db, playlist, -1)
+        return playlist
+
+    def playlist_tracks(self, playlist) -> list:
+        return [ctypes.cast(p, POINTER(Itdb_Track)) for p in glist(playlist.contents.members)]
+
+    def remove_from_playlist(self, playlist, track) -> None:
+        _lib.itdb_playlist_remove_track(playlist, track)
 
     def start_sync(self):
         _lib.itdb_start_sync(self.db)

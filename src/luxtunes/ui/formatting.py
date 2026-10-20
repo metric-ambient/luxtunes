@@ -55,7 +55,8 @@ def library_summary(count: int, total_ms: int, total_bytes: int, of_total: int |
 
     With of_total (several songs selected): '12 of 35 songs, 54.8 minutes, 127.7 MB'.
     """
-    noun = noun if (of_total or count) == 1 else noun + "s"
+    if (of_total or count) != 1:
+        noun = noun[:-1] + "ies" if noun.endswith("y") else noun + "s"   # categories
     seconds = total_ms / 1000
     if seconds >= 86400:
         length = f"{seconds / 86400:.1f} days"

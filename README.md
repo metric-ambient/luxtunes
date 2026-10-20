@@ -26,8 +26,9 @@ A native Linux music manager for your library, your CDs and your iPod Classic, b
 - "Keep LuxTunes Media folder organized": files are named and filed by
   Artist / Album / `Disc-Track Title.mp3`, and edits are written back into the tags.
 - Live smart playlists, Get Info, Display Duplicates/Missing, CD import (MP3, AAC, Apple
-  Lossless, AIFF, WAV), movies and TV shows.
-- Syncs iPod Classic (5G–7G) on stock firmware, reading play counts back from the iPod.
+  Lossless, AIFF, WAV), movies, TV shows, podcasts and audiobooks.
+- Syncs iPod Classic (5G–7G) on stock firmware: music, videos, podcasts, audiobooks and
+  photos (one way, from a folder), reading play counts back from the iPod.
 - Nothing goes online without asking you first (CD names, track info, updates).
 
 ## Download (no terminal needed)

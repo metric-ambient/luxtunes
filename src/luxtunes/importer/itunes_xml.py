@@ -85,6 +85,7 @@ IGNORED_KEYS = {
     "File Folder Count",     # iTunes-internal bookkeeping
     "Library Folder Count",
     "Has Video", "Movie", "TV Show", "HD", "Video Width", "Video Height",  # -> media_kind
+    "Podcast",                                                              # -> media_kind
 }
 
 
@@ -188,6 +189,21 @@ def import_library(
     return result
 
 
+def _media_kind(itunes_track: dict) -> str:
+    """music / movie / tvshow / podcast / audiobook, from what the XML says."""
+    if itunes_track.get("TV Show"):
+        return "tvshow"
+    if itunes_track.get("Podcast"):
+        return "podcast"
+    if itunes_track.get("Has Video") or itunes_track.get("Movie"):
+        return "movie"
+    kind = (itunes_track.get("Kind") or "").lower()
+    location = (itunes_track.get("Location") or "").lower()
+    if "book" in kind or "audible" in kind or location.endswith((".m4b", ".aa", ".aax")):
+        return "audiobook"
+    return "music"
+
+
 def _import_tracks(conn, tracks: dict, mapper: PathMapper, result: ImportResult) -> dict[int, int]:
     """Insert/update tracks. Returns {iTunes Track ID: LuxTunes track id}."""
     id_map: dict[int, int] = {}
@@ -201,11 +217,7 @@ def _import_tracks(conn, tracks: dict, mapper: PathMapper, result: ImportResult)
                 extra[key] = value
                 result.unknown_keys.add(key)
 
-        is_video = itunes_track.get("Has Video") or itunes_track.get("Movie")
-        if itunes_track.get("TV Show"):
-            row["media_kind"] = "tvshow"
-        else:
-            row["media_kind"] = "movie" if is_video else "music"
+        row["media_kind"] = _media_kind(itunes_track)
         row["enabled"] = 0 if itunes_track.get("Disabled") else 1
         row["extra_json"] = json.dumps(extra, default=_json_default) if extra else None
 

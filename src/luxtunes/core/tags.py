@@ -355,6 +355,35 @@ def _year(text: str) -> int | None:
     return int(text) if text.isdigit() else None
 
 
+# The media type atom ("stik") in MP4 files: what the iTunes Store marked it as.
+MP4_MEDIA_TYPES = {2: "audiobook", 21: "podcast"}
+
+
+def media_kind_hint(path: str) -> str | None:
+    """"podcast" or "audiobook" if the file says so (an .m4b, an MP4 media type,
+    or a podcast flag in MP4 or ID3 tags); otherwise None (plain music)."""
+    from luxtunes.core.library import AUDIOBOOK_EXTENSIONS
+    if (path or "").lower().endswith(AUDIOBOOK_EXTENSIONS):
+        return "audiobook"
+    try:
+        audio = _open(path)
+    except TagError:
+        return None
+    from mutagen.id3 import ID3
+    from mutagen.mp4 import MP4
+    tags = audio.tags
+    if isinstance(audio, MP4) and tags:
+        stik = tags.get("stik")
+        kind = MP4_MEDIA_TYPES.get(int(stik[0])) if stik else None
+        if kind:
+            return kind
+        if tags.get("pcst"):
+            return "podcast"
+    elif isinstance(tags, ID3) and tags.getall("PCST"):
+        return "podcast"
+    return None
+
+
 def read_fields(path: str) -> dict:
     """Everything LuxTunes stores about a new file: its tags (as library
     fields), lyrics, artwork count and the audio details. Raises TagError."""

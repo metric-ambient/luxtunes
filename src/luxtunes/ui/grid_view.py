@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from luxtunes.core.albums import GRID_GROUPINGS, grid_groups
+from luxtunes.core.albums import GRID_GROUPINGS, GRID_TABS, grid_groups
 from luxtunes.ui import theme
 from luxtunes.ui.art_cache import ART_CACHE
 
@@ -131,14 +131,22 @@ class GridView(QWidget):
     grouping_changed = Signal()       # a different tab was picked
     menu_requested = Signal(dict, QPoint)   # right-click: the tile and where
 
-    TAB_TITLES = {"albums": "Albums", "artists": "Artists",
-                  "genres": "Genres", "composers": "Composers"}
+    TAB_TITLES = {"albums": "Albums", "artists": "Artists", "genres": "Genres",
+                  "composers": "Composers", "books": "Books", "authors": "Authors",
+                  "book_categories": "Categories", "podcasts": "Podcasts",
+                  "podcast_categories": "Categories", "unplayed": "Unplayed"}
+    # For the status bar: "3 albums", "2 categories"...
+    NOUNS = {"albums": "album", "artists": "artist", "genres": "genre", "composers": "composer",
+             "books": "book", "authors": "author", "book_categories": "category",
+             "podcasts": "podcast", "podcast_categories": "category", "unplayed": "podcast"}
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("gridPage")
         self.grouping = "albums"
         self._tracks: list[dict] = []
+        self._section = "music"                 # which library section's tabs show
+        self._chosen: dict[str, str] = {}       # the tab picked last in each section
 
         tabs = QWidget()
         tabs.setObjectName("gridTabs")
@@ -146,16 +154,10 @@ class GridView(QWidget):
         row.setContentsMargins(0, 4, 0, 4)
         row.setSpacing(2)
         row.addStretch(1)
+        self._tab_row = row
         self._tab_group = QButtonGroup(self)
-        for key in GRID_GROUPINGS:
-            button = QToolButton()
-            button.setObjectName("gridTab")
-            button.setText(self.TAB_TITLES[key])
-            button.setCheckable(True)
-            button.setChecked(key == self.grouping)
-            button.clicked.connect(lambda checked=False, k=key: self.set_grouping(k))
-            self._tab_group.addButton(button)
-            row.addWidget(button)
+        self._tab_buttons: dict[str, QToolButton] = {}
+        self._make_tabs(GRID_GROUPINGS)
         row.addStretch(1)
 
         self.model = GroupModel(self)
@@ -183,9 +185,40 @@ class GridView(QWidget):
         layout.addWidget(tabs)
         layout.addWidget(self.list, 1)
 
+    def _make_tabs(self, keys):
+        for button in self._tab_buttons.values():
+            self._tab_group.removeButton(button)
+            button.deleteLater()
+        self._tab_buttons = {}
+        for i, key in enumerate(keys):
+            button = QToolButton()
+            button.setObjectName("gridTab")
+            button.setText(self.TAB_TITLES[key])
+            button.setCheckable(True)
+            button.setChecked(key == self.grouping)
+            button.clicked.connect(lambda checked=False, k=key: self.set_grouping(k))
+            self._tab_group.addButton(button)
+            self._tab_row.insertWidget(1 + i, button)       # between the two stretches
+            self._tab_buttons[key] = button
+
+    def tab_keys(self) -> list[str]:
+        return list(self._tab_buttons)
+
+    def set_section(self, kind: str):
+        """Show the tabs for a library section: "podcast" and "audiobook" have
+        their own; everything else gets Albums / Artists / Genres / Composers."""
+        section = kind if kind in GRID_TABS else "music"
+        if section == self._section:
+            return
+        self._chosen[self._section] = self.grouping
+        self._section = section
+        keys = GRID_TABS.get(section, GRID_GROUPINGS)
+        self.grouping = self._chosen.get(section, keys[0])
+        self._make_tabs(keys)
+
     def grouping_noun(self) -> str:
-        """"album", "artist", "genre" or "composer" (for the status bar)."""
-        return self.grouping[:-1]
+        """"album", "artist", "category"... (for the status bar)."""
+        return self.NOUNS[self.grouping]
 
     def all_label(self) -> str:
         return f"All {self.TAB_TITLES[self.grouping]}"
@@ -196,6 +229,8 @@ class GridView(QWidget):
 
     def set_grouping(self, grouping: str):
         self.grouping = grouping
+        if grouping in self._tab_buttons:
+            self._tab_buttons[grouping].setChecked(True)
         self.set_tracks(self._tracks)
         self.grouping_changed.emit()
 

@@ -47,6 +47,10 @@ from luxtunes.ui import formatting
 
 IMAGE_FILTER = "Images (*.jpg *.jpeg *.png *.bmp *.gif *.webp);;All files (*)"
 MAX_ART_SIDE = 2000         # pasted/added pictures are scaled down to at most this
+# Get Info → Options → Media Kind. Podcasts and audiobooks get their own
+# sections in the sidebar (and on the iPod).
+MEDIA_KIND_CHOICES = (("Music", "music"), ("Podcast", "podcast"), ("Audiobook", "audiobook"),
+                      ("Movie", "movie"), ("TV Show", "tvshow"))
 
 
 # ---- Small building blocks ----------------------------------------------------------
@@ -512,9 +516,9 @@ class InfoDialog(QDialog):
         page = QWidget()
         self.volume = VolumeSlider()
         self.media_kind = QComboBox()
-        self.media_kind.addItem("Music", "music")
-        self.media_kind.addItem("Movie", "movie")
-        self.media_kind.addItem("TV Show", "tvshow")
+        for label, kind in MEDIA_KIND_CHOICES:
+            self.media_kind.addItem(label, kind)
+        self.media_kind.activated.connect(self._kind_picked)
         self.rating = StarRating()
         self.start_on = QCheckBox("Start Time:")
         self.start_time = QLineEdit()
@@ -544,6 +548,13 @@ class InfoDialog(QDialog):
         grid.setRowStretch(8, 1)
         grid.setColumnStretch(1, 1)
         return page
+
+    def _kind_picked(self, _index: int):
+        """Podcasts and audiobooks remember their position and skip shuffle by default."""
+        defaults = library.kind_defaults(self.media_kind.currentData())
+        if defaults:
+            self.bookmarkable.setChecked(True)
+            self.skip_shuffle.setChecked(True)
 
     # ---- Loading one song -----------------------------------------------------------
 
@@ -819,9 +830,8 @@ class MultiInfoDialog(QDialog):
         grid.addWidget(QLabel("Volume Adjustment:"), 0, 0, Qt.AlignmentFlag.AlignRight)
         grid.addWidget(self._field("volume_adjustment", volume, volume.value, volume.changed), 0, 1)
         kind = QComboBox()
-        kind.addItem("Music", "music")
-        kind.addItem("Movie", "movie")
-        kind.addItem("TV Show", "tvshow")
+        for label, value in MEDIA_KIND_CHOICES:
+            kind.addItem(label, value)
         kind.setCurrentIndex(max(0, kind.findData(self._common("media_kind") or "music")))
         grid.addWidget(QLabel("Media Kind:"), 1, 0, Qt.AlignmentFlag.AlignRight)
         grid.addWidget(self._field("media_kind", kind, kind.currentData, kind.activated), 1, 1)

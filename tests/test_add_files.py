@@ -87,3 +87,39 @@ def test_untagged_video_is_added_as_a_movie(tmp_path):
     assert track["location"] == str(root / "Movies" / "Home Movie.mkv")
     if shutil.which("ffprobe"):
         assert 1500 < track["total_time"] < 2500
+
+
+def test_podcasts_and_audiobooks_are_recognised(tmp_path):
+    from mutagen.id3 import ID3, PCST
+
+    conn, root = setup(tmp_path)
+    episode = mp3(tmp_path / "Downloads" / "episode.mp3", name="Ep 1", artist="Host",
+                  album="The Show")
+    flagged = ID3(episode)
+    flagged.add(PCST(value=1))                # the podcast flag iTunes writes into MP3s
+    flagged.save(episode)
+    book = mp3(tmp_path / "Downloads" / "book.m4b", name="Chapter 1", artist="A. Writer",
+               album="Big Book")
+    plain = mp3(tmp_path / "Downloads" / "song.mp3", name="Song", artist="Band", album="LP")
+    assert tags.media_kind_hint(episode) == "podcast" and tags.media_kind_hint(book) == "audiobook"
+    assert tags.media_kind_hint(plain) is None
+    result = add_files.add_paths(conn, [episode, book, plain])
+    added = {t["name"]: t for t in (library.load_track(conn, i) for i in result.added)}
+    assert added["Ep 1"]["media_kind"] == "podcast" and added["Ep 1"]["bookmarkable"] == 1
+    assert added["Ep 1"]["location"] == str(root / "Podcasts" / "The Show" / "Ep 1.mp3")
+    assert added["Chapter 1"]["media_kind"] == "audiobook"
+    assert added["Chapter 1"]["location"].startswith(str(root / "Audiobooks" / "A. Writer" / "Big Book"))
+    assert added["Song"]["media_kind"] == "music" and not added["Song"]["bookmarkable"]
+
+
+def test_changing_the_media_kind(tmp_path):
+    conn, root = setup(tmp_path)
+    song = add_files.add_paths(conn, [mp3(tmp_path / "x.mp3", name="Talk", artist="Host")]).added[0]
+    library.update_track_fields(conn, song, {"media_kind": "podcast"})
+    track = library.load_track(conn, song)
+    assert track["media_kind"] == "podcast"
+    assert track["bookmarkable"] == 1 and track["skip_when_shuffling"] == 1    # podcast defaults
+    library.update_track_fields(conn, song, {"media_kind": "audiobook", "bookmarkable": 0})
+    assert library.load_track(conn, song)["bookmarkable"] == 0                 # your choice wins
+    with pytest.raises(ValueError):
+        library.update_track_fields(conn, song, {"media_kind": "ringtone"})

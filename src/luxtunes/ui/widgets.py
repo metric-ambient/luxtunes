@@ -412,6 +412,8 @@ class NowPlayingDisplay(QFrame):
 SOURCE_MUSIC = ("library", "music")
 SOURCE_MOVIES = ("library", "movie")
 SOURCE_TV_SHOWS = ("library", "tvshow")
+SOURCE_PODCASTS = ("library", "podcast")
+SOURCE_AUDIOBOOKS = ("library", "audiobook")
 SOURCE_UP_NEXT = ("queue", "up_next")
 
 
@@ -560,7 +562,8 @@ class Sidebar(QTreeWidget):
         self._spin_timer.timeout.connect(self._spin)
 
     def populate(self, playlists: list[dict], has_movies: bool, section_color, queue_length=0,
-                 devices: list[tuple[str, str]] = (), has_tv_shows: bool = False):
+                 devices: list[tuple[str, str]] = (), has_tv_shows: bool = False,
+                 has_podcasts: bool = False, has_audiobooks: bool = False):
         self.blockSignals(True)
         self.clear()
         self._section_color = section_color
@@ -574,6 +577,14 @@ class Sidebar(QTreeWidget):
         if has_tv_shows:
             self._item(section, "TV Shows", SOURCE_TV_SHOWS,
                        themed_icon(["video-display", "computer"], QStyle.StandardPixmap.SP_DesktopIcon))
+        if has_podcasts:
+            self._item(section, "Podcasts", SOURCE_PODCASTS,
+                       themed_icon(["podcast", "application-rss+xml", "network-wireless"],
+                                   QStyle.StandardPixmap.SP_MediaVolume))
+        if has_audiobooks:
+            self._item(section, "Audiobooks", SOURCE_AUDIOBOOKS,
+                       themed_icon(["accessories-dictionary", "x-office-address-book",
+                                    "x-office-document"], QStyle.StandardPixmap.SP_FileIcon))
 
         section = self._section("QUEUE")
         self._up_next_item = self._item(

@@ -153,7 +153,12 @@ def add_file(conn: sqlite3.Connection, path: str, copy: bool, root: Path,
         fields = video_fields(path)           # e.g. .mkv / .avi: no tags mutagen can read
     if not fields.get("name"):
         fields["name"] = Path(path).stem
-    fields["media_kind"] = "movie" if Path(path).suffix.lower() in VIDEO_EXTENSIONS else "music"
+    if Path(path).suffix.lower() in VIDEO_EXTENSIONS:
+        fields["media_kind"] = "movie"
+    else:
+        from luxtunes.core.tags import media_kind_hint
+        fields["media_kind"] = media_kind_hint(path) or "music"
+        fields.update(library.kind_defaults(fields["media_kind"]))
     fields["date_added"] = library.now_utc()
     fields["date_modified"] = _utc(os.path.getmtime(path))
 

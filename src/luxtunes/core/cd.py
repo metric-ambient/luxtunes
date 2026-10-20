@@ -68,9 +68,10 @@ USER_AGENT = f"LuxTunes/{__version__} (Linux music player)"
 MUSICBRAINZ = "https://musicbrainz.org/ws/2/discid/"
 COVER_ART = "https://coverartarchive.org/"
 
+KEY_ASK_LOOKUP = "cd_ask_lookup"
 KEY_INSERT_ACTION = "cd_insert_action"
-INSERT_ACTIONS = [("show", "Show CD"), ("ask", "Ask to Import CD"), ("import", "Import CD"),
-                  ("import_eject", "Import CD and Eject")]
+INSERT_ACTIONS = [("nothing", "Do Nothing"), ("show", "Show CD"), ("ask", "Ask to Import CD"),
+                  ("import", "Import CD"), ("import_eject", "Import CD and Eject")]
 
 
 class CdError(Exception):
@@ -93,6 +94,20 @@ def set_insert_action(conn: sqlite3.Connection, action: str) -> None:
     with conn:
         conn.execute("INSERT INTO library_info (key, value) VALUES (?, ?) "
                      "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (KEY_INSERT_ACTION, action))
+
+
+def ask_lookup(conn: sqlite3.Connection) -> bool:
+    """Ask to look up a newly found CD's names online? (Preferences → General;
+    "Don't ask again" in the question turns it off.) Default: yes."""
+    row = conn.execute("SELECT value FROM library_info WHERE key = ?", (KEY_ASK_LOOKUP,)).fetchone()
+    return not (row and row[0] == "0")
+
+
+def set_ask_lookup(conn: sqlite3.Connection, ask: bool) -> None:
+    with conn:
+        conn.execute("INSERT INTO library_info (key, value) VALUES (?, ?) "
+                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                     (KEY_ASK_LOOKUP, "1" if ask else "0"))
 
 
 def cdparanoia_path() -> str | None:
@@ -244,26 +259,76 @@ def blank_disc(device: str, toc: Toc) -> Disc:
     return Disc(device, toc, tracks)
 
 
-def eject(device: str) -> str | None:
-    """Open the tray. Returns an error message, or None."""
+def drive_status(device: str) -> int | None:
+    """The drive's state (CDS_DISC_OK = closed with a disc in it), or None."""
     try:
         fd = _open(device)
+    except OSError:
+        return None
+    try:
+        return fcntl.ioctl(fd, CDROM_DRIVE_STATUS, CDSL_CURRENT)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def _still_in(device: str, wait: float = 3.0) -> bool:
+    """After an eject: True if the disc is still (or again) in the closed drive."""
+    deadline = time.monotonic() + wait
+    while drive_status(device) == CDS_DISC_OK:
+        if time.monotonic() >= deadline:
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def _eject_ioctl(device: str) -> None:
+    fd = _open(device)
+    try:
         try:
-            try:
-                fcntl.ioctl(fd, CDROM_LOCKDOOR, 0)
-            except OSError:
-                pass
-            fcntl.ioctl(fd, CDROMEJECT, 0)
-            return None
-        finally:
-            os.close(fd)
-    except OSError as error:
-        if shutil.which("eject"):          # e.g. the desktop has it mounted
-            result = subprocess.run(["eject", device], capture_output=True, text=True)
-            if result.returncode == 0:
+            fcntl.ioctl(fd, CDROM_LOCKDOOR, 0)
+        except OSError:
+            pass
+        fcntl.ioctl(fd, CDROMEJECT, 0)
+    finally:
+        os.close(fd)
+
+
+def eject(device: str) -> str | None:
+    """Open the tray (and make sure it stays open). Returns an error message, or None.
+
+    The desktop's own way comes first: when it shows the CD (an audio CD
+    "mounted" by the file manager), it has to let go of it, or it reads the
+    drive again straight away, which closes the tray and brings the CD back."""
+    problems = []
+    if shutil.which("gio"):
+        uri = f"cdda://{os.path.basename(device)}/"
+        try:
+            result = subprocess.run(["gio", "mount", "-e", uri], capture_output=True, text=True,
+                                    timeout=30)
+            if result.returncode == 0 and not _still_in(device):
                 return None
-            return result.stderr.strip() or error.strerror
-        return error.strerror
+        except (OSError, subprocess.SubprocessError):
+            pass
+    try:
+        _eject_ioctl(device)
+        if not _still_in(device):
+            return None
+        problems.append("the drive closed again")
+    except OSError as error:
+        problems.append(error.strerror or str(error))
+    if shutil.which("eject"):
+        try:
+            result = subprocess.run(["eject", device], capture_output=True, text=True, timeout=30)
+            if result.returncode == 0 and not _still_in(device):
+                return None
+            problems.append(result.stderr.strip() or "the drive closed again")
+        except (OSError, subprocess.SubprocessError) as error:
+            problems.append(str(error))
+    return ("Another program may be holding the CD and pulling it back in. Try Eject in the "
+            "file manager, or the button on the drive. (" + "; ".join(p for p in problems if p)
+            + ")")
 
 
 # ---- Looking up names --------------------------------------------------------------

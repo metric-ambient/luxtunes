@@ -131,6 +131,17 @@ def relative_parts(track: dict) -> list[str]:
         stem = f"{episode:02d} {name}" if episode else name
         return ["TV Shows", safe_name(show, FOLDER_MAX, True), safe_name(season_folder, FOLDER_MAX, True),
                 safe_name(stem, FILE_MAX, False)]
+    if track.get("media_kind") == "podcast":
+        # Podcasts/<Podcast (the album)>/<episode>
+        show = track.get("album") or track.get("artist") or "Unknown Podcast"
+        return ["Podcasts", safe_name(show, FOLDER_MAX, True),
+                safe_name(track.get("name") or "Untitled", FILE_MAX, False)]
+    if track.get("media_kind") == "audiobook":
+        # Audiobooks/<Author (the artist)>/<Book (the album)>/<part>
+        author = track.get("album_artist") or track.get("artist") or "Unknown Author"
+        book = track.get("album") or track.get("name") or "Unknown Book"
+        return ["Audiobooks", safe_name(author, FOLDER_MAX, True), safe_name(book, FOLDER_MAX, True),
+                safe_name(file_stem(track), FILE_MAX, False)]
     if track.get("compilation"):
         artist = "Compilations"
     else:

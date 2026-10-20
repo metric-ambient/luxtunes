@@ -78,29 +78,29 @@ class _Player(QDBusAbstractAdaptor):
 
     @Slot()
     def PlayPause(self):
-        self.host.controls["play_pause"]()
+        self.host.request("play_pause", "PlayPause")
 
     @Slot()
     def Play(self):
         if self.host.status() != "Playing":
-            self.host.controls["play_pause"]()
+            self.host.request("play_pause", "Play")
 
     @Slot()
     def Pause(self):
         if self.host.status() == "Playing":
-            self.host.controls["play_pause"]()
+            self.host.request("play_pause", "Pause")
 
     @Slot()
     def Stop(self):
-        self.host.controls["stop"]()
+        self.host.request("stop", "Stop")
 
     @Slot()
     def Next(self):
-        self.host.controls["next"]()
+        self.host.request("next", "Next")
 
     @Slot()
     def Previous(self):
-        self.host.controls["previous"]()
+        self.host.request("previous", "Previous")
 
     def _status(self):
         return self.host.status()
@@ -161,6 +161,11 @@ class Mpris(QObject):
         for name in (service, f"{service}.instance{os.getpid()}"):
             if bus.registerService(name):
                 self.service = name
+                log.info("media keys: registered %s", name)
+                others = self.other_players()
+                if others:
+                    log.info("other players the desktop may send media keys to: %s",
+                             ", ".join(others))
                 break
         if self.service is None:
             bus.unregisterObject(PATH)
@@ -169,6 +174,23 @@ class Mpris(QObject):
     @property
     def active(self) -> bool:
         return self.service is not None
+
+    def request(self, action: str, method: str):
+        log.info("media key from the desktop (MPRIS %s)", method)
+        self.controls[action]()
+
+    def other_players(self) -> list[str]:
+        """Other music players on the bus. The desktop may send the media keys
+        to one of them instead (Cinnamon uses the player that started first)."""
+        bus = QDBusConnection.sessionBus()
+        if not bus.isConnected():
+            return []
+        try:
+            names = bus.interface().registeredServiceNames().value()
+        except Exception:
+            return []
+        return sorted(n for n in names if n.startswith("org.mpris.MediaPlayer2.")
+                      and n != self.service)
 
     def close(self):
         if self.service is not None:

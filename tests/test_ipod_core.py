@@ -248,3 +248,63 @@ def test_finds_the_programs_keeping_an_ipod_busy(tmp_path):
     assert found == {(10, "nemo"), (11, "bash"), (12, "player")}
     assert device.is_busy_error("org.freedesktop.UDisks2.Error.DeviceBusy: target is busy")
     assert not device.is_busy_error("Not authorized") and not device.is_busy_error(None)
+
+
+def test_podcasts_and_audiobooks_in_the_plan(tmp_path):
+    conn, ids = library_with_files(tmp_path)
+    rows = [("P1", "Ep 1", "Show A", "podcast", "2026-01-01", 2), ("P2", "Ep 2", "Show A", "podcast",
+            "2026-02-01", 0), ("P3", "Ep 3", "Show A", "podcast", "2026-03-01", 0),
+            ("P4", "Pilot", "Show B", "podcast", "2025-01-01", 0),
+            ("K1", "Part 1", "Big Book", "audiobook", None, 0),
+            ("K2", "Part 2", "Big Book", "audiobook", None, 0),
+            ("K3", "Tiny Story", None, "audiobook", None, 0)]
+    for pid, name, album, kind, added, plays in rows:
+        path = tmp_path / f"{pid}.m4a"
+        path.write_bytes(b"x" * 10)
+        conn.execute("INSERT INTO tracks (persistent_id, name, artist, album, media_kind, "
+                     "date_added, play_count, location, size) VALUES (?, ?, 'Writer', ?, ?, ?, ?, "
+                     "?, 10)", (pid, name, album, kind, added, plays, str(path)))
+    conn.commit()
+    ids = {r[1]: r[0] for r in conn.execute("SELECT id, persistent_id FROM tracks")}
+
+    def chosen(**options):
+        s = settings.SyncSettings(sync_music=False, sync_movies=False, **options)
+        return {pid for pid, i in ids.items() if i in plan.build_plan(conn, s).track_ids}
+
+    books = {"K1", "K2", "K3"}
+    assert chosen() == {"P2", "P3", "P4"} | books                 # default: all unplayed + books
+    assert chosen(podcasts_rule="1 most recent", sync_books=False) == {"P3", "P4"}
+    assert chosen(podcasts_rule="1 least recent unplayed", sync_books=False) == {"P2", "P4"}
+    assert chosen(podcasts_scope="selected podcasts", podcast_shows=["Show B"],
+                  podcast_episodes=["P1"], sync_books=False) == {"P4", "P1"}
+    big_book = plan.book_key({"artist": "Writer", "album": "Big Book"})
+    assert chosen(sync_podcasts=False, books_mode="selected", books=[big_book]) == {"K1", "K2"}
+    p = plan.build_plan(conn, settings.SyncSettings(sync_movies=False))
+    assert p.video_bytes == 0                                     # podcasts and books are audio
+
+    choices = plan.library_choices(conn)
+    assert choices.shows == ["Show A", "Show B"]
+    assert [e["persistent_id"] for e in choices.episodes][:2] == ["P3", "P2"]   # newest first
+    assert [label for _, label in choices.books] == ["Big Book — Writer", "Tiny Story — Writer"]
+
+
+def test_old_settings_still_load():
+    s = settings.SyncSettings.from_json('{"sync_contacts": true, "books_mode": "all"}')
+    assert s.podcasts_scope == "all podcasts" and s.books == []
+
+
+def test_which_songs_are_converted_for_the_ipod():
+    s = settings.SyncSettings()
+    flac = {"location": "/m/a.flac", "bit_rate": 900, "total_time": 60_000, "size": 6_000_000}
+    mp3 = {"location": "/m/b.mp3", "bit_rate": 320, "total_time": 60_000, "size": 2_400_000}
+    alac = {"location": "/m/c.m4a", "kind": "Apple Lossless audio file", "bit_rate": 800}
+    protected = {"location": "/m/d.m4p", "bit_rate": 320}
+    movie = {"location": "/m/e.mp4", "media_kind": "movie", "bit_rate": 2000}
+    # Off: only what the iPod can't play at all (FLAC) is converted.
+    assert [plan.transfer_kbps(t, s) for t in (flac, mp3, alac, protected, movie)] == \
+        [256, None, None, None, None]
+    s.convert, s.convert_kbps = True, 128
+    assert [plan.transfer_kbps(t, s) for t in (flac, mp3, alac, protected, movie)] == \
+        [128, 128, 128, None, None]
+    assert plan.transfer_size(mp3, s) == 960_000              # 60 s at 128 kbps
+    assert plan.transfer_kbps({"location": "/m/f.mp3", "bit_rate": 128}, s) is None

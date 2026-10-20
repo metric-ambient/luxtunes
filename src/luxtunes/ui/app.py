@@ -70,6 +70,7 @@ def run(db_path: str | None = None) -> int:
     app.setWindowIcon(app_icon())           # the penguin, in the taskbar and title bar
     name = server_name(db_path)
     if tell_running_copy(name):
+        logging.getLogger(__name__).info("LuxTunes is already open: showing that window")
         return 0
 
     # Imported here so `luxtunes import-itunes` works without loading Qt.
