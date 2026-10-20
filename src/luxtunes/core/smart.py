@@ -111,7 +111,7 @@ OPERATORS[RATING] = OPERATORS[TIME] = OPERATORS[SIZE] = OPERATORS[NUMBER]
 
 MEDIA_KINDS = [(0x01, "Music"), (0x02, "Movie"), (0x04, "Podcast"), (0x08, "Audiobook"),
                (0x20, "Music Video"), (0x40, "TV Show")]
-LUX_MEDIA = {"music": 0x01, "movie": 0x02, "tvshow": 0x40}
+LUX_MEDIA = {"music": 0x01, "movie": 0x02, "podcast": 0x04, "audiobook": 0x08, "tvshow": 0x40}
 
 DATE_MARKER = 0x2DAE2DAE2DAE2DAE
 DAY, WEEK, MONTH = 86400, 604800, 2628000

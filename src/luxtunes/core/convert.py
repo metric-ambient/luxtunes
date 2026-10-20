@@ -1,10 +1,18 @@
-"""Right-click → Create MP3 Version (for FLAC files).
+"""Right-click → Create MP3 Version (for FLAC files) and Create iPod Version
+(for movies and TV shows).
 
 FFmpeg (the `ffmpeg` command, `sudo apt install ffmpeg`) encodes the audio
 as a 320 kbps MP3 next to the original. LuxTunes then writes the tags itself
 (from the library, plus the FLAC's lyrics and artwork) as ID3 v2.3, exactly
 as Get Info would, and adds the new file to the library. The FLAC is never
-changed. No Qt in here; the window runs the command so it can show progress.
+changed.
+
+Create iPod Version makes an .m4v the iPod can play (H.264 Baseline, at most
+640×480 and 30 frames a second, plain AAC stereo sound), next to the original,
+which is never changed. The copy gets the original's details (name, show,
+season, episode...) and appears in the library beside it.
+
+No Qt in here; the window runs the commands so it can show progress.
 """
 
 from __future__ import annotations
@@ -72,3 +80,79 @@ def remove_partial(target: str) -> None:
         os.remove(target)
     except OSError:
         pass
+
+
+# ---- AAC the iPod's decoder handles cleanly ----------------------------------------------
+
+# FFmpeg's AAC encoder turns on three optional coding tricks by default
+# (intensity stereo, noise substitution, temporal noise shaping). The iPod's
+# decoder mishandles them, which sounds like short bursts of static in one
+# channel, so they're switched off. Plain AAC-LC, 44.1 kHz, never clipped
+# when surround sound is folded into stereo.
+IPOD_AAC = ["-c:a", "aac", "-profile:a", "aac_low", "-aac_is", "0", "-aac_pns", "0",
+            "-aac_tns", "0", "-ac", "2", "-af", "aresample=44100:rematrix_maxval=1.0"]
+
+
+def ipod_audio_command(ffmpeg: str, source: str, target: str, kbps: int) -> list[str]:
+    """A song as AAC for the iPod (Sync → "Convert higher bit rate songs")."""
+    return [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", source,
+            "-map", "0:a:0", "-map_metadata", "-1", "-vn", *IPOD_AAC, "-b:a", f"{kbps}k",
+            "-movflags", "+faststart", "-f", "ipod", target]
+
+
+# ---- Create iPod Version (movies and TV shows) ---------------------------------------
+
+IPOD_VIDEO = {"width": 640, "height": 480, "fps": 30, "video_kbps": 1500, "audio_kbps": 160}
+VIDEO_KINDS = ("movie", "tvshow")
+# Copied from the original onto the iPod version.
+VIDEO_DETAILS = ("name", "artist", "album_artist", "album", "genre", "year", "comments",
+                 "description", "media_kind", "show", "season", "episode_number", "episode_id",
+                 "sort_name", "sort_artist", "sort_album")
+
+
+def can_make_ipod_video(track: dict) -> bool:
+    return track.get("media_kind") in VIDEO_KINDS and bool(track.get("location"))
+
+
+def ipod_video_target(source: str) -> Path:
+    """"Film.mkv" -> "Film (iPod).m4v" in the same folder (" 2", " 3"... if taken)."""
+    source = Path(source)
+    target = source.with_name(f"{source.stem} (iPod).m4v")
+    copy = 2
+    while target.exists():
+        target = source.with_name(f"{source.stem} (iPod) {copy}.m4v")
+        copy += 1
+    return target
+
+
+def ipod_video_command(ffmpeg: str, source: str, target: str) -> list[str]:
+    """Fits inside 640×480 keeping its shape (even sizes, as H.264 needs), no
+    more than 30 fps; progress is written to stdout (-progress)."""
+    v = IPOD_VIDEO
+    scale = (f"scale='min({v['width']},iw)':'min({v['height']},ih)'"
+             ":force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1")
+    kbps = v["video_kbps"]
+    return [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+            "-progress", "pipe:1", "-i", source,
+            "-map", "0:v:0", "-map", "0:a:0?", "-map_metadata", "-1", "-sn", "-dn",
+            "-vf", scale, "-fpsmax", str(v["fps"]),
+            "-c:v", "libx264", "-profile:v", "baseline", "-level", "3.0", "-pix_fmt", "yuv420p",
+            "-b:v", f"{kbps}k", "-maxrate", f"{kbps}k", "-bufsize", f"{kbps * 2}k",
+            *IPOD_AAC, "-b:a", f"{v['audio_kbps']}k",
+            "-movflags", "+faststart", "-f", "ipod", target]
+
+
+def finish_video(conn: sqlite3.Connection, source_track: dict, target: str) -> int:
+    """After FFmpeg made the iPod version: add it to the library with the
+    original's details. Returns the new item's id."""
+    track_id = add_files.add_file(conn, target, copy=False, root=organize.media_folder(conn))
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(tracks)")}
+    details = {k: source_track.get(k) for k in VIDEO_DETAILS
+               if k in columns and source_track.get(k) is not None}
+    if details:
+        with conn:
+            conn.execute(f"UPDATE tracks SET {', '.join(f'{k} = ?' for k in details)} WHERE id = ?",
+                         (*details.values(), track_id))
+    if source_track.get("rating") and not source_track.get("rating_computed"):
+        library.set_rating(conn, track_id, source_track["rating"])
+    return track_id

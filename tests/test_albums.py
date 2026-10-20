@@ -55,3 +55,23 @@ def test_grid_artists_genres_composers():
     assert [g["title"] for g in genres] == ["Metal", "Rock", "Unknown Genre"]
     composers = albums.grid_groups(LIBRARY, "composers")
     assert [g["title"] for g in composers] == ["G. Weber"]   # no-composer songs left out
+
+
+def test_grid_tabs_for_audiobooks_and_podcasts():
+    books = [song("Part 1", "A. Writer", "Big Book", 1, genre="History"),
+             song("Part 2", "A. Writer", "Big Book", 2, genre="History"),
+             song("Short Story", "B. Author", None, 1, genre="")]
+    titles = [(g["title"], g["subtitle"]) for g in albums.grid_groups(books, "books")]
+    assert titles == [("Big Book", "A. Writer"), ("Short Story", "B. Author")]   # one-file book: its name
+    assert [g["title"] for g in albums.grid_groups(books, "authors")] == ["A. Writer", "B. Author"]
+    categories = albums.grid_groups(books, "book_categories")
+    assert [(g["title"], g["subtitle"]) for g in categories] == [("History", "1 book"),
+                                                                ("Unknown Category", "1 book")]
+    episodes = [song("Ep 1", "Host", "The Show", date_added="2026-01-01", play_count=3),
+                song("Ep 2", "Host", "The Show", date_added="2026-02-01"),
+                song("Pilot", "Other", "Another Show", date_added="2025-01-01", play_count=1)]
+    [another, show] = albums.grid_groups(episodes, "podcasts")
+    assert show["subtitle"] == "2 episodes" and show["tracks"][0]["name"] == "Ep 2"   # newest first
+    [unplayed] = albums.grid_groups(episodes, "unplayed")
+    assert unplayed["title"] == "The Show" and unplayed["subtitle"] == "1 unplayed episode"
+    assert albums.grid_groups(episodes, "podcast_categories")[0]["title"] == "Unknown Category"

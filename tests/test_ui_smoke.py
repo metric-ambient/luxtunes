@@ -275,6 +275,44 @@ def test_create_mp3_version(window, tmp_path):
     assert (tmp_path / "song.mp3").exists() and flac.exists()
 
 
+def test_create_ipod_version_of_a_video(window, tmp_path, monkeypatch):
+    import shutil
+    import subprocess
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("needs ffmpeg")
+    from PySide6.QtWidgets import QMessageBox
+
+    from luxtunes.core import library
+
+    conn = window.conn
+    clip = tmp_path / "Big Film.mkv"
+    subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i",
+                    "testsrc=s=1280x720:r=50:d=1", "-f", "lavfi", "-i", "sine=d=1", "-shortest",
+                    "-c:v", "libx264", "-c:a", "aac", str(clip)], check=True)
+    track = window.model.visible_tracks()[0]
+    library.set_location(conn, track["id"], str(clip))
+    conn.execute("UPDATE tracks SET media_kind = 'tvshow', show = 'Show', season = 2, "
+                 "total_time = 1000 WHERE id = ?", (track["id"],))
+    conn.commit()
+    problems = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: problems.append(a[2])))
+    source = library.load_track(conn, track["id"])
+    menu = window._song_menu([source], source, "x", lambda: None)
+    assert "Create iPod Version" in [a.text() for a in menu.actions()]
+    menu.deleteLater()
+    window._create_ipod_versions([source])
+    assert not problems, problems
+    made = tmp_path / "Big Film (iPod).m4v"
+    assert made.exists() and clip.exists()
+    copy = conn.execute("SELECT * FROM tracks WHERE location = ?", (str(made),)).fetchone()
+    assert copy["media_kind"] == "tvshow" and copy["show"] == "Show" and copy["season"] == 2
+    assert copy["name"] == source["name"]
+    probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                            "stream=width,height,profile", "-of", "csv=p=0", str(made)],
+                           capture_output=True, text=True).stdout
+    assert probe.startswith("Constrained Baseline,640,360")
+
+
 def test_about_and_icon(window):
     from luxtunes.ui.about import AboutDialog, app_icon
 
@@ -326,6 +364,14 @@ def test_ipod_device_page(window, tmp_path):
         page.tab_group.button(i).click()
         app.processEvents()
         window.grab()
+    # Photos: ticking the box turns the rest of the tab on.
+    assert page.sync_photos.isEnabled() and not page.photos_all.isEnabled()
+    page.sync_photos.setChecked(True)
+    app.processEvents()
+    assert page.photos_all.isEnabled() and page.photo_source.isEnabled()
+    page.photos_selected.setChecked(True)
+    assert page.photo_folder_list.isEnabled()
+    page.revert()
     page.music_selected.setChecked(True)
     if page.playlist_list.count():
         page.playlist_list.item(0).setCheckState(Qt.CheckState.Checked)
@@ -440,6 +486,9 @@ def test_background_sync_with_libgpod(window, tmp_path, monkeypatch):
     # The test library's songs have no files, so the sync lists them as problems;
     # don't let that message wait for a click.
     monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    from luxtunes.core import sounds
+    played = []
+    monkeypatch.setattr(sounds, "play_done_sound", lambda: played.append(True))
 
     from luxtunes.core.ipod import device, gpod
     if not gpod.available():
@@ -462,6 +511,7 @@ def test_background_sync_with_libgpod(window, tmp_path, monkeypatch):
         time.sleep(0.02)
     assert window._sync_worker is None
     assert "complete" in window.lcd.sync_detail.text() or "Sync" in window.lcd.sync_detail.text()
+    assert played == [True]                                  # the "done" sound
 
 
 def test_sync_symbol_draws_its_ring(window):
@@ -629,7 +679,7 @@ def test_audio_cd_import(window, tmp_path, monkeypatch):
 
     monkeypatch.setattr(cd, "lookup", fake_lookup)
     approvals = []
-    monkeypatch.setattr(window, "_approve_internet", lambda *a: approvals.append(a[0]) or True)
+    monkeypatch.setattr(window, "_approve_internet", lambda *a, **k: approvals.append(a[0]) or True)
     before = library.count_tracks(window.conn, "music")
 
     window._scan_cds()                                      # the CD goes in
@@ -690,7 +740,7 @@ def test_nothing_goes_online_when_you_say_no(window, monkeypatch):
 
     monkeypatch.setattr(cd, "_get", no_network)
     monkeypatch.setattr(musicbrainz, "_get", no_network)
-    monkeypatch.setattr(window, "_approve_internet", lambda *a: False)
+    monkeypatch.setattr(window, "_approve_internet", lambda *a, **k: False)
     cd.set_insert_action(window.conn, "show")
     monkeypatch.setattr(cd, "drives", lambda: ["/dev/sr9"])
     monkeypatch.setattr(cd, "audio_disc_present", lambda device: True)
@@ -716,7 +766,7 @@ def test_get_track_info_online(window, monkeypatch):
 
     track = window.model.track_at(0)
     asked = []
-    monkeypatch.setattr(window, "_approve_internet", lambda *a: asked.append(a[0]) or True)
+    monkeypatch.setattr(window, "_approve_internet", lambda *a, **k: asked.append(a[0]) or True)
     monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: 0))
 
     def fake_lookup(tracks, *, approved, progress=None, stop=None, artwork=True):
@@ -908,12 +958,12 @@ def test_check_for_updates(window, monkeypatch):
     monkeypatch.setattr(updater, "latest_release", lambda *, approved: calls.append(approved) or
                         updater.Release("0.0.1", "v0.0.1", "", "p",
                                         [updater.Asset("luxtunes-0.0.1-py3-none-any.whl", "u", 1)]))
-    monkeypatch.setattr(window, "_approve_internet", lambda *a: False)
+    monkeypatch.setattr(window, "_approve_internet", lambda *a, **k: False)
     window._check_for_updates()
     assert calls == [] and window._update_worker is None     # said no: nothing went online
     shown = []
     monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: shown.append(a[2])))
-    monkeypatch.setattr(window, "_approve_internet", lambda *a: True)
+    monkeypatch.setattr(window, "_approve_internet", lambda *a, **k: True)
     window._check_for_updates()
     window._update_worker.wait(10_000)
     QApplication.instance().processEvents()
@@ -1061,6 +1111,10 @@ def test_media_keys(window, monkeypatch):
     monkeypatch.setattr(window, "_start_in_current_list", lambda: calls.append("start"))
     window._media_play_pause()                               # nothing playing: starts the list
     assert calls == ["start"]
+    window._media_action("next")
+    window._media_action("next")                             # the same press by a second route
+    assert calls == ["start", "next"]
+    window._last_media_action = ("", 0.0)
 
     volume = window.volume.value()
     window._toggle_mute()
@@ -1087,3 +1141,89 @@ def test_media_keys(window, monkeypatch):
         QApplication.processEvents()
         assert calls[-1] == "next"
         mpris.changed()                                      # mustn't raise
+
+
+def test_podcasts_and_audiobooks(window):
+    from PySide6.QtWidgets import QApplication
+
+    from luxtunes.core import library
+    from luxtunes.ui import get_info
+    from luxtunes.ui.widgets import SOURCE_AUDIOBOOKS, SOURCE_MUSIC, SOURCE_PODCASTS
+
+    tracks = window.model.visible_tracks()
+    # Get Info → Options → Media Kind offers both; picking one ticks their defaults.
+    dialog = get_info.InfoDialog(window.conn, tracks, 0, window._apply_info, window)
+    kinds = [dialog.media_kind.itemData(i) for i in range(dialog.media_kind.count())]
+    assert "podcast" in kinds and "audiobook" in kinds
+    dialog.media_kind.setCurrentIndex(kinds.index("podcast"))
+    dialog._kind_picked(0)
+    assert dialog.bookmarkable.isChecked() and dialog.skip_shuffle.isChecked()
+    dialog.reject()
+
+    library.update_track_fields(window.conn, tracks[0]["id"], {"media_kind": "podcast"})
+    library.update_track_fields(window.conn, tracks[1]["id"], {"media_kind": "audiobook"})
+    window.reload_library()
+    labels = [window.sidebar.topLevelItem(0).child(i).text(0)
+              for i in range(window.sidebar.topLevelItem(0).childCount())]
+    assert "Podcasts" in labels and "Audiobooks" in labels
+    window._set_view_mode("grid")
+    window.show_source(SOURCE_PODCASTS)
+    QApplication.processEvents()
+    assert window.model.rowCount() == 1
+    assert window.grid.tab_keys() == ["podcasts", "podcast_categories", "unplayed"]
+    window.show_source(SOURCE_AUDIOBOOKS)
+    window._refresh_views()
+    assert window.grid.tab_keys() == ["books", "authors", "book_categories"]
+    window.grid.set_grouping("authors")
+    window._update_summary()
+    assert "author" in window.summary_label.text()
+    window.show_source(SOURCE_MUSIC)
+    assert window.grid.tab_keys() == ["albums", "artists", "genres", "composers"]
+    window.show_source(SOURCE_AUDIOBOOKS)
+    assert window.grid.grouping == "authors"                 # the tab you picked last
+    window._set_view_mode("list")
+
+
+def test_cd_do_nothing_and_no_lookup_question(window, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    from luxtunes.core import cd
+
+    asked = []
+    monkeypatch.setattr(window, "_approve_internet", lambda *a, **k: asked.append(a[0]) or False)
+    monkeypatch.setattr(window, "_ask_import", lambda key: asked.append("import?"))
+    monkeypatch.setattr(cd, "drives", lambda: ["/dev/sr9"])
+    monkeypatch.setattr(cd, "audio_disc_present", lambda device: True)
+    monkeypatch.setattr(cd, "read_toc", lambda device: cd.Toc(1, 1, [150], 300))
+    before = window._current_source
+    cd.set_insert_action(window.conn, "nothing")
+    window._scan_cds()
+    QApplication.processEvents()
+    assert "cd:/dev/sr9" in window._discs                     # in the sidebar under Devices
+    assert window._current_source == before and asked == []  # but no jump and no questions
+    # "Don't ask again" for the lookup: the next CD skips straight to the import question.
+    del window._discs["cd:/dev/sr9"]
+    cd.set_insert_action(window.conn, "ask")
+    cd.set_ask_lookup(window.conn, False)
+    window._scan_cds()
+    QApplication.processEvents()
+    assert asked == ["import?"]
+    window.cd_page.lookup_button.click()                     # the button still asks
+    assert asked[-1] == "Get Track Names"
+    cd.set_ask_lookup(window.conn, True)
+    del window._discs["cd:/dev/sr9"]
+
+
+def test_checkboxes_are_easy_to_see_in_both_themes(window):
+    from PySide6.QtWidgets import QApplication
+
+    from luxtunes.ui import theme
+
+    app = QApplication.instance()
+    for dark, colors in ((True, theme.DARK), (False, theme.LIGHT)):
+        window._toggle_dark_mode(dark)
+        sheet = app.styleSheet()
+        assert f"border: 1px solid {colors['indicator_border']}" in sheet
+        assert ("check-light.svg" if dark else "check-dark.svg") in sheet
+        window.grab()                                       # draws with the new style
+    window._toggle_dark_mode(False)

@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import random
 from collections import Counter
@@ -104,6 +105,7 @@ from luxtunes.ui.widgets import (
 )
 
 VIDEO_KINDS = ("movie", "tvshow")
+log = logging.getLogger(__name__)
 
 # Bump if COLUMNS changes, so saved column layouts from older versions are ignored.
 HEADER_LAYOUT_VERSION = 3  # 2: all columns added; 3: Album List columns
@@ -620,7 +622,8 @@ class MainWindow(QMainWindow):
         devices = [(key, self._device_name(ipod)) for key, ipod in self._ipods.items()]
         devices += [(key, disc.name) for key, disc in self._discs.items()]
         self.sidebar.populate(playlists, has_movies, theme.section_color(self.dark_action.isChecked()),
-                              len(self.player.up_next), devices, has_tv)
+                              len(self.player.up_next), devices, has_tv,
+                              look["show_podcasts"], look["show_audiobooks"])
         if not self.sidebar.select_source(self._current_source or SOURCE_MUSIC):
             self.sidebar.select_source(SOURCE_MUSIC)
         if library.count_tracks(self.conn, "music") == 0:
@@ -644,7 +647,10 @@ class MainWindow(QMainWindow):
             tracks = library.load_tracks(self.conn, media_kind=value)
             sort_column = ARTIST_COLUMN
             self.search.setPlaceholderText({"music": "Search Music", "movie": "Search Movies",
-                                            "tvshow": "Search TV Shows"}.get(value, "Search"))
+                                            "tvshow": "Search TV Shows",
+                                            "podcast": "Search Podcasts",
+                                            "audiobook": "Search Audiobooks"}.get(value, "Search"))
+            self.grid.set_section(value)
         elif kind == "queue":
             tracks = []
             for i, track in enumerate(self.player.up_next):
@@ -653,11 +659,13 @@ class MainWindow(QMainWindow):
                 tracks.append(row)
             sort_column = -1  # queue order
             self.search.setPlaceholderText("Search Up Next")
+            self.grid.set_section("music")
         else:
             smart.refresh(self.conn, value)            # a live smart playlist: up to date now
             tracks = library.load_tracks(self.conn, playlist_id=value)
             sort_column = -1  # playlist order
             self.search.setPlaceholderText("Search Playlist")
+            self.grid.set_section("music")
         self.model.set_tracks(tracks, sort_column)
         header = self.table.horizontalHeader()
         header.blockSignals(True)   # don't make the view re-sort; the model already did
@@ -750,39 +758,62 @@ class MainWindow(QMainWindow):
     # ---- Media keys (Play/Pause, Next, Previous, Stop, Mute) ------------------------------
 
     def _setup_media_keys(self):
-        """The keyboard's media keys. The desktop usually catches them and passes
-        them on over MPRIS (ui/mpris.py), which works while LuxTunes is in the
-        background too; if a key reaches the window directly, these handle it."""
-        keys = ((Qt.Key.Key_MediaTogglePlayPause, self._media_play_pause),
-                (Qt.Key.Key_MediaPlay, self._media_play_pause),
-                (Qt.Key.Key_MediaPause, self._media_play_pause),
-                (Qt.Key.Key_MediaNext, lambda: self.player.next()),
-                (Qt.Key.Key_MediaPrevious, lambda: self.player.previous()),
-                (Qt.Key.Key_MediaStop, lambda: self.player.stop()),
-                (Qt.Key.Key_VolumeMute, self._toggle_mute))
-        for key, slot in keys:
-            shortcut = QShortcut(QKeySequence(key), self)
-            shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
-            shortcut.activated.connect(slot)
+        """The keyboard's media keys. On a desktop like Cinnamon they're caught by
+        the desktop and passed on over MPRIS (ui/mpris.py), which also works
+        while LuxTunes is in the background. Only without that (no desktop bus)
+        does the window handle them itself, so one press never acts twice."""
         self._volume_before_mute = None
+        self._last_media_action = ("", 0.0)
         self._mpris = None
         try:
             from luxtunes.ui.mpris import Mpris
             self._mpris = Mpris({
-                "play_pause": self._media_play_pause, "stop": lambda: self.player.stop(),
-                "next": lambda: self.player.next(), "previous": lambda: self.player.previous(),
+                "play_pause": lambda: self._media_action("play_pause"),
+                "stop": lambda: self._media_action("stop"),
+                "next": lambda: self._media_action("next"),
+                "previous": lambda: self._media_action("previous"),
                 "raise": self._bring_to_front, "quit": self.close,
                 "current": lambda: self.player.current,
                 "playing": lambda: self.player.is_playing,
                 "volume": self.volume.value}, self)
         except Exception as error:           # media keys are a nicety; never stop the app
-            import logging
-            logging.getLogger(__name__).warning("media keys unavailable: %s", error)
+            log.warning("media keys unavailable: %s", error)
             self._mpris = None
+        keys = [(Qt.Key.Key_VolumeMute, self._toggle_mute)]
+        if self._mpris is None or not self._mpris.active:
+            keys += [(Qt.Key.Key_MediaTogglePlayPause, lambda: self._media_action("play_pause")),
+                     (Qt.Key.Key_MediaPlay, lambda: self._media_action("play_pause")),
+                     (Qt.Key.Key_MediaPause, lambda: self._media_action("play_pause")),
+                     (Qt.Key.Key_MediaNext, lambda: self._media_action("next")),
+                     (Qt.Key.Key_MediaPrevious, lambda: self._media_action("previous")),
+                     (Qt.Key.Key_MediaStop, lambda: self._media_action("stop"))]
+        for key, slot in keys:
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            shortcut.activated.connect(slot)
         if self._mpris is not None:
             for signal in (self.player.track_started, self.player.playing_changed,
                            self.player.stopped):
                 signal.connect(lambda *_: self._mpris and self._mpris.changed())
+
+    def _media_action(self, action: str):
+        """One media key press. The same key arriving twice within a moment (by
+        two routes) only counts once."""
+        now = time.monotonic()
+        last, when = self._last_media_action
+        if action == last and now - when < 0.3:
+            log.info("media key %s: ignored a second copy", action)
+            return
+        self._last_media_action = (action, now)
+        log.info("media key: %s", action)
+        if action == "play_pause":
+            self._media_play_pause()
+        elif action == "next":
+            self.player.next()
+        elif action == "previous":
+            self.player.previous()
+        elif action == "stop":
+            self.player.stop()
 
     def _media_play_pause(self):
         """Play/Pause key: pause or resume, or start the list on screen."""
@@ -1864,6 +1895,9 @@ class MainWindow(QMainWindow):
         flacs = [t for t in tracks if convert.can_convert(t)]
         if flacs:
             menu.addAction("Create MP3 Version", lambda: self._create_mp3_versions(flacs))
+        videos = [t for t in tracks if convert.can_make_ipod_video(t)]
+        if videos:
+            menu.addAction("Create iPod Version", lambda: self._create_ipod_versions(videos))
         menu.addSeparator()
 
         menu.addMenu(self._add_to_playlist_menu(menu, tracks))
@@ -2279,6 +2313,9 @@ class MainWindow(QMainWindow):
         else:
             self._lcd_finished("sync", f"iPod sync is complete. {report.added:,} added, "
                                  f"{report.removed:,} removed.")
+            if appearance(self.settings)["sync_done_sound"]:
+                from luxtunes.core import sounds
+                sounds.play_done_sound()            # the desktop's "done" sound
         if report.stats and report.stats.plays:
             self.statusBar().showMessage(
                 f"{report.stats.plays:,} plays were read from “{refreshed.name}”.", 8000)
@@ -2398,10 +2435,12 @@ class MainWindow(QMainWindow):
                     continue
                 self._cd_unreadable.discard(device)
                 self._discs[key] = disc
-                self._cd_pending[key] = cd.insert_action(self.conn)
-                self._current_source = ("device", key)      # show it straight away
-                # Going online needs your OK: ask once the CD is showing.
-                QTimer.singleShot(0, lambda k=key: self._offer_cd_lookup(k))
+                action = cd.insert_action(self.conn)
+                if action != "nothing":             # "Do Nothing": it just appears in the sidebar
+                    self._cd_pending[key] = action
+                    self._current_source = ("device", key)      # show it straight away
+                    # Going online needs your OK: ask once the CD is showing.
+                    QTimer.singleShot(0, lambda k=key: self._offer_cd_lookup(k))
                 changed = True
         if changed:
             if self._current_source and self._current_source[0] == "device" \
@@ -2410,8 +2449,12 @@ class MainWindow(QMainWindow):
                 self._current_source = SOURCE_MUSIC
             self.reload_library()
 
-    def _approve_internet(self, title: str, question: str, details: str, go: str) -> bool:
-        """Ask before anything goes online. Nothing does without a yes here."""
+    def _approve_internet(self, title: str, question: str, details: str, go: str,
+                          dont_ask_again=None) -> bool:
+        """Ask before anything goes online. Nothing does without a yes here.
+        With dont_ask_again (a function), the question has a "Don't ask again"
+        box; ticking it calls that function (the question stops coming up by
+        itself; it never turns into going online without asking)."""
         if not self.isVisible():
             return False
         box = QMessageBox(QMessageBox.Icon.Question, title, question, parent=self)
@@ -2419,7 +2462,13 @@ class MainWindow(QMainWindow):
         yes = box.addButton(go, QMessageBox.ButtonRole.AcceptRole)
         no = box.addButton("Don't Look Up", QMessageBox.ButtonRole.RejectRole)
         box.setDefaultButton(no)
+        check = None
+        if dont_ask_again is not None:
+            check = QCheckBox("Don't ask again when a CD is inserted")
+            box.setCheckBox(check)
         box.exec()
+        if check is not None and check.isChecked():
+            dont_ask_again()
         return box.clickedButton() is yes
 
     def _offer_cd_lookup(self, key: str, then_continue: bool = True):
@@ -2428,11 +2477,16 @@ class MainWindow(QMainWindow):
         disc = self._discs.get(key)
         if disc is None or key in self._lookups:
             return
+        automatic = then_continue                 # asked because a CD was found, not a button
+        if automatic and not cd.ask_lookup(self.conn):
+            self._run_cd_pending(key)              # turned off in Preferences (or "Don't ask again")
+            return
         approved = self._approve_internet(
             "Get Track Names", f"Look up the names of the songs on “{disc.name}” on the internet?",
             "LuxTunes will send the CD's layout (how long each track is, not your music) to "
             "MusicBrainz, a free online music database, and download the song names, and the "
-            "album cover from the Cover Art Archive.", "Look Up Online")
+            "album cover from the Cover Art Archive.", "Look Up Online",
+            dont_ask_again=(lambda: cd.set_ask_lookup(self.conn, False)) if automatic else None)
         if approved and key in self._discs:
             self._start_lookup(self._discs[key], approved=True)
         elif then_continue:
@@ -2659,7 +2713,11 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Eject", "This CD is being imported. Stop the import "
                                     "(✕ in the display) or let it finish, then eject.")
             return
-        error = cd.eject(disc.device)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            error = cd.eject(disc.device)
+        finally:
+            QApplication.restoreOverrideCursor()
         if error:
             QMessageBox.warning(self, "Eject", f"The CD couldn't be ejected:\n\n{error}")
             return
@@ -2851,6 +2909,82 @@ class MainWindow(QMainWindow):
         if problems:
             QMessageBox.warning(self, "Create MP3 Version",
                                 "Some files couldn't be converted:\n\n" + "\n".join(problems[:20]))
+
+    def _create_ipod_versions(self, tracks: list[dict]):
+        """Right-click → Create iPod Version: an .m4v copy of each movie or
+        episode that the iPod can play, added to the library beside it."""
+        ffmpeg = convert.ffmpeg_path()
+        if ffmpeg is None:
+            QMessageBox.warning(
+                self, "Create iPod Version",
+                "Creating iPod versions needs FFmpeg, which isn't installed.\n\n"
+                "Install it from a terminal with:\n    sudo apt install ffmpeg\n\n"
+                "then try again.")
+            return
+        import threading
+        progress = QProgressDialog("", "Stop", 0, 100 * len(tracks), self)
+        progress.setWindowTitle("Create iPod Version")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        made, problems = 0, []
+        for done, track in enumerate(tracks):
+            source = find_file(track.get("location"))
+            if source is None:
+                problems.append(f"{track.get('name')}: file not found")
+                continue
+            source_track = library.load_track(self.conn, track["id"]) or track
+            target = str(convert.ipod_video_target(source))
+            process = subprocess.Popen(convert.ipod_video_command(ffmpeg, source, target),
+                                       stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, text=True)
+            position = [0]                       # ms converted so far, from FFmpeg's -progress
+
+            def read_progress(out=process.stdout, at=position):
+                for line in out:
+                    if line.startswith("out_time_ms="):
+                        try:
+                            at[0] = int(line.split("=", 1)[1]) // 1000
+                        except ValueError:
+                            pass
+
+            threading.Thread(target=read_progress, daemon=True).start()
+            length = source_track.get("total_time") or 0
+            label = f"Converting “{track.get('name')}”"
+            if len(tracks) > 1:
+                label += f" ({done + 1} of {len(tracks)})"
+            while process.poll() is None:            # the window stays responsive
+                share = min(99, position[0] * 100 // length) if length else 0
+                progress.setLabelText(f"{label}… {share}%" if length else f"{label}…")
+                progress.setValue(100 * done + share)
+                QApplication.processEvents()
+                if progress.wasCanceled():
+                    process.kill()
+                    process.wait()
+                    break
+                time.sleep(0.05)
+            if progress.wasCanceled():
+                convert.remove_partial(target)
+                break
+            error = process.stderr.read().strip()
+            if process.returncode != 0:
+                convert.remove_partial(target)
+                problems.append(f"{track.get('name')}: "
+                                f"{error.splitlines()[-1] if error else 'FFmpeg failed'}")
+                continue
+            try:
+                convert.finish_video(self.conn, source_track, target)
+                made += 1
+            except (OSError, ValueError, TagError) as problem:
+                problems.append(f"{track.get('name')}: {problem}")
+        progress.setValue(100 * len(tracks))
+        if made:
+            self.reload_library()
+            self.show_source(self._current_source or SOURCE_MUSIC)
+            self.statusBar().showMessage(
+                f"Created {made} iPod version{'s' if made != 1 else ''}.", 6000)
+        if problems:
+            QMessageBox.warning(self, "Create iPod Version",
+                                "Some videos couldn't be converted:\n\n" + "\n".join(problems[:20]))
 
     # ---- Display Duplicates -------------------------------------------------------
 

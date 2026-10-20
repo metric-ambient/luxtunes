@@ -1,6 +1,6 @@
 """The page shown when an iPod is selected in the sidebar:
 
-  tabs      Summary · Music · Movies · TV Shows · Podcasts · Books · Photos · Info · Games
+  tabs      Summary · Music · Movies · TV Shows · Podcasts · Books · Photos · Games
   bottom    a capacity bar (Audio / Video / Photos / Other / Free, as it
             will be after syncing) and Sync, or Revert + Apply after changes.
 
@@ -41,14 +41,14 @@ from PySide6.QtWidgets import (
 from luxtunes.core.ipod import device as ipod_device
 from luxtunes.core.ipod import plan as ipod_plan
 from luxtunes.core.ipod.settings import (
-    BIT_RATES, EPISODE_RULES, MOVIE_RULES, PODCAST_RULES, DeviceRecord, SyncSettings,
+    BIT_RATES, EPISODE_RULES, MOVIE_RULES, PODCAST_RULES, PODCAST_SCOPES, DeviceRecord,
+    SyncSettings,
 )
 from luxtunes.ui import formatting
 from luxtunes.ui.art_cache import ART_CACHE
 from luxtunes.ui.widgets import playlist_icon
 
-TABS = ("Summary", "Music", "Movies", "TV Shows", "Podcasts", "Books", "Photos", "Info", "Games")
-PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tif", ".tiff", ".heic", ".webp"}
+TABS = ("Summary", "Music", "Movies", "TV Shows", "Podcasts", "Books", "Photos", "Games")
 
 COLOURS = {"Audio": "#4b9be6", "Video": "#a95fcd", "Photos": "#ef8650", "Other": "#e7c638",
            "Free": "#5d6574"}
@@ -221,7 +221,7 @@ class DevicePage(QWidget):
         self.settings = SyncSettings()
         self._space = None
         self._loading = False
-        self._photo_count_cache: dict[str, int] = {}
+        self._photo_count_cache: dict[tuple, int] = {}
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setSingleShot(True)
         self._refresh_timer.setInterval(150)
@@ -247,8 +247,7 @@ class DevicePage(QWidget):
         self.tab_group.button(0).setChecked(True)
 
         builders = (self._summary_tab, self._music_tab, self._movies_tab, self._tv_tab,
-                    self._podcasts_tab, self._books_tab, self._photos_tab, self._info_tab,
-                    self._games_tab)
+                    self._podcasts_tab, self._books_tab, self._photos_tab, self._games_tab)
         for build in builders:
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
@@ -342,10 +341,13 @@ class DevicePage(QWidget):
         self._syncing_key = key
         self._update_buttons()
 
+    def _syncing_this(self) -> bool:
+        key = getattr(self, "_syncing_key", None)
+        return key is not None and self.ipod is not None and self.ipod.key == key
+
     def _update_buttons(self):
         dirty = self.dirty
-        key = getattr(self, "_syncing_key", None)
-        syncing = key is not None and self.ipod is not None and self.ipod.key == key
+        syncing = self._syncing_this()
         self.sync_button.setText("Syncing…" if syncing else "Sync")
         self.sync_button.setEnabled(not syncing)
         self.apply_button.setEnabled(not syncing)
@@ -425,9 +427,12 @@ class DevicePage(QWidget):
         convert_row.addWidget(self.convert_kbps)
         convert_row.addWidget(QLabel("AAC"))
         convert_row.addStretch(1)
+        tip = ("Songs above this rate (and lossless ones) are converted on their way to the "
+               "iPod. The files in your library are never changed.")
         for widget in (self.convert, self.convert_kbps):
-            widget.setEnabled(False)
-            widget.setToolTip("Not available yet")
+            widget.setToolTip(tip)
+        self.convert.toggled.connect(self._changed)
+        self.convert_kbps.currentIndexChanged.connect(self._changed)
         self.manual = QCheckBox("Manually manage music and videos")
         self.disk_use = QCheckBox("Enable disk use")
         inner.addWidget(self.open_on_connect)
@@ -615,10 +620,79 @@ class DevicePage(QWidget):
         return page
 
     def _podcasts_tab(self) -> QWidget:
-        page, self.sync_podcasts, self.podcasts_auto, self.podcasts_rule = self._shell(
-            "Sync Podcasts", "episodes", PODCAST_RULES, ["all podcasts", "selected podcasts"],
-            ("Podcasts", "Episodes"), "Your library has no podcasts yet, so there's nothing to sync here.")
+        page = QWidget()
+        column = QVBoxLayout(page)
+        column.setContentsMargins(30, 16, 30, 16)
+        top = QHBoxLayout()
+        self.sync_podcasts = QCheckBox("Sync Podcasts")
+        self.sync_podcasts.setFont(heading("").font())
+        self.podcast_count = heading("", 1.3)
+        self.podcast_count.setObjectName("deviceCount")
+        top.addWidget(self.sync_podcasts)
+        top.addStretch(1)
+        top.addWidget(self.podcast_count)
+        column.addLayout(top)
+        frame, inner = box()
+        row = QHBoxLayout()
+        self.podcasts_auto = QCheckBox("Automatically include")
+        self.podcasts_rule = QComboBox()
+        self.podcasts_rule.addItems(PODCAST_RULES)
+        self.podcasts_scope = QComboBox()
+        self.podcasts_scope.addItems(PODCAST_SCOPES)
+        row.addWidget(self.podcasts_auto)
+        row.addWidget(self.podcasts_rule)
+        row.addWidget(QLabel("episodes of"))
+        row.addWidget(self.podcasts_scope)
+        row.addStretch(1)
+        inner.addLayout(row)
+        column.addWidget(frame)
+        # Left: the shows (ticked = "selected podcasts"). Right: the episodes of
+        # the show highlighted on the left; ticked ones always go to the iPod.
+        grid = QGridLayout()
+        grid.addWidget(heading("Podcasts", 1.3), 0, 0)
+        grid.addWidget(heading("Episodes", 1.3), 0, 1)
+        self.podcast_shows = checklist(320)
+        self.podcast_episodes = checklist(320)
+        grid.addWidget(self.podcast_shows, 1, 0)
+        grid.addWidget(self.podcast_episodes, 1, 1)
+        column.addLayout(grid)
+        self.podcasts_empty = QLabel("Your library has no podcasts yet. To make an episode one, "
+                                     "choose Get Info → Options → Media Kind → Podcast.")
+        self.podcasts_empty.setObjectName("deviceNote")
+        self.podcasts_empty.setWordWrap(True)
+        column.addWidget(self.podcasts_empty)
+        column.addStretch(1)
+        self._episodes: list[dict] = []
+        self._picked_episodes: set[str] = set()
+        self.podcast_shows.currentRowChanged.connect(lambda _: self._fill_episodes())
+        self.podcast_shows.itemChanged.connect(self._changed)
+        self.podcast_episodes.itemChanged.connect(self._episode_ticked)
+        for widget in (self.sync_podcasts, self.podcasts_auto):
+            widget.toggled.connect(self._changed)
+        for combo in (self.podcasts_rule, self.podcasts_scope):
+            combo.currentIndexChanged.connect(self._changed)
         return page
+
+    def _fill_episodes(self):
+        """The episodes of the show highlighted on the left."""
+        item = self.podcast_shows.currentItem()
+        show = item.data(Qt.ItemDataRole.UserRole) if item else None
+        self.podcast_episodes.blockSignals(True)
+        self.podcast_episodes.clear()
+        for e in self._episodes:
+            if ipod_plan.podcast_show(e) == show:
+                unplayed = "" if e.get("play_count") else "●  "
+                add_check(self.podcast_episodes, f"{unplayed}{e.get('name') or 'Untitled'}",
+                          e["persistent_id"], e["persistent_id"] in self._picked_episodes)
+        self.podcast_episodes.blockSignals(False)
+
+    def _episode_ticked(self, item):
+        key = item.data(Qt.ItemDataRole.UserRole)
+        if item.checkState() == Qt.CheckState.Checked:
+            self._picked_episodes.add(key)
+        else:
+            self._picked_episodes.discard(key)
+        self._changed()
 
     def _books_tab(self) -> QWidget:
         page = QWidget()
@@ -627,49 +701,30 @@ class DevicePage(QWidget):
         top = QHBoxLayout()
         self.sync_books = QCheckBox("Sync Audiobooks")
         self.sync_books.setFont(heading("").font())
-        count = heading("0 audiobooks", 1.3)
-        count.setObjectName("deviceCount")
+        self.book_count = heading("", 1.3)
+        self.book_count.setObjectName("deviceCount")
         top.addWidget(self.sync_books)
         top.addStretch(1)
-        top.addWidget(count)
+        top.addWidget(self.book_count)
         column.addLayout(top)
         frame, inner = box()
         self.books_all = QRadioButton("All audiobooks")
         self.books_selected = QRadioButton("Selected audiobooks")
-        self.books_selected.setEnabled(False)
         inner.addWidget(self.books_all)
         inner.addWidget(self.books_selected)
         column.addWidget(frame)
+        self.book_list = checklist(320)
+        self.book_list.setMaximumWidth(520)
+        column.addWidget(self.book_list)
+        self.books_empty = QLabel("Your library has no audiobooks yet. To make a song one, "
+                                  "choose Get Info → Options → Media Kind → Audiobook.")
+        self.books_empty.setObjectName("deviceNote")
+        self.books_empty.setWordWrap(True)
+        column.addWidget(self.books_empty)
         column.addStretch(1)
-        self.sync_books.toggled.connect(self._changed)
-        self.books_all.toggled.connect(self._changed)
-        return page
-
-    def _info_tab(self) -> QWidget:
-        page = QWidget()
-        column = QVBoxLayout(page)
-        column.setContentsMargins(30, 16, 30, 16)
-        row = QHBoxLayout()
-        self.sync_contacts = QCheckBox("Sync Contacts from")
-        self.sync_contacts.setFont(heading("").font())
-        self.sync_contacts.setEnabled(False)
-        source = QComboBox()
-        source.addItem("Address Book")
-        source.setEnabled(False)
-        row.addWidget(self.sync_contacts)
-        row.addWidget(source)
-        row.addStretch(1)
-        column.addLayout(row)
-        for text in ("Contact syncing isn't available in LuxTunes.",
-                     "Calendar syncing isn't available in LuxTunes."):
-            frame, inner = box()
-            frame.setMinimumHeight(140)
-            label = QLabel(text)
-            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            inner.addWidget(label)
-            column.addWidget(frame)
-            column.addSpacing(12)
-        column.addStretch(1)
+        self.book_list.itemChanged.connect(self._changed)
+        for widget in (self.sync_books, self.books_all, self.books_selected):
+            widget.toggled.connect(self._changed)
         return page
 
     def _games_tab(self) -> QWidget:
@@ -714,6 +769,10 @@ class DevicePage(QWidget):
         top.addStretch(1)
         top.addWidget(self.photo_count)
         column.addLayout(top)
+        self.photos_off_note = QLabel("Tick “Sync Photos from” to choose a folder of photos for "
+                                      "this iPod.")
+        self.photos_off_note.setObjectName("deviceNote")
+        column.addWidget(self.photos_off_note)
         frame, inner = box()
         self.photos_all = QRadioButton("All folders")
         self.photos_selected = QRadioButton("Selected folders")
@@ -731,8 +790,8 @@ class DevicePage(QWidget):
         self.photo_folder_list = checklist(260)
         self.photo_folder_list.itemChanged.connect(self._changed)
         column.addWidget(self.photo_folder_list)
-        hint = QLabel("Your photo choices are saved now; copying photos to the iPod comes in a "
-                      "later LuxTunes update.")
+        hint = QLabel("Photos go one way: from this folder to the iPod. Each folder inside it "
+                      "becomes a photo album on the iPod.")
         hint.setObjectName("deviceNote")
         hint.setWordWrap(True)
         column.addWidget(hint)
@@ -776,29 +835,35 @@ class DevicePage(QWidget):
             self._changed()
 
     def _update_photo_count(self):
-        folder = self.settings.photos_folder
-        if self.settings.photos_mode == "selected":
-            folders = [os.path.join(folder, name) for name in self.settings.photo_folders]
-        else:
-            folders = [folder]
-        total = 0
-        for path in folders:
-            if path not in self._photo_count_cache:
-                count = 0
-                for root, dirs, files in os.walk(path):
-                    dirs[:] = [d for d in dirs if not d.startswith(".")]
-                    count += sum(1 for f in files if Path(f).suffix.lower() in PHOTO_EXTENSIONS)
-                self._photo_count_cache[path] = count
-            total += self._photo_count_cache[path]
-        self.photo_count.setText(f"{total:,} photos")
+        s = self.settings
+        key = (s.photos_folder, s.photos_mode, tuple(sorted(s.photo_folders)))
+        if key not in self._photo_count_cache:
+            from luxtunes.core.ipod import photos
+            albums = photos.chosen_albums(s.photos_folder, s.photos_mode, s.photo_folders)
+            self._photo_count_cache[key] = photos.count(albums)
+        total = self._photo_count_cache[key]
+        self.photo_count.setText(f"{total:,} photo{'s' if total != 1 else ''}"
+                                 if s.sync_photos else "")
+        # Say why when nothing would go: no folders ticked, or no photos found.
+        if s.sync_photos and not total:
+            if s.photos_mode == "selected" and not s.photo_folders:
+                why = "Tick the folders below whose photos should go on the iPod."
+            else:
+                why = (f"No photos found in {s.photos_folder}. LuxTunes looks for JPEG, PNG, "
+                       "HEIC, WebP, GIF, BMP and TIFF files in it and the folders inside it.")
+            self.photos_off_note.setText(why)
+            self.photos_off_note.show()
+        elif s.sync_photos:
+            self.photos_off_note.hide()
 
     # ---- Settings <-> controls ---------------------------------------------------------------
 
     def _fill_lists(self):
         choices = ipod_plan.library_choices(self.conn)
         s = self.settings
-        for widget in (self.playlist_list, self.artist_list, self.genre_list, self.album_list,
-                       self.movie_list):
+        lists = (self.playlist_list, self.artist_list, self.genre_list, self.album_list,
+                 self.movie_list, self.podcast_shows, self.book_list)
+        for widget in lists:
             widget.blockSignals(True)
             widget.clear()
         for p in choices.playlists:
@@ -818,9 +883,19 @@ class DevicePage(QWidget):
             art = ART_CACHE.get(movie, 64)
             if art is not None:
                 item.setIcon(QIcon(art))
-        for widget in (self.playlist_list, self.artist_list, self.genre_list, self.album_list,
-                       self.movie_list):
+        for show in choices.shows:
+            add_check(self.podcast_shows, show, show, show in s.podcast_shows)
+        self._episodes = choices.episodes
+        self._picked_episodes = set(s.podcast_episodes)
+        for key, label in choices.books:
+            add_check(self.book_list, label, key, key in s.books)
+        for widget in lists:
             widget.blockSignals(False)
+        if self.podcast_shows.count():
+            self.podcast_shows.setCurrentRow(0)
+        self._fill_episodes()
+        self.podcasts_empty.setVisible(not choices.episodes)
+        self.books_empty.setVisible(not choices.books)
         self._fill_photo_sources()
 
     def _load_controls(self):
@@ -843,8 +918,9 @@ class DevicePage(QWidget):
         self.sync_podcasts.setChecked(s.sync_podcasts)
         self.podcasts_auto.setChecked(s.podcasts_auto)
         self.podcasts_rule.setCurrentText(s.podcasts_rule)
+        self.podcasts_scope.setCurrentText(s.podcasts_scope)
         self.sync_books.setChecked(s.sync_books)
-        self.books_all.setChecked(True)
+        (self.books_selected if s.books_mode == "selected" else self.books_all).setChecked(True)
         self.sync_games.setChecked(s.sync_games)
         self.sync_photos.setChecked(s.sync_photos)
         (self.photos_all if s.photos_mode == "all" else self.photos_selected).setChecked(True)
@@ -854,6 +930,8 @@ class DevicePage(QWidget):
     def _read_controls(self):
         s = self.settings
         s.only_checked = self.only_checked.isChecked()
+        s.convert = self.convert.isChecked()
+        s.convert_kbps = self.convert_kbps.currentData() or s.convert_kbps
         s.manual = self.manual.isChecked()
         s.disk_use = self.disk_use.isChecked()
         s.sync_music = self.sync_music.isChecked()
@@ -874,7 +952,12 @@ class DevicePage(QWidget):
         s.sync_podcasts = self.sync_podcasts.isChecked()
         s.podcasts_auto = self.podcasts_auto.isChecked()
         s.podcasts_rule = self.podcasts_rule.currentText()
+        s.podcasts_scope = self.podcasts_scope.currentText()
+        s.podcast_shows = checked_keys(self.podcast_shows)
+        s.podcast_episodes = sorted(self._picked_episodes)
         s.sync_books = self.sync_books.isChecked()
+        s.books_mode = "selected" if self.books_selected.isChecked() else "all"
+        s.books = checked_keys(self.book_list)
         s.sync_games = self.sync_games.isChecked()
         s.sync_photos = self.sync_photos.isChecked()
         s.photos_mode = "all" if self.photos_all.isChecked() else "selected"
@@ -884,6 +967,7 @@ class DevicePage(QWidget):
 
     def _enable_controls(self):
         s = self.settings
+        self.convert_kbps.setEnabled(s.convert)
         music_on = s.sync_music and not s.manual
         for widget in (self.music_all, self.music_selected, self.music_videos, self.autofill):
             widget.setEnabled(music_on)
@@ -901,7 +985,23 @@ class DevicePage(QWidget):
                                   (self.sync_podcasts, self.podcasts_auto, self.podcasts_rule)):
             auto.setEnabled(check.isChecked())
             rule.setEnabled(check.isChecked() and auto.isChecked())
+        podcasts_on = s.sync_podcasts and not s.manual
+        self.podcasts_scope.setEnabled(podcasts_on and s.podcasts_auto)
+        # Ticking shows only matters for "selected podcasts".
+        self.podcast_shows.setEnabled(podcasts_on and s.podcasts_auto
+                                      and s.podcasts_scope == "selected podcasts")
+        self.podcast_episodes.setEnabled(podcasts_on)
+        books_on = s.sync_books and not s.manual
+        for widget in (self.books_all, self.books_selected):
+            widget.setEnabled(books_on)
+        self.book_list.setVisible(s.books_mode == "selected")
+        self.book_list.setEnabled(books_on)
         photos_on = s.sync_photos
+        self.sync_photos.setEnabled(True)               # always: it turns the rest on
+        if not photos_on:
+            self.photos_off_note.setText("Tick “Sync Photos from” to choose a folder of photos "
+                                         "for this iPod.")
+            self.photos_off_note.show()
         for widget in (self.photo_source, self.photos_all, self.photos_selected, self.full_resolution):
             widget.setEnabled(photos_on)
         self.photo_folder_list.setVisible(s.photos_mode == "selected")
@@ -925,6 +1025,8 @@ class DevicePage(QWidget):
             self.music_count.setText(f"{self.ipod.song_count or 0:,} songs")
             self.movie_count.setText("")
             self.tv_count.setText("")
+            self.podcast_count.setText("")
+            self.book_count.setText("")
             parts = [("Audio", space.media), ("Video", 0), ("Photos", space.photos),
                      ("Other", space.other), ("Free", space.free)]
             self.capacity_bar.set_parts(space.capacity, parts)
@@ -935,6 +1037,13 @@ class DevicePage(QWidget):
         self.music_count.setText(f"{songs:,} songs" if self.settings.sync_music else "")
         self.movie_count.setText(f"{plan.count('movie'):,} movies" if self.settings.sync_movies else "")
         self.tv_count.setText(f"{plan.count('tvshow'):,} episodes" if self.settings.sync_tv else "")
+        self.podcast_count.setText(f"{plan.count('podcast'):,} episodes"
+                                   if self.settings.sync_podcasts else "")
+        books = len({ipod_plan.book_key(t) for t in plan.tracks
+                     if t.get("media_kind") == "audiobook"})
+        self.book_count.setText(f"{books:,} audiobook{'s' if books != 1 else ''}"
+                                if self.settings.sync_books else "")
+        self._update_photo_count()
         free = space.capacity - plan.music_bytes - plan.video_bytes - space.photos - space.other
         parts = [("Audio", plan.music_bytes), ("Video", plan.video_bytes), ("Photos", space.photos),
                  ("Other", space.other), ("Free", max(0, free))]
@@ -950,6 +1059,6 @@ class DevicePage(QWidget):
         else:
             self.warning.hide()
         too_big = free < 0
-        syncing = getattr(self, "_syncing", False)
+        syncing = self._syncing_this()
         self.apply_button.setEnabled(not too_big and not syncing)
         self.sync_button.setEnabled(not too_big and not syncing)

@@ -266,7 +266,17 @@ EDITABLE_TIME_FIELDS = {"start_time", "stop_time"}          # milliseconds, or N
 EDITABLE_OTHER_FIELDS = {"volume_adjustment", "media_kind"}
 EDITABLE_FIELDS = (EDITABLE_TEXT_FIELDS | EDITABLE_NUMBER_FIELDS | EDITABLE_FLAG_FIELDS
                    | EDITABLE_TIME_FIELDS | EDITABLE_OTHER_FIELDS)
-MEDIA_KINDS = ("music", "movie", "tvshow")
+MEDIA_KINDS = ("music", "movie", "tvshow", "podcast", "audiobook")
+AUDIO_KINDS = ("music", "podcast", "audiobook")
+AUDIOBOOK_EXTENSIONS = (".m4b", ".aa", ".aax")
+
+
+def kind_defaults(kind: str) -> dict:
+    """Podcasts and audiobooks remember where you stopped and stay out of
+    shuffle (the defaults a new one gets; Get Info can change them)."""
+    if kind in ("podcast", "audiobook"):
+        return {"bookmarkable": 1, "skip_when_shuffling": 1}
+    return {}
 
 
 def clean_field_value(key: str, value):
@@ -313,6 +323,11 @@ def update_track_fields(conn: sqlite3.Connection, track_id: int, fields: dict) -
     row = conn.execute("SELECT * FROM tracks WHERE id = ?", (track_id,)).fetchone()
     if row is None:
         return {}
+    if "media_kind" in clean and clean["media_kind"] != row["media_kind"]:
+        # Becoming a podcast or audiobook: remember position, skip in shuffle
+        # (unless this edit sets those too).
+        for key, value in kind_defaults(clean["media_kind"]).items():
+            clean.setdefault(key, value)
     # Renaming e.g. the Artist makes its old Sort Artist wrong ("The 1980" would
     # still sort as "1975"), so a sort field is cleared when its field changes,
     # unless you set the sort field in the same edit.

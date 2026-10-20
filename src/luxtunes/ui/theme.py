@@ -17,6 +17,7 @@ LIGHT = {
     "text": "#000000",
     "text_dim": "#6f7b88",
     "text_disabled": "#a3a3a3",     # menu items and buttons that can't be used right now
+    "indicator_border": "#7d7d7d",  # the outline of every checkbox and radio button
     "base": "#ffffff",
     "alt_base": "#f1f5fa",
     "highlight": "#3d80df",
@@ -50,6 +51,7 @@ DARK = {
     "text": "#e4e4e4",
     "text_dim": "#8b95a1",
     "text_disabled": "#6b6b6b",
+    "indicator_border": "#a8b0ba",  # light enough to see on the dark background
     "base": "#1e1f22",
     "alt_base": "#26272b",
     "highlight": "#2f6fd0",
@@ -138,13 +140,44 @@ QToolButton#deviceTab:checked {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #8a8a8a, stop:1 #6a6a6a);
 }
 QFrame#deviceBox { background: $alt_base; border: 1px solid $border; }
-QListWidget#deviceList::indicator {
-    width: 13px; height: 13px; border: 1px solid $text_dim; border-radius: 3px; background: $base;
+/* Checkboxes and radio buttons everywhere (dialogs, the iPod's pages, list
+   checkboxes): a clear outline in both themes, filled blue when ticked. */
+QCheckBox::indicator, QGroupBox::indicator, QAbstractItemView::indicator {
+    width: 13px; height: 13px; border: 1px solid $indicator_border; border-radius: 3px;
+    background: $base;
 }
-QListWidget#deviceList::indicator:checked {
+QRadioButton::indicator {
+    width: 13px; height: 13px; border: 1px solid $indicator_border; border-radius: 7px;
+    background: $base;
+}
+QCheckBox::indicator:hover, QRadioButton::indicator:hover, QGroupBox::indicator:hover,
+QAbstractItemView::indicator:hover { border-color: $highlight; }
+QCheckBox::indicator:checked, QGroupBox::indicator:checked, QAbstractItemView::indicator:checked {
     background: $highlight; border-color: $highlight; image: url("$check_icon");
 }
-QListWidget#deviceList::indicator:disabled { border-color: $border; }
+QCheckBox::indicator:indeterminate, QAbstractItemView::indicator:indeterminate {
+    border-color: $highlight;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 $highlight, stop:0.4 $highlight,
+                                stop:0.41 #ffffff, stop:0.59 #ffffff, stop:0.6 $highlight,
+                                stop:1 $highlight);
+}
+/* The song list's checkboxes stay quiet: a plain box with a tick in the text colour. */
+QTableView::indicator:checked {
+    background: $base; border-color: $indicator_border; image: url("$list_check_icon");
+}
+QRadioButton::indicator:checked {
+    border-color: $highlight;
+    background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5, stop:0 #ffffff,
+                                stop:0.38 #ffffff, stop:0.48 $highlight, stop:1 $highlight);
+}
+QCheckBox::indicator:disabled, QRadioButton::indicator:disabled, QGroupBox::indicator:disabled,
+QAbstractItemView::indicator:disabled { border-color: $text_disabled; background: $window; }
+QCheckBox::indicator:checked:disabled, QGroupBox::indicator:checked:disabled,
+QAbstractItemView::indicator:checked:disabled { background: $text_disabled; }
+QRadioButton::indicator:checked:disabled {
+    background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5, stop:0 $base,
+                                stop:0.38 $base, stop:0.48 $text_disabled, stop:1 $text_disabled);
+}
 QLabel#deviceHeading, QLabel#deviceCount { color: $text_dim; }
 QLabel#deviceNote { color: $text_dim; }
 QWidget#capacityPanel {
@@ -361,5 +394,7 @@ def apply_theme(app: QApplication, dark: bool, grid_dark: bool = True) -> None:
         QPalette.ColorGroup.Inactive, role.HighlightedText, QColor(colors["highlight_text"])
     )
     app.setPalette(palette)
-    check = Path(__file__).resolve().parent.parent / "resources" / "check.svg"
-    app.setStyleSheet(STYLESHEET.substitute(colors, check_icon=check.as_posix()))
+    resources = Path(__file__).resolve().parent.parent / "resources"
+    list_check = resources / ("check-light.svg" if dark else "check-dark.svg")
+    app.setStyleSheet(STYLESHEET.substitute(colors, check_icon=(resources / "check.svg").as_posix(),
+                                            list_check_icon=list_check.as_posix()))

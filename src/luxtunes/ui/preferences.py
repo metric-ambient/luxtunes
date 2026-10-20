@@ -2,13 +2,14 @@
 
 General: the library's name, which sources show in the sidebar, text sizes,
 the Grid view's colour, source icons and list checkboxes, and what happens
-when you insert a CD (plus Import Settings…) and the sound when an import ends.
+when you insert a CD (plus Import Settings…) and the sounds when an import
+or an iPod sync ends.
 Advanced: the LuxTunes Media folder and keeping it organized.
 
-Looking up CD names or album artwork online is never a setting: LuxTunes
-asks every time (see MainWindow._approve_internet). The same goes for
-checking for updates: it only happens when you choose Help → Check for
-Updates…, after a yes.
+Looking up CD names or album artwork online is never automatic: LuxTunes
+asks every time (see MainWindow._approve_internet). The only setting is
+whether it asks by itself when a CD is inserted. Checking for updates only
+happens when you choose Help → Check for Updates…, after a yes.
 """
 
 from __future__ import annotations
@@ -39,12 +40,15 @@ from luxtunes.core import add_files, cd, encoders, library, organize
 APPEARANCE = {
     "show_movies": True,            # Sources: Movies
     "show_tv_shows": True,          # Sources: TV Shows
+    "show_podcasts": True,          # Sources: Podcasts
+    "show_audiobooks": True,        # Sources: Audiobooks
     "source_text": "small",         # sidebar text: small / large
     "list_text": "small",           # song list text: small / large
     "grid_dark": True,              # Grid View: dark / light
     "show_source_icons": True,
     "show_list_checkboxes": True,
     "import_done_sound": True,      # play the desktop's notification sound after a CD import
+    "sync_done_sound": True,        # ... and after an iPod sync
 }
 
 
@@ -98,9 +102,13 @@ class PreferencesDialog(QDialog):
         self.show_movies.setChecked(look["show_movies"])
         self.show_tv_shows = QCheckBox("TV Shows")
         self.show_tv_shows.setChecked(look["show_tv_shows"])
+        self.show_podcasts = QCheckBox("Podcasts")
+        self.show_podcasts.setChecked(look["show_podcasts"])
+        self.show_audiobooks = QCheckBox("Audiobooks")
+        self.show_audiobooks.setChecked(look["show_audiobooks"])
         sources = QHBoxLayout()
-        sources.addWidget(self.show_movies)
-        sources.addWidget(self.show_tv_shows)
+        for box in (self.show_movies, self.show_tv_shows, self.show_podcasts, self.show_audiobooks):
+            sources.addWidget(box)
         sources.addStretch(1)
         name_form.addRow("Sources:", sources)
 
@@ -145,7 +153,14 @@ class PreferencesDialog(QDialog):
         row.addStretch(1)
         self.import_sound = QCheckBox("Play a sound when a CD finishes importing")
         self.import_sound.setChecked(look["import_done_sound"])
-        online = QLabel("Looking up CD track names or artwork online always asks first.")
+        self.sync_sound = QCheckBox("Play a sound when an iPod finishes syncing")
+        self.sync_sound.setChecked(look["sync_done_sound"])
+        self.ask_lookup = QCheckBox("Ask to look up track names online when a CD is inserted")
+        self.ask_lookup.setChecked(cd.ask_lookup(self.conn))
+        online = QLabel("Looking up CD track names or artwork online always asks first. With "
+                        "this off, use Get Track Names on the CD's page, or Get Track Info "
+                        "Online… on imported songs.")
+        online.setWordWrap(True)
         online.setEnabled(False)
         layout = QVBoxLayout(page)
         layout.addLayout(name_form)
@@ -154,6 +169,8 @@ class PreferencesDialog(QDialog):
         layout.addWidget(_line())
         layout.addLayout(row)
         layout.addWidget(self.import_sound)
+        layout.addWidget(self.sync_sound)
+        layout.addWidget(self.ask_lookup)
         layout.addWidget(online)
         layout.addStretch(1)
         return page
@@ -207,13 +224,17 @@ class PreferencesDialog(QDialog):
         organize.set_media_folder(self.conn, self._folder)
         add_files.set_copy_when_adding(self.conn, self.copy_files.isChecked())
         cd.set_insert_action(self.conn, self.insert_action.currentData())
+        cd.set_ask_lookup(self.conn, self.ask_lookup.isChecked())
         encoders.save(self.conn, self._import_settings)
         if self.library_name.text().strip():
             library.set_library_name(self.conn, self.library_name.text())
         s = self.settings
         s.setValue("prefs/show_movies", self.show_movies.isChecked())
         s.setValue("prefs/show_tv_shows", self.show_tv_shows.isChecked())
+        s.setValue("prefs/show_podcasts", self.show_podcasts.isChecked())
+        s.setValue("prefs/show_audiobooks", self.show_audiobooks.isChecked())
         s.setValue("prefs/import_done_sound", self.import_sound.isChecked())
+        s.setValue("prefs/sync_done_sound", self.sync_sound.isChecked())
         s.setValue("prefs/source_text", self.source_text.currentData())
         s.setValue("prefs/list_text", self.list_text.currentData())
         s.setValue("prefs/grid_dark", bool(self.grid_view.currentData()))

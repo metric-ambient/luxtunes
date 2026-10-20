@@ -21,6 +21,8 @@ from __future__ import annotations
 import ctypes
 import logging
 import os
+import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,6 +53,7 @@ class SyncReport:
     stats: stats.MergeResult | None = None
     problems: list[str] = field(default_factory=list)
     cancelled: bool = False
+    photos: int = 0
 
 
 @dataclass
@@ -171,11 +174,64 @@ def fill_track(t: "gpod.Itdb_Track", song: dict) -> None:
         t.season_nr = int(song.get("season") or 0)
         t.episode_nr = int(song.get("episode_number") or 0)
     else:
-        t.mediatype = gpod.MEDIATYPE_MOVIE if movie else gpod.MEDIATYPE_AUDIO
+        t.mediatype = {"movie": gpod.MEDIATYPE_MOVIE, "podcast": gpod.MEDIATYPE_PODCAST,
+                       "audiobook": gpod.MEDIATYPE_AUDIOBOOK}.get(song.get("media_kind"),
+                                                                gpod.MEDIATYPE_AUDIO)
+    podcast = song.get("media_kind") == "podcast"
+    # A podcast's bullet on the iPod: 2 = unplayed, 1 = played (and for everything else).
+    t.mark_unplayed = 2 if podcast and not song.get("play_count") else 1
+    t.flag4 = 1 if podcast else 0
     t.movie_flag = 1 if movie or tv else 0
     t.dbid = dbid_of(song)
     kind = (song.get("kind") or "").lower()
     t.type2 = 1 if "mpeg" in kind else 0
+
+
+def _convert_for_ipod(path: str, kbps: int, folder: str, report: SyncReport,
+                      song: dict) -> str | None:
+    """An AAC copy of the song for the iPod, in `folder`; None (and a problem
+    noted) if it can't be made. The library's file is never changed."""
+    from luxtunes.core import convert
+    ffmpeg = convert.ffmpeg_path()
+    if ffmpeg is None:
+        if not any("FFmpeg" in p for p in report.problems):
+            report.problems.append("Converting songs needs FFmpeg (sudo apt install ffmpeg); "
+                                   "those songs weren't copied.")
+        return None
+    target = os.path.join(folder, f"{song.get('id') or 'song'}.m4a")
+    try:
+        result = subprocess.run(convert.ipod_audio_command(ffmpeg, path, target, kbps),
+                                capture_output=True, text=True, timeout=1800)
+    except (OSError, subprocess.SubprocessError) as error:
+        report.problems.append(f"{song.get('name')}: couldn't convert ({error})")
+        return None
+    if result.returncode != 0 or not os.path.exists(target):
+        last = (result.stderr.strip().splitlines() or ["FFmpeg failed"])[-1]
+        report.problems.append(f"{song.get('name')}: couldn't convert ({last})")
+        return None
+    return target
+
+
+def _sync_photos(ipod: IPod, settings, report: SyncReport, progress) -> None:
+    from luxtunes.core.ipod import photos
+    try:
+        if not settings.sync_photos:
+            if photos.remove_all(ipod.mountpoint):
+                log.info("removed LuxTunes' photos from %s", ipod.mountpoint)
+            return
+        albums = photos.chosen_albums(settings.photos_folder, settings.photos_mode,
+                                      settings.photo_folders)
+
+        def step(done, total):
+            if progress is None:
+                return True
+            return progress("Adding photos…", done, total) is not False
+
+        report.photos, problems = photos.sync(ipod.mountpoint, albums, settings.full_resolution,
+                                              step)
+        report.problems += problems
+    except (gpod.GpodError, OSError) as error:
+        report.problems.append(f"Photos: {error}")
 
 
 def read_ipod_stats(db: gpod.Database, ratings_too: bool) -> list[stats.IPodTrackStats]:
@@ -288,24 +344,42 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
             fill_track(pointer.contents, library_by_dbid[dbid])
             report.updated += 1
 
-        # 4. Copy new songs.
+        # 4. Copy new songs (converted on the way when the settings say so).
         added = {}
+        scratch = tempfile.TemporaryDirectory(prefix="luxtunes-sync-")
         try:
             for i, song in enumerate(to_add):
-                tell(f"Copying “{song.get('name')}”", i, len(to_add))
                 path = find_file(song.get("location"))
                 if path is None:
                     report.problems.append(f"{song.get('name')}: file not found")
                     continue
+                kbps = ipod_plan.transfer_kbps(song, settings)
+                source = path
+                if kbps is not None:
+                    tell(f"Converting “{song.get('name')}”", i, len(to_add))
+                    source = _convert_for_ipod(path, kbps, scratch.name, report, song)
+                    if source is None:
+                        continue
+                tell(f"Copying “{song.get('name')}”", i, len(to_add))
                 pointer = db.new_track()
                 fill_track(pointer.contents, song)
-                pointer.contents.size = os.path.getsize(path)
+                pointer.contents.size = os.path.getsize(source)
+                if source != path:
+                    pointer.contents.bitrate = kbps
+                    pointer.contents.type2 = 0
+                    gpod.set_str(pointer.contents, "filetype", "AAC audio file")
                 try:
-                    db.copy_file(pointer, path)
+                    db.copy_file(pointer, source)
                 except gpod.GpodError as error:
                     db.remove_track(pointer)
                     report.problems.append(f"{song.get('name')}: {error}")
                     continue
+                finally:
+                    if source != path:
+                        try:
+                            os.remove(source)
+                        except OSError:
+                            pass
                 art = artwork_reader.read_embedded_artwork(path)
                 if art:
                     db.set_artwork(pointer, art)
@@ -313,6 +387,8 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
                 report.added += 1
         except SyncCancelled:
             report.cancelled = True        # keep what was copied; still save below
+        finally:
+            scratch.cleanup()
 
         # 5. Playlists: recreate the chosen ones from the library.
         present = {**kept, **added}
@@ -320,6 +396,15 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
             if not (db.is_master(playlist) or db.is_podcasts(playlist)):
                 db.remove_playlist(playlist)
         if not settings.manual:
+            # The Podcasts menu: the special playlist holds every podcast on the iPod.
+            episodes = [pointer for dbid, pointer in present.items()
+                        if library_by_dbid.get(dbid, {}).get("media_kind") == "podcast"]
+            podcasts = db.podcasts_playlist(create=bool(episodes))
+            if podcasts:
+                for pointer in db.playlist_tracks(podcasts):
+                    db.remove_from_playlist(podcasts, pointer)
+                for pointer in episodes:
+                    db.add_to_playlist(podcasts, pointer)
             for entry in the_plan.playlists:
                 members = [present[d] for d in (dbid_of(t) for t in
                            library.load_tracks_by_ids(conn, entry["track_ids"])) if d in present]
@@ -334,6 +419,10 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
         tell("Updating the iPod's database…", can_stop=False)
         db.write()
         name = db.name()
+
+    # 7. Photos: one way, from the chosen folder (never back from the iPod).
+    if not report.cancelled:
+        _sync_photos(ipod, settings, report, progress)
 
     ipod_settings.mark_synced(conn, record.id, name)
     log.info("synced %s: +%d -%d ~%d, %d playlists, plays %s", name, report.added,

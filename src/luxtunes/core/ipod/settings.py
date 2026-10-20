@@ -23,6 +23,7 @@ EPISODE_RULES = ["all", "all unwatched", "1 newest", "3 newest", "5 newest", "10
                  "10 oldest unwatched"]
 PODCAST_RULES = ["all", "all unplayed", "1 most recent", "3 most recent", "5 most recent",
                  "10 most recent", "1 least recent unplayed", "3 least recent unplayed"]
+PODCAST_SCOPES = ["all podcasts", "selected podcasts"]
 BIT_RATES = [128, 192, 256]
 
 
@@ -48,15 +49,23 @@ class SyncSettings:
     movies_auto: bool = True
     movies_rule: str = "all"
     movies: list = field(default_factory=list)      # persistent ids, picked by hand
-    # TV Shows / Podcasts / Books / Games tabs (LuxTunes has none of these yet)
+    # TV Shows tab
     sync_tv: bool = True
     tv_auto: bool = True
     tv_rule: str = "all unwatched"
+    # Podcasts tab: "Automatically include <rule> episodes of <scope>", plus
+    # shows and single episodes ticked by hand
     sync_podcasts: bool = True
     podcasts_auto: bool = True
     podcasts_rule: str = "all unplayed"
+    podcasts_scope: str = "all podcasts"           # or "selected podcasts"
+    podcast_shows: list = field(default_factory=list)       # show names
+    podcast_episodes: list = field(default_factory=list)    # persistent ids
+    # Books tab
     sync_books: bool = True
-    books_mode: str = "all"
+    books_mode: str = "all"                        # "all" or "selected"
+    books: list = field(default_factory=list)      # book keys ("Author\x1fBook")
+    # Games tab (none yet)
     sync_games: bool = True
     # Photos tab
     sync_photos: bool = False
@@ -64,8 +73,6 @@ class SyncSettings:
     photos_mode: str = "all"            # "all" folders or "selected"
     photo_folders: list = field(default_factory=list)
     full_resolution: bool = False
-    # Info tab
-    sync_contacts: bool = False
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True)

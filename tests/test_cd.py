@@ -236,3 +236,35 @@ def test_ripped_audio_is_never_static(tmp_path, monkeypatch, big_endian):
     crossings = sum(1 for a, b in zip(music, music[1:]) if (a < 0) != (b < 0))
     seconds = len(music) / 44100
     assert 800 < crossings / seconds < 960                          # a 440 Hz tone: ~880 a second
+
+
+def test_eject_asks_the_desktop_first_and_checks_the_tray_opened(monkeypatch):
+    import subprocess
+
+    ran = []
+    tray = {"open": False}
+
+    def fake_run(command, **kwargs):
+        ran.append(command[:2])
+        if command[0] == "gio":
+            tray["open"] = True                          # the desktop let go and ejected it
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(cd.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(cd.subprocess, "run", fake_run)
+    monkeypatch.setattr(cd, "drive_status", lambda device: 2 if tray["open"] else cd.CDS_DISC_OK)
+    monkeypatch.setattr(cd, "_eject_ioctl", lambda device: ran.append(["ioctl"]))
+    assert cd.eject("/dev/sr0") is None and ran == [["gio", "mount"]]
+
+    # Nothing gets the tray to stay open: say so instead of pretending it worked.
+    ran.clear()
+    tray["open"] = False
+    monkeypatch.setattr(cd.subprocess, "run",
+                        lambda command, **kw: ran.append(command[:1]) or
+                        subprocess.CompletedProcess(command, 0, "", ""))
+    monkeypatch.setattr(cd.time, "sleep", lambda s: None)
+    clock = iter(range(0, 1000))
+    monkeypatch.setattr(cd.time, "monotonic", lambda: next(clock))
+    message = cd.eject("/dev/sr0")
+    assert message and "file manager" in message
+    assert ran == [["gio"], ["ioctl"], ["eject"]]

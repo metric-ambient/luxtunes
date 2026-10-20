@@ -56,3 +56,17 @@ def test_real_conversion(tmp_path):
     assert details["lyrics"] == "La la" and details["artworks"] == [PNG]
     assert details["tag_version"] == "v2.3"
     assert flac.exists()
+
+
+def test_ipod_video_name_and_settings(tmp_path):
+    from luxtunes.core import convert
+    source = tmp_path / "Film.mkv"
+    source.write_bytes(b"x")
+    assert convert.ipod_video_target(str(source)).name == "Film (iPod).m4v"
+    (tmp_path / "Film (iPod).m4v").write_bytes(b"x")
+    assert convert.ipod_video_target(str(source)).name == "Film (iPod) 2.m4v"
+    command = convert.ipod_video_command("ffmpeg", str(source), "out.m4v")
+    assert command[command.index("-profile:v") + 1] == "baseline"
+    assert "640" in command[command.index("-vf") + 1] and command[-1] == "out.m4v"
+    assert convert.can_make_ipod_video({"media_kind": "movie", "location": "/a.mkv"})
+    assert not convert.can_make_ipod_video({"media_kind": "music", "location": "/a.mp3"})
