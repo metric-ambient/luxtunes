@@ -1,0 +1,47 @@
+# Builds a release whenever a version tag is pushed, e.g.:
+#     git tag v0.3.0 && git push origin v0.3.0
+# The tag must match __version__ in src/luxtunes/__init__.py. The release gets
+# the installable package (a .whl "wheel"), which LuxTunes' Help → Check for
+# Updates… downloads, and packaging/install.sh can install directly.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write          # to create the release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check the tag matches the version
+        run: |
+          version=$(python -c "import ast, pathlib; t = pathlib.Path('src/luxtunes/__init__.py').read_text(); print([n.value.value for n in ast.parse(t).body if isinstance(n, ast.Assign) and n.targets[0].id == '__version__'][0])")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME doesn't match __version__ $version"; exit 1
+          fi
+
+      - name: Run the tests that need no screen or devices
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+          python -m pip install -q mutagen pytest
+          PYTHONPATH=src python -m pytest -q --ignore=tests/test_ui_smoke.py --ignore=tests/test_gpod.py
+
+      - name: Build
+        run: |
+          python -m pip install -q build
+          python -m build
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --title "LuxTunes ${GITHUB_REF_NAME#v}" --generate-notes

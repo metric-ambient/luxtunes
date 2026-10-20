@@ -1,0 +1,416 @@
+"""Audio playback: a play order plus an "Up Next" queue, on top of QMediaPlayer.
+
+How the next song is chosen:
+  1. If "Up Next" has songs, the first one is played (and removed from Up Next).
+  2. Otherwise playback continues in the list you started from (the library
+     or a playlist), right after the last song played from that list.
+
+The player only plays. It announces what happened through signals
+(track_finished, track_skipped, ...) and the main window decides what to
+record in the library.
+"""
+
+from __future__ import annotations
+
+import logging
+import traceback
+
+from PySide6.QtCore import QObject, QTimer, QUrl, Signal
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+
+from luxtunes.core.paths import find_file
+from luxtunes.core.shuffle import artist_key, spread_shuffle
+
+# A skip counts when you jump to the next song within its first 20 seconds.
+SKIP_WINDOW_MS = 20_000
+# "Previous" restarts the current song if it has played longer than this.
+RESTART_THRESHOLD_MS = 3_000
+
+REPEAT_OFF, REPEAT_ALL, REPEAT_ONE = "off", "all", "one"
+
+# Qt's loop counts (QMediaPlayer.setLoops): -1 = forever, 1 = play once.
+LOOP_FOREVER, LOOP_ONCE = -1, 1
+# Repeat One: a jump from the last 2 s of the song back to its first 2 s
+# means it looped, which counts as one play.
+LOOP_DETECT_MS = 2_000
+
+log = logging.getLogger(__name__)
+
+
+class Player(QObject):
+    track_started = Signal(dict)
+    track_finished = Signal(dict)      # played to the end -> counts as a play
+    track_skipped = Signal(dict)       # skipped early -> counts as a skip
+    playing_changed = Signal(bool)
+    position_changed = Signal(int, int)  # position ms, duration ms
+    stopped = Signal()
+    problem = Signal(dict, str)        # track, message (e.g. a file that won't decode)
+    file_missing = Signal(dict)        # you asked for this song, but its file is gone
+    track_unavailable = Signal(dict)   # skipped during continuous play: file is gone
+    relocated = Signal(dict, str)      # found the file under different capitalisation
+    queue_changed = Signal()           # Up Next changed
+    bookmark_changed = Signal(dict, int)  # "Remember playback position": where it stopped (ms)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._audio = QAudioOutput(self)
+        self._player = QMediaPlayer(self)
+        self._player.setAudioOutput(self._audio)
+
+        self._context: list[dict] = []   # the list you started playing from
+        self._order: list[int] = []      # indexes into _context, in play order
+        self._pos = -1                   # where we are in _order
+        self._current: dict | None = None
+        self.up_next: list[dict] = []
+        self._shuffle = False
+        self._repeat = REPEAT_OFF
+        self._repeat_retries = 0      # Repeat One: replays attempted after an error
+        self._last_position = 0
+        self._base_volume = 0.8         # the volume slider, 0..1 (before Volume Adjustment)
+        self._pending_seek = None       # Start Time / bookmark to jump to once the file loads
+        self._ended = False             # the current song reached its end (or Stop Time)
+        self._looping_back = False      # Repeat One jumped from Stop Time back to Start Time
+
+        self._player.mediaStatusChanged.connect(self._on_media_status)
+        self._player.playbackStateChanged.connect(
+            lambda state: self.playing_changed.emit(state == QMediaPlayer.PlaybackState.PlayingState)
+        )
+        self._player.positionChanged.connect(self._on_position)
+        self._player.durationChanged.connect(
+            lambda dur: self.position_changed.emit(self._player.position(), dur)
+        )
+        self._player.errorOccurred.connect(self._on_error)
+
+    # ---- State ------------------------------------------------------------
+
+    @property
+    def current(self) -> dict | None:
+        return self._current
+
+    @property
+    def repeat(self) -> str:
+        return self._repeat
+
+    @repeat.setter
+    def repeat(self, mode: str):
+        """Repeat One uses Qt's own looping: the song simply plays again
+        (no reloading the file, which is what broke the earlier versions)."""
+        self._repeat = mode
+        try:
+            self._player.setLoops(LOOP_FOREVER if mode == REPEAT_ONE else LOOP_ONCE)
+        except AttributeError:   # very old Qt without setLoops: the fallback below handles it
+            pass
+        log.info("repeat set to %s", mode)
+
+    @property
+    def shuffle(self) -> bool:
+        return self._shuffle
+
+    @shuffle.setter
+    def shuffle(self, on: bool):
+        """Turning shuffle on/off takes effect right away, even mid-song."""
+        if on == self._shuffle:
+            return
+        self._shuffle = on
+        if not self._context or self._pos < 0:
+            return
+        current_index = self._order[self._pos]
+        if on:
+            self._order = [current_index] + self._shuffled(
+                [i for i in range(len(self._context)) if i != current_index])
+            self._pos = 0
+        else:
+            # Back to list order, continuing after the song that's playing.
+            self._order = list(range(len(self._context)))
+            self._pos = current_index
+
+    def _shuffled(self, indexes: list[int]) -> list[int]:
+        return spread_shuffle(indexes, key=lambda i: artist_key(self._context[i]))
+
+    @property
+    def is_playing(self) -> bool:
+        return self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+
+    # ---- Controls ---------------------------------------------------------
+
+    def play_queue(self, tracks: list[dict], start: int):
+        """Play `tracks`, starting with tracks[start]. Up Next is kept.
+
+        If tracks[start]'s file is missing, nothing changes: `file_missing`
+        is emitted so the window can ask you to locate it.
+        """
+        if not 0 <= start < len(tracks):
+            return
+        if self._locate(tracks[start]) is None:
+            self.file_missing.emit(tracks[start])
+            return
+        self._context = list(tracks)
+        indexes = list(range(len(tracks)))
+        if self._shuffle:
+            self._order = [start] + self._shuffled([i for i in indexes if i != start])
+            first = 0
+        else:
+            self._order = indexes
+            first = start
+        # A song you double-click plays even if it's unchecked.
+        self._start_at(first, force_first=True)
+
+    def toggle(self):
+        if self.is_playing:
+            self._player.pause()
+        elif self._current is not None:
+            self._player.play()
+
+    def next(self):
+        track = self._current
+        if track is None:
+            return
+        if self._player.position() < SKIP_WINDOW_MS:
+            self.track_skipped.emit(track)
+        self._advance("Next pressed")
+
+    def previous(self):
+        if self._current is None:
+            return
+        if self._player.position() > RESTART_THRESHOLD_MS or self._pos <= 0:
+            self._player.setPosition(self._start_of(self._current))
+        else:
+            self._start_at(self._pos - 1, step=-1)
+
+    def seek(self, ms: int):
+        self._player.setPosition(ms)
+
+    def set_video_output(self, widget) -> None:
+        """Where movies and TV shows draw their picture (the video window)."""
+        self._player.setVideoOutput(widget)
+
+    def set_volume(self, percent: int):
+        self._base_volume = max(0, min(100, percent)) / 100
+        self.apply_volume()
+
+    def apply_volume(self):
+        """Slider volume, adjusted by the song's Get Info "Volume Adjustment"
+        (-100% = silent, +100% = up to twice as loud, capped at full volume)."""
+        adjust = (self._current or {}).get("volume_adjustment") or 0
+        self._audio.setVolume(max(0.0, min(1.0, self._base_volume * (1 + adjust / 100))))
+
+    def stop(self):
+        self._remember_position()
+        self._player.stop()
+        self._player.setSource(QUrl())
+        self._current = None
+        self._context, self._order, self._pos = [], [], -1
+        self.stopped.emit()
+
+    def refresh_track(self, track_id: int, fields: dict):
+        """A song's details changed (e.g. its file was moved by "Keep LuxTunes
+        Media folder organized"): update every copy the player holds."""
+        for track in (self._current, *self._context, *self.up_next):
+            if track is not None and track.get("id") == track_id:
+                track.update(fields)
+
+    # ---- Up Next ------------------------------------------------------------
+
+    def add_to_up_next(self, tracks: list[dict]):
+        self.up_next.extend(tracks)
+        self.queue_changed.emit()
+
+    def remove_from_up_next(self, indexes: list[int]):
+        for i in sorted(set(indexes), reverse=True):
+            if 0 <= i < len(self.up_next):
+                del self.up_next[i]
+        self.queue_changed.emit()
+
+    def play_from_up_next(self, index: int):
+        """Jump to a song in Up Next (songs before it are dropped from the queue)."""
+        if not 0 <= index < len(self.up_next):
+            return
+        track = self.up_next[index]
+        if self._locate(track) is None:
+            self.file_missing.emit(track)
+            return
+        del self.up_next[: index + 1]
+        self.queue_changed.emit()
+        self._play(track)
+
+    def forget_tracks(self, track_ids: set[int]):
+        """Songs were deleted from the library: drop them from Up Next and the play order."""
+        before = len(self.up_next)
+        self.up_next = [t for t in self.up_next if t["id"] not in track_ids]
+        if len(self.up_next) != before:
+            self.queue_changed.emit()
+        for track in self._context:          # skip them if we reach them later
+            if track["id"] in track_ids:
+                track["_deleted"] = True
+        if self._current is not None and self._current["id"] in track_ids:
+            self.stop()
+
+    # ---- Internals --------------------------------------------------------
+
+    def _play(self, track: dict):
+        # Diagnostic: which code asked for this song (most recent call first).
+        callers = " <- ".join(f.name for f in reversed(traceback.extract_stack(limit=7)[:-1]))
+        log.info("starting %r (repeat=%s) via %s", track.get("name"), self._repeat, callers)
+        self._remember_position()
+        self._current = track
+        self._last_position = 0
+        self._ended = False
+        self._looping_back = False
+        start = self._start_of(track)
+        if track.get("bookmarkable") and track.get("bookmark_time"):
+            start = max(start, track["bookmark_time"])     # pick up where you left off
+        self._pending_seek = start or None
+        self.apply_volume()
+        self._player.setSource(QUrl.fromLocalFile(track["location"]))
+        self._player.play()
+        self.track_started.emit(track)
+
+    @staticmethod
+    def _start_of(track: dict) -> int:
+        return track.get("start_time") or 0
+
+    def _remember_position(self):
+        """Leaving a "Remember playback position" song: save where it was
+        (or the start again, if it played to the end)."""
+        track = self._current
+        if track is None or not track.get("bookmarkable"):
+            return
+        position = 0 if self._ended else self._player.position()
+        if position < 1000:
+            position = 0
+        if position != (track.get("bookmark_time") or 0):
+            track["bookmark_time"] = position
+            self.bookmark_changed.emit(track, position)
+
+    def _advance(self, reason: str):
+        """Go to the next song: Up Next first, then the list we were playing."""
+        log.info("moving to the next song (%s; repeat=%s)", reason, self._repeat)
+        while self.up_next:
+            track = self.up_next.pop(0)
+            self.queue_changed.emit()
+            if self._locate(track) is not None:
+                self._play(track)
+                return
+            self.track_unavailable.emit(track)
+        self._start_at(self._pos + 1)
+
+    def _start_at(self, pos: int, step: int = 1, force_first: bool = False):
+        """Play the first playable song from `pos` onward (or backward) in the list."""
+        wrapped = False
+        first = True
+        while True:
+            if not 0 <= pos < len(self._order):
+                if self.repeat == REPEAT_ALL and step > 0 and not wrapped and self._order:
+                    pos, wrapped = 0, True
+                    if self._shuffle:  # a fresh shuffle for each pass through the list
+                        self._order = self._shuffled(list(range(len(self._context))))
+                    continue
+                self.stop()
+                return
+            track = self._context[self._order[pos]]
+            if track.get("_deleted"):
+                pass
+            elif self._locate(track) is None:
+                self.track_unavailable.emit(track)
+            elif first and force_first:
+                self._pos = pos
+                self._play(track)
+                return
+            elif track.get("enabled", 1) and not (self._shuffle and track.get("skip_when_shuffling")):
+                self._pos = pos
+                self._play(track)
+                return
+            first = False
+            pos += step
+
+    def _locate(self, track: dict) -> str | None:
+        """The song's file path if it exists (fixing capitalisation if needed)."""
+        location = find_file(track.get("location"))
+        if location is not None and location != track.get("location"):
+            track["location"] = location
+            self.relocated.emit(track, location)
+        return location
+
+    def _on_position(self, position: int):
+        duration = self._player.duration()
+        if self._pending_seek is not None:
+            # Playing, but the jump to Start Time / the remembered position
+            # hasn't happened yet: do it now.
+            seek, self._pending_seek = self._pending_seek, None
+            self._player.setPosition(seek)
+            return
+        track = self._current
+        stop_at = track.get("stop_time") if track else None
+        if self._looping_back and (not stop_at or position < stop_at):
+            self._looping_back = False
+        if stop_at and position >= stop_at and not self._ended and not self._looping_back:
+            self._reached_end(track)        # Get Info's Stop Time: the song ends here
+            return
+        if (self._repeat == REPEAT_ONE and self._current is not None and duration > 0
+                and self._last_position >= duration - LOOP_DETECT_MS
+                and position < LOOP_DETECT_MS):
+            # Qt looped the song (Repeat One): that's one full play.
+            log.info("repeat one: looped %r", self._current.get("name"))
+            self.track_finished.emit(self._current)
+            if self._start_of(self._current):
+                self._player.setPosition(self._start_of(self._current))   # loop from Start Time
+        self._last_position = position
+        if position > LOOP_DETECT_MS:
+            self._repeat_retries = 0      # it's playing fine again
+        self.position_changed.emit(position, duration)
+
+    def _on_media_status(self, status):
+        if status in (QMediaPlayer.MediaStatus.LoadedMedia, QMediaPlayer.MediaStatus.BufferedMedia):
+            if self._pending_seek is not None:
+                seek, self._pending_seek = self._pending_seek, None
+                self._player.setPosition(seek)       # Start Time / remembered position
+            return
+        if status != QMediaPlayer.MediaStatus.EndOfMedia:
+            return
+        track = self._current
+        if track is None:
+            return
+        if self._repeat == REPEAT_ONE and self.is_playing:
+            return  # Qt is looping the song; the loop is counted in _on_position
+        if self._ended:
+            return  # already handled at its Stop Time
+        self._reached_end(track)
+
+    def _reached_end(self, track: dict):
+        """The song played to its end (or its Stop Time): count a play, move on."""
+        log.info("end of song %r (repeat=%s)", track.get("name"), self._repeat)
+        self.track_finished.emit(track)
+        if self._repeat == REPEAT_ONE and track.get("stop_time"):
+            self._last_position = 0
+            self._looping_back = True
+            self._player.setPosition(self._start_of(track))   # loop the Start-Stop part
+            return
+        self._ended = True
+        if self._repeat == REPEAT_ONE:
+            # Only reached if Qt's looping didn't take effect. Restart the song
+            # by fully unloading and reloading it, once Qt is done with this event.
+            QTimer.singleShot(0, lambda t=track: self._replay(t))
+        else:
+            self._advance("song ended")
+
+    def _replay(self, track: dict):
+        if self._current is track and self._locate(track) is not None:
+            log.info("repeat one: reloading %r", track.get("name"))
+            self._player.setSource(QUrl())   # unload first: Qt ignores re-setting the same file
+            self._play(track)
+
+    def _on_error(self, error, message):
+        if error == QMediaPlayer.Error.NoError:
+            return
+        track = self._current
+        log.warning("playback error %s on %r: %s", error, track and track.get("name"), message)
+        if track is None:
+            return
+        if self._repeat == REPEAT_ONE and self._repeat_retries < 2:
+            # Repeat One never moves on by itself: try the same song again.
+            # (Only after 2 failed attempts in a row is the file treated as broken.)
+            self._repeat_retries += 1
+            QTimer.singleShot(0, lambda t=track: self._replay(t))
+            return
+        self.problem.emit(track, message or "could not be played")
+        self._advance("playback error")

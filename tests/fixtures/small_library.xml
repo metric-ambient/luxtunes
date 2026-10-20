@@ -1,0 +1,346 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Application Version</key>
+	<string>10.6.3</string>
+	<key>Date</key>
+	<date>2026-09-24T05:27:15Z</date>
+	<key>Features</key>
+	<integer>5</integer>
+	<key>Library Persistent ID</key>
+	<string>CCCC000000000001</string>
+	<key>Major Version</key>
+	<integer>1</integer>
+	<key>Minor Version</key>
+	<integer>1</integer>
+	<key>Music Folder</key>
+	<string>file://localhost/D:/Music/iTunes/iTunes%20Media/</string>
+	<key>Playlists</key>
+	<array>
+		<dict>
+			<key>All Items</key>
+			<true/>
+			<key>Master</key>
+			<true/>
+			<key>Name</key>
+			<string>Library</string>
+			<key>Playlist ID</key>
+			<integer>1</integer>
+			<key>Playlist Items</key>
+			<array>
+				<dict>
+					<key>Track ID</key>
+					<integer>101</integer>
+				</dict>
+				<dict>
+					<key>Track ID</key>
+					<integer>102</integer>
+				</dict>
+				<dict>
+					<key>Track ID</key>
+					<integer>103</integer>
+				</dict>
+				<dict>
+					<key>Track ID</key>
+					<integer>104</integer>
+				</dict>
+			</array>
+			<key>Playlist Persistent ID</key>
+			<string>BBBB000000000001</string>
+			<key>Visible</key>
+			<false/>
+		</dict>
+		<dict>
+			<key>All Items</key>
+			<true/>
+			<key>Distinguished Kind</key>
+			<integer>4</integer>
+			<key>Music</key>
+			<true/>
+			<key>Name</key>
+			<string>Music</string>
+			<key>Playlist ID</key>
+			<integer>2</integer>
+			<key>Playlist Items</key>
+			<array>
+				<dict>
+					<key>Track ID</key>
+					<integer>101</integer>
+				</dict>
+				<dict>
+					<key>Track ID</key>
+					<integer>102</integer>
+				</dict>
+				<dict>
+					<key>Track ID</key>
+					<integer>103</integer>
+				</dict>
+			</array>
+			<key>Playlist Persistent ID</key>
+			<string>BBBB000000000002</string>
+		</dict>
+		<dict>
+			<key>All Items</key>
+			<true/>
+			<key>Distinguished Kind</key>
+			<integer>201</integer>
+			<key>Name</key>
+			<string>My Top Rated</string>
+			<key>Playlist ID</key>
+			<integer>3</integer>
+			<key>Playlist Items</key>
+			<array>
+				<dict>
+					<key>Track ID</key>
+					<integer>101</integer>
+				</dict>
+			</array>
+			<key>Playlist Persistent ID</key>
+			<string>BBBB000000000003</string>
+			<key>Smart Criteria</key>
+			<data>
+			U0xzdAAB
+			</data>
+			<key>Smart Info</key>
+			<data>
+			AQA=
+			</data>
+		</dict>
+		<dict>
+			<key>All Items</key>
+			<true/>
+			<key>Name</key>
+			<string>Road Trip</string>
+			<key>Playlist ID</key>
+			<integer>4</integer>
+			<key>Playlist Items</key>
+			<array>
+				<dict>
+					<key>Track ID</key>
+					<integer>103</integer>
+				</dict>
+				<dict>
+					<key>Track ID</key>
+					<integer>101</integer>
+				</dict>
+				<dict>
+					<key>Track ID</key>
+					<integer>103</integer>
+				</dict>
+			</array>
+			<key>Playlist Persistent ID</key>
+			<string>BBBB000000000004</string>
+		</dict>
+		<dict>
+			<key>All Items</key>
+			<true/>
+			<key>Name</key>
+			<string>Empty Playlist</string>
+			<key>Playlist ID</key>
+			<integer>5</integer>
+			<key>Playlist Persistent ID</key>
+			<string>BBBB000000000005</string>
+		</dict>
+	</array>
+	<key>Show Content Ratings</key>
+	<true/>
+	<key>Tracks</key>
+	<dict>
+		<key>101</key>
+		<dict>
+			<key>Album</key>
+			<string>First Album</string>
+			<key>Album Artist</key>
+			<string>Fake Band</string>
+			<key>Album Rating</key>
+			<integer>100</integer>
+			<key>Album Rating Computed</key>
+			<true/>
+			<key>Artist</key>
+			<string>Fake Band</string>
+			<key>Artwork Count</key>
+			<integer>1</integer>
+			<key>Bit Rate</key>
+			<integer>320</integer>
+			<key>Comments</key>
+			<string>A comment</string>
+			<key>Date Added</key>
+			<date>2019-10-07T03:12:11Z</date>
+			<key>Date Modified</key>
+			<date>2015-08-11T05:11:48Z</date>
+			<key>File Folder Count</key>
+			<integer>5</integer>
+			<key>Genre</key>
+			<string>Rock</string>
+			<key>Kind</key>
+			<string>MPEG audio file</string>
+			<key>Library Folder Count</key>
+			<integer>1</integer>
+			<key>Location</key>
+			<string>file://localhost/D:/Music/iTunes/iTunes%20Media/Music/Fake%20Band/First%20Album/01%20Opening%20Song.mp3</string>
+			<key>Name</key>
+			<string>Opening Song</string>
+			<key>Persistent ID</key>
+			<string>AAAA000000000001</string>
+			<key>Play Count</key>
+			<integer>12</integer>
+			<key>Play Date</key>
+			<integer>3813599984</integer>
+			<key>Play Date UTC</key>
+			<date>2024-11-05T05:19:44Z</date>
+			<key>Rating</key>
+			<integer>100</integer>
+			<key>Sample Rate</key>
+			<integer>44100</integer>
+			<key>Size</key>
+			<integer>1000</integer>
+			<key>Skip Count</key>
+			<integer>2</integer>
+			<key>Skip Date</key>
+			<date>2023-01-02T03:04:05Z</date>
+			<key>Total Time</key>
+			<integer>180000</integer>
+			<key>Track Count</key>
+			<integer>2</integer>
+			<key>Track ID</key>
+			<integer>101</integer>
+			<key>Track Number</key>
+			<integer>1</integer>
+			<key>Track Type</key>
+			<string>File</string>
+			<key>Year</key>
+			<integer>2004</integer>
+		</dict>
+		<key>102</key>
+		<dict>
+			<key>Album</key>
+			<string>First Album</string>
+			<key>Artist</key>
+			<string>Fake Band</string>
+			<key>Bit Rate</key>
+			<integer>320</integer>
+			<key>Date Added</key>
+			<date>2019-10-07T03:12:11Z</date>
+			<key>Date Modified</key>
+			<date>2015-08-11T05:11:48Z</date>
+			<key>Disc Count</key>
+			<integer>1</integer>
+			<key>Disc Number</key>
+			<integer>1</integer>
+			<key>File Folder Count</key>
+			<integer>5</integer>
+			<key>Kind</key>
+			<string>MPEG audio file</string>
+			<key>Library Folder Count</key>
+			<integer>1</integer>
+			<key>Location</key>
+			<string>file://localhost/D:/Music/iTunes/iTunes%20Media/Music/Fake%20Band/First%20Album/02%20Second%20Song.mp3</string>
+			<key>Name</key>
+			<string>Second Song</string>
+			<key>Persistent ID</key>
+			<string>AAAA000000000002</string>
+			<key>Rating</key>
+			<integer>80</integer>
+			<key>Rating Computed</key>
+			<true/>
+			<key>Sample Rate</key>
+			<integer>44100</integer>
+			<key>Size</key>
+			<integer>1000</integer>
+			<key>Total Time</key>
+			<integer>180000</integer>
+			<key>Track ID</key>
+			<integer>102</integer>
+			<key>Track Number</key>
+			<integer>2</integer>
+			<key>Track Type</key>
+			<string>File</string>
+		</dict>
+		<key>103</key>
+		<dict>
+			<key>Album</key>
+			<string>Sampler</string>
+			<key>Artist</key>
+			<string>Someone Else</string>
+			<key>Bit Rate</key>
+			<integer>320</integer>
+			<key>Compilation</key>
+			<true/>
+			<key>Date Added</key>
+			<date>2019-10-07T03:12:11Z</date>
+			<key>Date Modified</key>
+			<date>2015-08-11T05:11:48Z</date>
+			<key>Disc Count</key>
+			<integer>2</integer>
+			<key>Disc Number</key>
+			<integer>1</integer>
+			<key>File Folder Count</key>
+			<integer>5</integer>
+			<key>Kind</key>
+			<string>MPEG audio file</string>
+			<key>Library Folder Count</key>
+			<integer>1</integer>
+			<key>Location</key>
+			<string>file://localhost/D:/Music/iTunes/iTunes%20Media/Music/Compilations/Sampler/1-05%20Various%20Track.mp3</string>
+			<key>Name</key>
+			<string>Various Track</string>
+			<key>Persistent ID</key>
+			<string>AAAA000000000003</string>
+			<key>Sample Rate</key>
+			<integer>44100</integer>
+			<key>Size</key>
+			<integer>1000</integer>
+			<key>Some Future Key</key>
+			<string>kept</string>
+			<key>Total Time</key>
+			<integer>180000</integer>
+			<key>Track ID</key>
+			<integer>103</integer>
+			<key>Track Number</key>
+			<integer>5</integer>
+			<key>Track Type</key>
+			<string>File</string>
+		</dict>
+		<key>104</key>
+		<dict>
+			<key>Album</key>
+			<string></string>
+			<key>Artist</key>
+			<string>Director</string>
+			<key>Bit Rate</key>
+			<integer>320</integer>
+			<key>Date Added</key>
+			<date>2019-10-07T03:12:11Z</date>
+			<key>Date Modified</key>
+			<date>2015-08-11T05:11:48Z</date>
+			<key>File Folder Count</key>
+			<integer>-1</integer>
+			<key>Has Video</key>
+			<true/>
+			<key>Kind</key>
+			<string>MPEG-4 video file</string>
+			<key>Library Folder Count</key>
+			<integer>-1</integer>
+			<key>Location</key>
+			<string>file://localhost/E:/Users/Someone/Videos/Fake%20Movie.m4v</string>
+			<key>Movie</key>
+			<true/>
+			<key>Name</key>
+			<string>Fake Movie</string>
+			<key>Persistent ID</key>
+			<string>AAAA000000000004</string>
+			<key>Sample Rate</key>
+			<integer>44100</integer>
+			<key>Size</key>
+			<integer>1000</integer>
+			<key>Total Time</key>
+			<integer>180000</integer>
+			<key>Track ID</key>
+			<integer>104</integer>
+			<key>Track Type</key>
+			<string>File</string>
+		</dict>
+	</dict>
+</dict>
+</plist>
