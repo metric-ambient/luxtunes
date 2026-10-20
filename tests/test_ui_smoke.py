@@ -46,6 +46,10 @@ def window(tmp_path, monkeypatch):
     monkeypatch.setattr(ipod_device, "mounted_filesystems",
                         lambda mounts_file=None: [] if mounts_file is None else real_mounts(mounts_file))
     monkeypatch.setattr(ipod_device, "apple_usb_connected", lambda *a, **k: False)
+    from luxtunes.core.android import device as android_device       # nor a phone
+    monkeypatch.setattr(android_device, "mounted_names", lambda folder=None: set())
+    monkeypatch.setattr(android_device, "find_phones", lambda folder=None: [])
+    monkeypatch.setattr(android_device, "unmounted_phones", lambda: [])
     from luxtunes.core import db
     from luxtunes.importer.itunes_xml import import_library
     from luxtunes.ui.main_window import MainWindow
@@ -1227,3 +1231,82 @@ def test_checkboxes_are_easy_to_see_in_both_themes(window):
         assert ("check-light.svg" if dark else "check-dark.svg") in sheet
         window.grab()                                       # draws with the new style
     window._toggle_dark_mode(False)
+
+
+def _fake_phone(tmp_path):
+    from luxtunes.core.android.device import Phone
+
+    storage = tmp_path / "phone" / "Internal shared storage"
+    storage.mkdir(parents=True)
+    return Phone(str(tmp_path / "phone"), "Google", "Pixel 7", "TESTSERIAL",
+                 {"Internal shared storage": str(storage)})
+
+
+def test_a_phone_shows_up_and_syncs(window, tmp_path, monkeypatch):
+    import time
+
+    from PySide6.QtWidgets import QApplication
+
+    from luxtunes.core.android import device as android_device
+    from luxtunes.ui.widgets import SOURCE_MUSIC
+
+    from PySide6.QtWidgets import QMessageBox
+
+    from luxtunes.core import sounds
+
+    # The test library's songs aren't real files: the sync lists them as problems.
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: warnings.append(a[2])))
+    monkeypatch.setattr(sounds, "play_done_sound", lambda: False)
+    phone = _fake_phone(tmp_path)
+    monkeypatch.setattr(android_device, "mounted_names", lambda folder=None: {"mtp:host=x"})
+    monkeypatch.setattr(android_device, "find_phones", lambda folder=None: [phone])
+    window._scan_devices()
+    assert phone.key in window._phones
+    assert window.sidebar.select_source(("device", phone.key))
+    QApplication.processEvents()
+    page = window.device_page
+    assert page.is_android and not page.picture.isVisible() and page.storage.isVisible()
+    assert page.delete_unselected.isVisible() and page.delete_unselected.isChecked()
+    assert window.sync_action.isEnabled() and "Pixel 7" in window.sync_action.text()
+    assert window.eject_action.text() == "Eject Phone"
+
+    window._sync_device(phone)
+    deadline = time.time() + 30
+    while window._sync_worker is not None and time.time() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.02)
+    assert window._sync_worker is None
+    root = tmp_path / "phone" / "Internal shared storage" / "LuxTunes"
+    assert (root / "library.db").is_file()
+    assert (root / "LuxTunes Media").is_dir()
+
+    # A rename in the sidebar sticks, even after the phone is seen again.
+    window._on_device_renamed(phone.key, "My Phone")
+    window._phones.clear()
+    window._phone_names = set()
+    window._scan_devices()
+    assert window._device_name(window._phones[phone.key]) == "My Phone"
+
+    # Unplugged: it leaves the sidebar, and the music library is shown.
+    monkeypatch.setattr(android_device, "mounted_names", lambda folder=None: set())
+    monkeypatch.setattr(android_device, "find_phones", lambda folder=None: [])
+    window._scan_devices()
+    QApplication.processEvents()
+    assert not window._phones and window._current_source == SOURCE_MUSIC
+
+
+def test_ejecting_a_phone_doesnt_open_it_again(window, tmp_path, monkeypatch):
+    from luxtunes.core.android import device as android_device
+
+    phone = _fake_phone(tmp_path)
+    window._phones[phone.key] = phone
+    ejected, opened = [], []
+    monkeypatch.setattr(android_device, "eject", lambda p: ejected.append(p) or None)
+    monkeypatch.setattr(android_device, "unmounted_phones", lambda: [phone.uri])
+    monkeypatch.setattr(android_device, "mount", lambda uri: opened.append(uri))
+    monkeypatch.setattr(window, "_scan_devices", lambda: None)
+    window._eject_device(phone.key)
+    assert ejected == [phone]
+    window._auto_mount_phones()
+    assert opened == []

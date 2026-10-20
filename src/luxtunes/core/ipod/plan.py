@@ -71,7 +71,8 @@ class Choices:
     books: list[tuple[str, str]] = field(default_factory=list)   # (key, "Book — Author")
 
 
-def library_choices(conn: sqlite3.Connection) -> Choices:
+def library_choices(conn: sqlite3.Connection, phone: bool = False) -> Choices:
+    """phone: an Android device, which plays any video format."""
     music = library.load_tracks(conn, media_kind="music")
     artists = sorted({artist_of(t) for t in music if artist_of(t)}, key=sort_text)
     albums = {}
@@ -79,7 +80,8 @@ def library_choices(conn: sqlite3.Connection) -> Choices:
         if t.get("album"):
             albums[album_key(t)] = f"{artist_of(t)} - {t['album']}" if artist_of(t) else t["album"]
     genres = sorted({t["genre"] for t in music if t.get("genre")}, key=str.casefold)
-    movies = sorted([t for t in library.load_tracks(conn, media_kind="movie") if ipod_can_play(t)],
+    movies = sorted([t for t in library.load_tracks(conn, media_kind="movie")
+                     if phone or ipod_can_play(t)],
                     key=lambda t: sort_text(t.get("name")))
     episodes = _newest_first(library.load_tracks(conn, media_kind="podcast"))
     shows = sorted({podcast_show(e) for e in episodes}, key=sort_text)
@@ -144,9 +146,10 @@ def transfer_kbps(song: dict, settings: SyncSettings) -> int | None:
     return None
 
 
-def transfer_size(song: dict, settings: SyncSettings) -> int:
-    """About how many bytes the song takes on the iPod."""
-    kbps = transfer_kbps(song, settings)
+def transfer_size(song: dict, settings: SyncSettings, kbps_for=None) -> int:
+    """About how many bytes the song takes on the device. kbps_for: the
+    device's own conversion rule (default: the iPod's)."""
+    kbps = (kbps_for or transfer_kbps)(song, settings)
     if kbps is None:
         return song.get("size") or 0
     return (song.get("total_time") or 0) * kbps // 8      # ms × kbit/s ÷ 8 = bytes
@@ -208,13 +211,16 @@ def _podcast_rule(rule: str, episodes: list[dict]) -> list[dict]:
 
 
 def build_plan(conn: sqlite3.Connection, settings: SyncSettings,
-               free_space: int | None = None, seed: int | None = None) -> Plan:
-    """The plan for one sync. free_space (bytes the iPod could hold for
-    songs) is only needed for "Automatically fill free space"."""
+               free_space: int | None = None, seed: int | None = None, kbps_for=None,
+               phone: bool = False) -> Plan:
+    """The plan for one sync. free_space (bytes the device could hold for
+    songs) is only needed for "Automatically fill free space". phone: an
+    Android device, which plays any video format."""
     plan = Plan()
+    playable = (lambda t: True) if phone else ipod_can_play
     music = library.load_tracks(conn, media_kind="music")
-    movies = [t for t in library.load_tracks(conn, media_kind="movie") if ipod_can_play(t)]
-    episodes = [t for t in library.load_tracks(conn, media_kind="tvshow") if ipod_can_play(t)]
+    movies = [t for t in library.load_tracks(conn, media_kind="movie") if playable(t)]
+    episodes = [t for t in library.load_tracks(conn, media_kind="tvshow") if playable(t)]
     podcasts = library.load_tracks(conn, media_kind="podcast")
     books = library.load_tracks(conn, media_kind="audiobook")
     if settings.only_checked:
@@ -232,11 +238,18 @@ def build_plan(conn: sqlite3.Connection, settings: SyncSettings,
         else:
             chosen = set(settings.playlists)
             chosen_lists = [p for p in playlists if p["persistent_id"] in chosen]
-            allowed = {t["id"]: t for t in music}
-            for p in chosen_lists:
-                for track_id in library.playlist_track_ids(conn, p["id"]):
-                    if track_id in allowed:
-                        wanted[track_id] = allowed[track_id]
+        # Everything in a chosen playlist goes, whether or not its artist, album
+        # or genre is chosen, and whatever it is (videos, podcasts, books too),
+        # so choosing just the playlists you listen to is enough. ("All songs"
+        # already has every song; its playlists don't bring videos along.)
+        kinds = (music,) if settings.music_mode == "all" else \
+            (music, movies, episodes, podcasts, books)
+        allowed = {t["id"]: t for kind in kinds for t in kind}
+        for p in chosen_lists:
+            for track_id in library.playlist_track_ids(conn, p["id"]):
+                if track_id in allowed:
+                    wanted[track_id] = allowed[track_id]
+        if settings.music_mode != "all":
             artists, albums, genres = set(settings.artists), set(settings.albums), set(settings.genres)
             for t in music:
                 if artist_of(t) in artists or album_key(t) in albums or t.get("genre") in genres:
@@ -282,7 +295,7 @@ def build_plan(conn: sqlite3.Connection, settings: SyncSettings,
             plan.tracks.append(track)
     # Audio = songs, podcasts and audiobooks; video = movies and TV shows.
     audio = [t for t in plan.tracks if (t.get("media_kind") or "music") in library.AUDIO_KINDS]
-    plan.music_bytes = sum(transfer_size(t, settings) for t in audio)
+    plan.music_bytes = sum(transfer_size(t, settings, kbps_for) for t in audio)
     plan.video_bytes = sum(t.get("size") or 0 for t in plan.tracks
                            if (t.get("media_kind") or "music") not in library.AUDIO_KINDS)
 

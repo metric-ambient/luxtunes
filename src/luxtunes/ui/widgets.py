@@ -422,6 +422,11 @@ def device_icon() -> QIcon:
                        QStyle.StandardPixmap.SP_DriveHDIcon)
 
 
+def phone_icon() -> QIcon:
+    return themed_icon(["phone", "phone-symbolic", "multimedia-player", "drive-removable-media"],
+                       QStyle.StandardPixmap.SP_DriveHDIcon)
+
+
 def cd_icon() -> QIcon:
     return themed_icon(["media-optical-audio", "media-optical-cd-audio", "media-optical"],
                        QStyle.StandardPixmap.SP_DriveCDIcon)
@@ -594,12 +599,13 @@ class Sidebar(QTreeWidget):
             droppable=True)
         self.set_queue_length(queue_length)
 
-        if devices:     # iPods (rename like a playlist) and audio CDs ("cd:..." keys): (key, name)
+        if devices:     # iPods and phones (rename like a playlist) and audio CDs: (key, name)
             section = self._section("DEVICES")
             for key, name in devices:
                 is_cd = key.startswith("cd:")
-                self._item(section, name, ("device", key), cd_icon() if is_cd else device_icon(),
-                           editable=not is_cd)
+                icon = cd_icon() if is_cd else \
+                    phone_icon() if key.startswith("android:") else device_icon()
+                self._item(section, name, ("device", key), icon, editable=not is_cd)
 
         section = self._section("PLAYLISTS")
         by_persistent_id = {}
