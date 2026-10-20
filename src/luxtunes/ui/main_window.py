@@ -173,6 +173,8 @@ class MainWindow(QMainWindow):
         self._cd_pending: dict[str, str] = {}   # what to do once a new CD's names are in
         self._asking_import = False             # "Import this CD?" is showing
         self._import_worker = None              # the CD import running in the background
+        self._add_worker = None                 # File → Add to Library running in the background
+        self._add_playlist = None               # the playlist shown when it started
         self._import_key: str | None = None
         self._import_eject = False
         self._import_failures: list[str] = []
@@ -2323,6 +2325,7 @@ class MainWindow(QMainWindow):
         self._sync_name = record.name or ipod.name
         worker.progress.connect(self._on_sync_progress)
         worker.confirm_needed.connect(self._confirm_sync)
+        worker.playlists_confirm_needed.connect(self._confirm_phone_deletions)
         worker.succeeded.connect(self._sync_finished)
         worker.failed.connect(self._sync_failed)
         worker.finished.connect(self._sync_thread_done)
@@ -2348,6 +2351,8 @@ class MainWindow(QMainWindow):
             self._stop_import()
         elif key == "sync":
             self._stop_sync()
+        elif key == "add":
+            self._stop_adding()
 
     def _stop_sync(self):
         if self._sync_worker is not None:
@@ -2367,6 +2372,24 @@ class MainWindow(QMainWindow):
         from luxtunes.ui.sync_confirm_dialog import SyncConfirmDialog
         dialog = SyncConfirmDialog(self._sync_name, adding, list(removals), self)
         worker.answer(dialog.exec() == QDialog.DialogCode.Accepted)
+
+    def _confirm_phone_deletions(self, names):
+        """The phone deleted some playlists: delete them here too? Asked every
+        time (a tap on the phone mustn't remove a long-kept playlist unseen).
+        No keeps them, and they go back to the phone."""
+        worker = self._sync_worker
+        if worker is None:
+            return
+        shown = "\n".join(f"• {n}" for n in names[:15]) + ("\n…" if len(names) > 15 else "")
+        box = QMessageBox(QMessageBox.Icon.Question, "Sync",
+                          f"These playlists were deleted on “{self._sync_name}”:\n\n{shown}\n\n"
+                          "Delete them from your library too? Their songs stay in the library. "
+                          "Keep them, and they go back to the phone.", parent=self)
+        delete = box.addButton("Delete Playlists", QMessageBox.ButtonRole.DestructiveRole)
+        keep = box.addButton("Keep Playlists", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(keep)
+        box.exec()
+        worker.answer(box.clickedButton() is delete)
 
     def _sync_finished(self, report):
         ipod = self._sync_ipod
@@ -2395,6 +2418,13 @@ class MainWindow(QMainWindow):
             if appearance(self.settings)["sync_done_sound"]:
                 from luxtunes.core import sounds
                 sounds.play_done_sound()            # the desktop's "done" sound
+        changes = getattr(report, "phone_playlists", None)
+        if changes is not None and (changes.created or changes.updated or changes.deleted):
+            parts = [f"{len(v)} {w}" for v, w in ((changes.created, "new"),
+                                                  (changes.updated, "changed"),
+                                                  (changes.deleted, "deleted")) if v]
+            self.statusBar().showMessage(f"Playlists from “{self._sync_name}”: "
+                                         + ", ".join(parts) + ".", 8000)
         if report.stats and report.stats.plays:
             self.statusBar().showMessage(
                 f"{report.stats.plays:,} plays were read from “{self._sync_name}”.", 8000)
@@ -2922,35 +2952,65 @@ class MainWindow(QMainWindow):
             self._add_paths([folder])
 
     def _add_paths(self, paths: list[str]):
-        progress = QProgressDialog("Adding files…", "Stop", 0, 0, self)
-        progress.setWindowTitle("Add To Library")
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(400)
-
-        def step(done, total):
-            progress.setMaximum(total)
-            progress.setValue(done)
-            QApplication.processEvents()
-            return not progress.wasCanceled()
-
-        result = add_files.add_paths(self.conn, paths, step)
-        progress.close()
+        """Add files and folders in the background; progress (and the file it's
+        on) shows in the Now Playing display, with ✕ to stop. What's added so
+        far is kept, and adding the same folder again carries on from there."""
+        if self._add_worker is not None:
+            QMessageBox.information(self, "Add To Library",
+                                    "LuxTunes is still adding files. Wait for it to finish, "
+                                    "or stop it with ✕ in the display.")
+            return
+        from luxtunes.ui.add_worker import AddWorker
         # Adding while one of your playlists is shown adds to it too.
         playlist = self._current_playlist()
-        if playlist and library.is_user_playlist(playlist) and result.added:
-            library.add_to_playlist(self.conn, playlist["id"], result.added)
+        self._add_playlist = playlist["id"] if playlist and library.is_user_playlist(playlist) \
+            else None
+        db_path = self.conn.execute("PRAGMA database_list").fetchone()[2]
+        worker = AddWorker(db_path, paths, self)
+        self._add_worker = worker
+        worker.searching.connect(
+            lambda count: self.lcd.update_task("add", None, f"Looking for music… {count:,} found",
+                                               None))
+        worker.progress.connect(self._on_add_progress)
+        worker.done.connect(self._on_add_done)
+        worker.finished.connect(worker.deleteLater)
+        self.lcd.start_task("add", "Adding to Library", "Looking for music…", "Stop adding")
+        worker.start()
+
+    def _on_add_progress(self, done: int, total: int, path: str):
+        from luxtunes.ui.add_worker import AddWorker
+        self.lcd.update_count("add", f"“{AddWorker.short_name(path)}”", done, total)
+
+    def _stop_adding(self):
+        if self._add_worker is not None:
+            self.lcd.set_stopping("add", "Stopping…")
+            self._add_worker.stop()
+
+    def _on_add_done(self, result):
+        self._add_worker = None
+        if self._add_playlist is not None and result.added:
+            library.add_to_playlist(self.conn, self._add_playlist, result.added)
+        self._add_playlist = None
         self.reload_library()
         self.show_source(self._current_source or SOURCE_MUSIC)
         added = len(result.added)
-        if added:
-            self.statusBar().showMessage(f"Added {added:,} item{'s' if added != 1 else ''} "
-                                         "to your library.", 6000)
+        items = f"{added:,} item{'s' if added != 1 else ''}"
+        if result.stopped:
+            message = f"Adding stopped: {items} added. Add the folder again to carry on."
+        elif added:
+            message = f"Added {items} to your library."
         elif result.already and not result.failed:
-            self.statusBar().showMessage("Those items are already in your library.", 6000)
+            message = "Those items are already in your library."
+        else:
+            message = "Nothing was added."
+        self._lcd_finished("add", message)
+        self.statusBar().showMessage(message, 8000)
         if result.failed:
             QMessageBox.warning(
                 self, "Add To Library",
-                f"{len(result.failed):,} file(s) couldn't be added:\n\n" + "\n".join(result.failed[:20]))
+                f"{len(result.failed):,} file(s) couldn't be added:\n\n"
+                + "\n".join(result.failed[:20])
+                + ("\n…" if len(result.failed) > 20 else ""))
 
     # ---- Create MP3 Version (FLAC → 320 kbps MP3) ------------------------------------
 
@@ -3553,6 +3613,11 @@ class MainWindow(QMainWindow):
         if self._import_worker is not None:
             # Stop the CD import (the half-imported song's file is removed).
             worker = self._import_worker
+            worker.stop()
+            worker.wait(30_000)
+        if self._add_worker is not None:
+            # Stop adding (a half-copied file is removed; what's added is kept).
+            worker = self._add_worker
             worker.stop()
             worker.wait(30_000)
         if self._song_lookup is not None:

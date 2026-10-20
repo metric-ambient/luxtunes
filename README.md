@@ -30,8 +30,9 @@ A native Linux music manager for your library, your CDs, your iPod Classic and y
 - Syncs iPod Classic (5G–7G) on stock firmware: music, videos, podcasts, audiobooks and
   photos (one way, from a folder), reading play counts back from the iPod.
 - Syncs Android phones over USB: songs, videos, podcasts, audiobooks, artwork and playlists
-  go into one `LuxTunes` folder that any music player can use, with a small database for
-  players that want ratings and play counts ([format](docs/android-library-format.md)).
+  (smart playlists with their rules) go into one `LuxTunes` folder that any music player
+  can use. A player that supports it sends plays, skips, ratings and playlist changes back
+  at the next sync ([format](docs/android-library-format.md)).
 - Nothing goes online without asking you first (CD names, track info, updates).
 
 ## Download (no terminal needed)

@@ -77,6 +77,8 @@ def run(db_path: str | None = None) -> int:
     from luxtunes.ui.main_window import MainWindow
 
     conn = db.connect(db_path)
+    from luxtunes.core import starter_playlists
+    starter_playlists.add_if_new(conn)          # a new library's example smart playlists
     window = MainWindow(conn)
     listen_for_others(name, window)
     window.show()

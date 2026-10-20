@@ -51,9 +51,12 @@ def _newest_first(episodes: list[dict]) -> list[dict]:
 
 
 def syncable_playlists(conn: sqlite3.Connection) -> list[dict]:
-    """Smart and normal playlists (not folders or the built-in ones), A-Z."""
+    """Smart and normal playlists, A-Z: not folders, the hidden Library list or
+    library sections. Imported default smart playlists (kind 200+, e.g. My Top
+    Rated) are ordinary smart playlists and count."""
     lists = [p for p in library.load_playlists(conn)
-             if not (p["is_folder"] or p["is_master"] or p["distinguished_kind"])]
+             if not (p["is_folder"] or p["is_master"])
+             and (p["distinguished_kind"] is None or p["distinguished_kind"] >= 200)]
     lists.sort(key=lambda p: (0 if p["is_smart"] else 1, p["name"].casefold()))
     return lists
 

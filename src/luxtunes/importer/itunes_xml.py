@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote
 
+from luxtunes.core import starter_playlists
 from luxtunes.core.library import UNSUPPORTED_KINDS
 from luxtunes.core.paths import resolve_case_insensitive
 
@@ -173,6 +174,10 @@ def import_library(
 
     with conn:  # one transaction: all or nothing
         track_id_map = _import_tracks(conn, library.get("Tracks", {}), mapper, result)
+        # The library's own "Recently Added" etc. replace the starter ones.
+        smart_names = {p.get("Name", "") for p in library.get("Playlists", [])
+                       if "Smart Criteria" in p}
+        starter_playlists.make_way_for(conn, smart_names)
         _import_playlists(conn, library.get("Playlists", []), track_id_map, result)
         for key, value in {
             "itunes_library_persistent_id": library.get("Library Persistent ID"),

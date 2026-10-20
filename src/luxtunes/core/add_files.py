@@ -13,6 +13,7 @@ import logging
 import os
 import shutil
 import sqlite3
+import time
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -51,21 +52,56 @@ class AddResult:
     added: list[int] = field(default_factory=list)       # new track ids
     already: list[int] = field(default_factory=list)     # ids of files already in the library
     failed: list[str] = field(default_factory=list)      # "file name: reason"
+    stopped: bool = False
 
 
-def collect_files(paths: list[str]) -> list[str]:
+class AddStopped(Exception):
+    """Stop was pressed (the file being copied is removed)."""
+
+
+def collect_files(paths: list[str], found_so_far=None, stop=None) -> list[str]:
     """The music/video files among `paths`, looking inside folders (and their
-    subfolders), in name order. Hidden files and folders are skipped."""
+    subfolders), in name order. Hidden files and folders are skipped.
+    found_so_far(count) is told the count after each folder."""
     found = []
     for path in paths:
         if os.path.isdir(path):
             for folder, folders, files in os.walk(path):
+                if stop is not None and stop.is_set():
+                    raise AddStopped()
                 folders[:] = sorted(f for f in folders if not f.startswith("."))
                 found.extend(os.path.join(folder, f) for f in sorted(files)
                              if not f.startswith(".") and Path(f).suffix.lower() in SUPPORTED)
+                if found_so_far is not None:
+                    found_so_far(len(found))
         elif Path(path).suffix.lower() in SUPPORTED:
             found.append(path)
     return found
+
+
+CHUNK = 1024 * 1024
+SLOW_SECONDS = 20
+
+
+def copy_file(source: str, target: Path, stop=None) -> None:
+    """Copy a file a piece at a time (so Stop works even mid-way through a big
+    file on a slow drive), keeping its dates. A half-copied file is removed."""
+    try:
+        with open(source, "rb") as src, open(target, "xb") as dst:
+            while True:
+                if stop is not None and stop.is_set():
+                    raise AddStopped()
+                block = src.read(CHUNK)
+                if not block:
+                    break
+                dst.write(block)
+        shutil.copystat(source, target)
+    except BaseException:
+        try:
+            os.remove(target)
+        except OSError:
+            pass
+        raise
 
 
 def _key(path: str) -> str:
@@ -81,31 +117,57 @@ def _utc(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def add_paths(conn: sqlite3.Connection, paths: list[str], progress=None) -> AddResult:
-    """Add these files (and folders' contents). progress(done, total) may
-    return False to stop early."""
-    files = collect_files(paths)
+def add_paths(conn: sqlite3.Connection, paths: list[str], progress=None, stop=None,
+              found_so_far=None) -> AddResult:
+    """Add these files (and folders' contents). progress(done, total, path) is
+    told before each file and may return False to stop early; so may setting
+    `stop` (a threading.Event), which also stops a copy mid-way. Each file is
+    saved to the library as soon as it's added, so a stopped or interrupted
+    add keeps what it did, and adding the same folder again picks up where it
+    left off (files already in the library are skipped quickly)."""
     result = AddResult()
+    try:
+        files = collect_files(paths, found_so_far, stop)
+    except AddStopped:
+        result.stopped = True
+        return result
     known = _known_locations(conn)
     copy = copy_when_adding(conn)
     root = organize.media_folder(conn)
+    log.info("adding %d files from %s", len(files), ", ".join(paths))
     for done, path in enumerate(files):
-        if progress is not None and progress(done, len(files)) is False:
+        if (stop is not None and stop.is_set()) or \
+                (progress is not None and progress(done, len(files), path) is False):
+            result.stopped = True
             break
         existing = known.get(_key(path))
         if existing is not None:
             result.already.append(existing)
             continue
+        started = time.monotonic()
         try:
-            track_id = add_file(conn, path, copy, root, known)
+            track_id = add_file(conn, path, copy, root, known, stop)
+        except AddStopped:
+            result.stopped = True
+            break
         except AlreadyAdded as already:
             result.already.append(already.track_id)
             continue
-        except (TagError, OSError) as error:
+        except (TagError, OSError, ValueError) as error:
+            log.warning("couldn't add %s: %s", path, error)
             result.failed.append(f"{os.path.basename(path)}: {error}")
             continue
+        except Exception as error:          # one odd file mustn't stop the rest
+            log.exception("couldn't add %s", path)
+            result.failed.append(f"{os.path.basename(path)}: {type(error).__name__}: {error}")
+            continue
+        seconds = time.monotonic() - started
+        if seconds > SLOW_SECONDS:
+            log.info("%s took %.0f s to add", path, seconds)
         known[_key(path)] = track_id
         result.added.append(track_id)
+    log.info("added %d, already there %d, failed %d%s", len(result.added), len(result.already),
+             len(result.failed), " (stopped)" if result.stopped else "")
     return result
 
 
@@ -142,7 +204,7 @@ class AlreadyAdded(Exception):
 
 
 def add_file(conn: sqlite3.Connection, path: str, copy: bool, root: Path,
-             known: dict[str, int] | None = None) -> int:
+             known: dict[str, int] | None = None, stop=None) -> int:
     """Add one file and return its new track id. Raises TagError / OSError,
     or AlreadyAdded if an earlier copy of this file is already in the library."""
     try:
@@ -172,7 +234,7 @@ def add_file(conn: sqlite3.Connection, path: str, copy: bool, root: Path,
             raise AlreadyAdded(known[_key(str(ideal))])   # copied in an earlier add
         target = organize.target_path(root, fields, path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, target)
+        copy_file(path, target, stop)
         log.info("copied %s -> %s", path, target)
         location = str(target)
     fields["location"] = location
