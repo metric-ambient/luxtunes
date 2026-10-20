@@ -8,6 +8,7 @@ dynamic = ["version"]
 description = "A native Linux music manager for your library, your CDs and your iPod Classic"
 readme = "README.md"
 license = "GPL-3.0-or-later"
+authors = [{ name = "metric-ambient" }]
 requires-python = ">=3.12"
 dependencies = [
     "PySide6>=6.6",

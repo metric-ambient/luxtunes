@@ -3,8 +3,7 @@
 General: the library's name, which sources show in the sidebar, text sizes,
 the Grid view's colour, source icons and list checkboxes, and what happens
 when you insert a CD (plus Import Settings…).
-Advanced: the LuxTunes Media folder and keeping it organized, and the
-GitHub access token that updates use.
+Advanced: the LuxTunes Media folder and keeping it organized.
 
 Looking up CD names or album artwork online is never a setting: LuxTunes
 asks every time (see MainWindow._approve_internet). The same goes for
@@ -184,32 +183,11 @@ class PreferencesDialog(QDialog):
         self.copy_files = QCheckBox("Copy files to LuxTunes Media folder when adding to library")
         self.copy_files.setChecked(add_files.copy_when_adding(self.conn))
 
-        from luxtunes.core import updater
-        updates = QGroupBox("Updates (Help → Check for Updates…)")
-        self.github_token = QLineEdit(updater.saved_token())
-        self.github_token.setEchoMode(QLineEdit.EchoMode.Password)
-        self.github_token.setPlaceholderText("github_pat_…")
-        token_note = QLabel(
-            "While the LuxTunes repository on GitHub is private, checking for updates needs a "
-            "GitHub access token: a fine-grained token with read-only access to the "
-            "repository's contents. It's kept in a file only you can read. Leave it empty if "
-            "you're logged in with the GitHub command-line tool (gh auth login), or once the "
-            "repository is public.")
-        token_note.setWordWrap(True)
-        token_note.setEnabled(False)
-        token_form = QFormLayout()
-        token_form.addRow("GitHub access token:", self.github_token)
-        updates_layout = QVBoxLayout()
-        updates_layout.addLayout(token_form)
-        updates_layout.addWidget(token_note)
-        updates.setLayout(updates_layout)
-
         layout = QVBoxLayout(page)
         layout.addWidget(box)
         layout.addWidget(self.keep_organized)
         layout.addWidget(note)
         layout.addWidget(self.copy_files)
-        layout.addWidget(updates)
         layout.addStretch(1)
         return page
 
@@ -226,9 +204,6 @@ class PreferencesDialog(QDialog):
         add_files.set_copy_when_adding(self.conn, self.copy_files.isChecked())
         cd.set_insert_action(self.conn, self.insert_action.currentData())
         encoders.save(self.conn, self._import_settings)
-        from luxtunes.core import updater
-        if self.github_token.text().strip() != updater.saved_token():
-            updater.save_token(self.github_token.text())
         if self.library_name.text().strip():
             library.set_library_name(self.conn, self.library_name.text())
         s = self.settings

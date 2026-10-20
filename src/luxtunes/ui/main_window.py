@@ -187,6 +187,7 @@ class MainWindow(QMainWindow):
         self._device_timer.timeout.connect(self._scan_devices)
         self._device_timer.start(2000)
         QTimer.singleShot(0, self._scan_devices)
+        QTimer.singleShot(800, self._offer_desktop_integration)
 
     # ======================================================================
     # Building the window
@@ -510,6 +511,9 @@ class MainWindow(QMainWindow):
 
         help_menu = menus.addMenu("&Help")
         self._action(help_menu, "Check for Updates…", self._check_for_updates)
+        from luxtunes.core import updater
+        if updater.running_appimage():
+            self._action(help_menu, "Remove LuxTunes from This Computer…", self._remove_appimage)
         help_menu.addSeparator()
         self._action(help_menu, "About LuxTunes", self._about)
 
@@ -566,6 +570,7 @@ class MainWindow(QMainWindow):
         self.grid.group_selected.connect(self._on_grid_selected)
         self.grid.group_opened.connect(self._open_grid_group)
         self.grid.group_play.connect(lambda group: self._play_tracks(group["tracks"]))
+        self.grid.menu_requested.connect(self._show_grid_menu)
         self.drill_back.clicked.connect(self._close_grid_group)
         self.grid.grouping_changed.connect(self._update_summary)
 
@@ -604,8 +609,8 @@ class MainWindow(QMainWindow):
     def reload_library(self):
         playlists = library.load_playlists(self.conn)
         look = appearance(self.settings)            # Preferences → General → Sources
-        has_movies = look["show_movies"] and library.count_tracks(self.conn, "movie") > 0
-        has_tv = look["show_tv_shows"] and library.count_tracks(self.conn, "tvshow") > 0
+        has_movies = look["show_movies"]            # shown even while empty
+        has_tv = look["show_tv_shows"]
         devices = [(key, self._device_name(ipod)) for key, ipod in self._ipods.items()]
         devices += [(key, disc.name) for key, disc in self._discs.items()]
         self.sidebar.populate(playlists, has_movies, theme.section_color(self.dark_action.isChecked()),
@@ -1756,11 +1761,26 @@ class MainWindow(QMainWindow):
         if not tracks:
             return
         clicked = self.model.track_at(index.row())
-        menu = QMenu(self)
+        menu = self._song_menu(tracks, clicked, clicked.get("name") or "",
+                               lambda: self._play_row(index.row()))
+        menu.exec(self.table.viewport().mapToGlobal(pos))
 
-        menu.addAction(f"Play “{clicked.get('name')}”", lambda: self._play_row(index.row()))
+    def _show_grid_menu(self, group: dict, global_pos):
+        """Right-click a Grid tile: the song menu, for all of its songs."""
+        tracks = [t for t in group.get("tracks") or [] if t]
+        if not tracks:
+            return
+        self._grid_group = group                  # Get Info works on this tile
+        menu = self._song_menu(tracks, tracks[0], group.get("title") or "",
+                               lambda: self._play_tracks(tracks))
+        menu.exec(global_pos)
+
+    def _song_menu(self, tracks: list[dict], clicked: dict, play_label: str, play) -> QMenu:
+        """The right-click menu for some songs (a selection, or a Grid tile's)."""
+        menu = QMenu(self)
+        menu.addAction(f"Play “{play_label}”", play)
         if self._current_source == SOURCE_UP_NEXT:
-            menu.addAction("Remove from Queue", self._delete_selection)
+            menu.addAction("Remove from Queue", lambda: self._delete_tracks(tracks))
         else:
             menu.addAction("Add to Queue", lambda: self.player.add_to_up_next(
                 [{k: v for k, v in t.items() if not k.startswith("_")} for t in tracks]))
@@ -1785,14 +1805,13 @@ class MainWindow(QMainWindow):
         menu.addMenu(self._show_in_playlist_menu(menu, clicked))
         menu.addSeparator()
 
-        delete = menu.addAction("Delete", self._delete_selection)
+        delete = menu.addAction("Delete", lambda: self._delete_tracks(tracks))
         playlist = self._current_playlist()
         delete.setEnabled(not (playlist and playlist["is_smart"]))  # smart lists fill themselves
         all_unchecked = all(not t.get("enabled", 1) for t in tracks)
         menu.addAction("Check Selection" if all_unchecked else "Uncheck Selection",
                        lambda: self._set_checked(tracks, all_unchecked))
-
-        menu.exec(self.table.viewport().mapToGlobal(pos))
+        return menu
 
     def _rating_menu(self, parent, tracks) -> QMenu:
         menu = QMenu("Rating", parent)
@@ -1921,7 +1940,10 @@ class MainWindow(QMainWindow):
             self.model.update_track(t["id"], library.set_enabled(self.conn, t["id"], checked))
 
     def _delete_selection(self):
-        tracks = self._selected_tracks()
+        self._delete_tracks(self._selected_tracks())
+
+    def _delete_tracks(self, tracks: list[dict]):
+        tracks = [t for t in tracks if t]
         if not tracks:
             return
         count = len(tracks)
@@ -2986,18 +3008,23 @@ class MainWindow(QMainWindow):
                                     f"You have the latest version of LuxTunes ({__version__}).")
             return
         notes = release.notes[:1500] + ("…" if len(release.notes) > 1500 else "")
-        if not updater.installed_copy():
+        if updater.kind() == "source":
             QMessageBox.information(
                 self, "Check for Updates",
                 f"LuxTunes {release.version} is available (you have {__version__}).\n\n"
-                "This copy runs from its source folder, so update it there:\n"
-                "    cd ~/LuxTunes && git pull\n\n"
-                "(Copies installed with packaging/install.sh update themselves from here.)")
+                "This copy runs from its source folder, so update it there with git pull.")
+            return
+        asset = release.asset()
+        if asset is None:
+            QMessageBox.information(
+                self, "Check for Updates",
+                f"LuxTunes {release.version} is available, but its download is still being "
+                "built. Try again in a few minutes.")
             return
         box = QMessageBox(QMessageBox.Icon.Information, "Check for Updates",
                           f"LuxTunes {release.version} is available. You have {__version__}.",
                           parent=self)
-        size = f"{release.wheel_size / 1024 / 1024:.1f} MB" if release.wheel_size else "a small file"
+        size = f"{asset.size / 1024 / 1024:.1f} MB" if asset.size else "the new version"
         box.setInformativeText(f"Installing downloads {size} from GitHub. The new version "
                                "starts the next time LuxTunes opens.")
         if notes:
@@ -3052,6 +3079,65 @@ class MainWindow(QMainWindow):
             from PySide6.QtCore import QProcess
             if QProcess.startDetached(command[0], command[1:]):
                 self.close()
+
+    # ---- The AppImage and the applications menu ---------------------------------------
+
+    def _offer_desktop_integration(self):
+        """First run of the AppImage: offer to keep it in ~/Applications with a menu entry."""
+        from luxtunes.core import desktop_integration, updater
+        appimage = updater.running_appimage()
+        if self.settings.value("appimage/dont_ask", False, type=bool) \
+                or not desktop_integration.should_offer(appimage):
+            return
+        box = QMessageBox(QMessageBox.Icon.Question, "LuxTunes",
+                          "Add LuxTunes to your applications menu?", parent=self)
+        box.setInformativeText(
+            "LuxTunes will keep itself in the Applications folder in your home folder and "
+            "appear in the menu (Sound & Video) with its icon. Updates install there too.")
+        add = box.addButton("Add to Menu", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Not Now", QMessageBox.ButtonRole.RejectRole)
+        never = box.addButton("Don't Ask Again", QMessageBox.ButtonRole.DestructiveRole)
+        box.exec()
+        if box.clickedButton() is never:
+            self.settings.setValue("appimage/dont_ask", True)
+        if box.clickedButton() is not add:
+            return
+        try:
+            target = desktop_integration.integrate(appimage)
+        except OSError as error:
+            QMessageBox.warning(self, "LuxTunes", f"Couldn't add LuxTunes to the menu: {error}")
+            return
+        if target.resolve() == appimage.resolve():
+            QMessageBox.information(self, "LuxTunes", "LuxTunes is now in your applications menu.")
+            return
+        QMessageBox.information(
+            self, "LuxTunes",
+            "LuxTunes is now in your applications menu. It will restart from its new place; "
+            f"you can delete the file you downloaded ({appimage.name} in {appimage.parent}).")
+        from PySide6.QtCore import QProcess
+        if QProcess.startDetached(str(target), []):
+            self.close()
+
+    def _remove_appimage(self):
+        """Help → Remove LuxTunes from This Computer…: the menu entry and ~/Applications copy."""
+        from luxtunes.core import desktop_integration
+        answer = QMessageBox.question(
+            self, "Remove LuxTunes",
+            "Remove LuxTunes from the applications menu and delete it from your Applications "
+            "folder?\n\nYour library, playlists, settings and music files are kept, so they're "
+            "all there if you install LuxTunes again.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            desktop_integration.remove()
+        except OSError as error:
+            QMessageBox.warning(self, "Remove LuxTunes", f"Couldn't remove everything: {error}")
+            return
+        QMessageBox.information(self, "Remove LuxTunes", "LuxTunes has been removed. "
+                                "It will close now.")
+        self.close()
 
     def _about(self):
         AboutDialog(self.conn, self).exec()

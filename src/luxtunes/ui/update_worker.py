@@ -27,7 +27,7 @@ class CheckWorker(QThread):
 
 class InstallWorker(QThread):
     progress = Signal(int, int)     # bytes downloaded, bytes in all
-    installing = Signal()           # downloaded; now pip is installing it
+    installing = Signal()           # downloaded; now installing it
     done = Signal()
     failed = Signal(str)
 
@@ -37,14 +37,10 @@ class InstallWorker(QThread):
         self.approved = approved
 
     def run(self):
-        import tempfile
-        from pathlib import Path
         try:
-            with tempfile.TemporaryDirectory(prefix="luxtunes-update-") as folder:
-                wheel = updater.download(self.release, Path(folder), approved=self.approved,
-                                         progress=self.progress.emit)
-                self.installing.emit()
-                updater.install(wheel)
+            updater.download_and_install(self.release, approved=self.approved,
+                                         progress=self.progress.emit,
+                                         installing=self.installing.emit)
             self.done.emit()
         except (updater.UpdateError, updater.NotApproved) as error:
             self.failed.emit(str(error))

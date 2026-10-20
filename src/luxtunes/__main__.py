@@ -9,13 +9,27 @@ Commands:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from luxtunes.core import db
 from luxtunes.importer.itunes_xml import import_library
 
 
+def _restore_library_path() -> None:
+    """In the packaged app, let the programs LuxTunes runs (ffmpeg, cdparanoia, ...)
+    use the system's libraries rather than the ones bundled with LuxTunes."""
+    if not getattr(sys, "frozen", False):
+        return
+    original = os.environ.pop("LD_LIBRARY_PATH_ORIG", None)
+    if original:
+        os.environ["LD_LIBRARY_PATH"] = original
+    else:
+        os.environ.pop("LD_LIBRARY_PATH", None)
+
+
 def main(argv: list[str] | None = None) -> int:
+    _restore_library_path()
     parser = argparse.ArgumentParser(prog="luxtunes")
     parser.add_argument(
         "--db", help=f"library database file (default: {db.default_db_path()})"

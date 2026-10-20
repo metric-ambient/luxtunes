@@ -1,40 +1,30 @@
-"""Help → Check for Updates…: new versions of LuxTunes from GitHub.
+"""Help → Check for Updates…: new versions of LuxTunes from GitHub releases.
 
-How it fits together:
+Each release (built by .github/workflows/release.yml when a version tag is
+pushed) carries two downloads:
 
-  * packaging/install.sh installs LuxTunes for you (no sudo) into its own
-    Python environment, ~/.local/share/luxtunes/app, plus a menu entry and
-    icon. Your library, settings and music are never inside that folder.
-  * Each new version is a GitHub release (made automatically when a version
-    tag such as v0.3.0 is pushed: .github/workflows/release.yml) holding a
-    "wheel", the installable package.
-  * The installed app asks GitHub for the latest release, and if it's newer,
-    downloads that wheel and installs it into its own environment with pip.
-    The new version starts the next time LuxTunes opens.
+  * LuxTunes-x86_64.AppImage, the ready-to-run app. A running AppImage
+    updates by downloading the new one next to itself and swapping it in.
+  * a .whl package, for copies installed with packaging/install.sh, which
+    update by pip-installing it into their own environment.
+
+A copy running from a source checkout is updated with `git pull` instead.
 
 Nothing here goes online unless the caller passes approved=True, which the
-window only does after you've said yes (every time; there's no automatic
-check). A copy running from its source folder (a git checkout) is updated
-with `git pull` instead.
-
-The repository is private, so GitHub needs a key to show it the releases:
-a token you paste into Preferences → Advanced (kept in a file only you can
-read), or the GitHub command-line tool's login (`gh auth login`) if that's
-installed. No Qt in here.
+window only does after the user says yes. No Qt in here.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
 import urllib.error
 import urllib.request
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from luxtunes import __version__
@@ -42,17 +32,8 @@ from luxtunes import __version__
 REPO = "metric-ambient/luxtunes"
 LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases"
-
-
-def app_dir() -> Path:
-    """Where install.sh puts the installed app (its own Python environment)."""
-    base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
-    return Path(base) / "luxtunes" / "app"
-
-
-def token_file() -> Path:
-    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return Path(base) / "LuxTunes" / "github-token"
+APPIMAGE_NAME = "LuxTunes-x86_64.AppImage"
+DOWNLOAD_PAGE = f"{RELEASES_PAGE}/latest/download/{APPIMAGE_NAME}"
 
 
 class UpdateError(Exception):
@@ -60,29 +41,54 @@ class UpdateError(Exception):
 
 
 class NotApproved(Exception):
-    """Something needed the internet before you said it could."""
+    """Something needed the internet before the user said it could."""
 
 
-# ---- Which copy is running ----------------------------------------------------------
+# ---- Which copy is running ---------------------------------------------------------
+
+def app_dir() -> Path:
+    """Where install.sh puts its copy (its own Python environment)."""
+    base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(base) / "luxtunes" / "app"
+
+
+def running_appimage() -> Path | None:
+    """The AppImage file this copy runs from, or None."""
+    path = os.environ.get("APPIMAGE")
+    if path and getattr(sys, "frozen", False) and Path(path).is_file():
+        return Path(path)
+    return None
+
 
 def installed_copy() -> bool:
-    """True when this is the copy install.sh made (it can update itself);
-    False when running from the source folder (update with git pull)."""
+    """True for the copy install.sh made."""
     try:
         return Path(sys.prefix).resolve() == app_dir().resolve()
     except OSError:
         return False
 
 
+def kind() -> str:
+    """"appimage", "installed" or "source": how this copy updates."""
+    if running_appimage():
+        return "appimage"
+    if installed_copy():
+        return "installed"
+    return "source"
+
+
 def launcher() -> list[str]:
-    """The command that starts this copy of LuxTunes again (to restart after an update)."""
+    """The command that starts this copy again (to restart after an update)."""
+    appimage = running_appimage()
+    if appimage:
+        return [str(appimage)]
     script = Path(sys.prefix) / "bin" / "luxtunes"
     if script.exists():
         return [str(script)]
     return [sys.executable, "-m", "luxtunes"]
 
 
-# ---- Versions --------------------------------------------------------------------------
+# ---- Versions ----------------------------------------------------------------------
 
 def parse_version(text: str) -> tuple[int, ...]:
     """"v0.2.10" -> (0, 2, 10). Anything after a non-digit part is ignored."""
@@ -105,56 +111,16 @@ def is_newer(version: str, than: str = __version__) -> bool:
     return parse_version(version) > parse_version(than)
 
 
-# ---- The key for the private repository ----------------------------------------------------
+# ---- Talking to GitHub -------------------------------------------------------------
 
-def save_token(token: str) -> None:
-    """Keep the token in a file only you can read (or remove it when empty)."""
-    path = token_file()
-    token = token.strip()
-    if not token:
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(token + "\n")
-    os.chmod(path, 0o600)
-
-
-def saved_token() -> str:
-    try:
-        return token_file().read_text().strip()
-    except OSError:
-        return ""
-
-
-def gh_token() -> str:
-    """The GitHub command-line tool's login, if it's installed and logged in."""
-    gh = shutil.which("gh")
-    if not gh:
-        return ""
-    try:
-        result = subprocess.run([gh, "auth", "token"], capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    return result.stdout.strip() if result.returncode == 0 else ""
-
-
-def token() -> str:
-    return os.environ.get("LUXTUNES_GITHUB_TOKEN", "").strip() or saved_token() or gh_token()
-
-
-# ---- Talking to GitHub --------------------------------------------------------------------
-
-def _request(url: str, accept: str, key: str) -> urllib.request.Request:
+def _request(url: str, accept: str) -> urllib.request.Request:
     request = urllib.request.Request(url, headers={"Accept": accept,
                                                    "User-Agent": f"LuxTunes/{__version__}",
                                                    "X-GitHub-Api-Version": "2022-11-28"})
+    # Optional, only to raise GitHub's limit on how often it can be asked.
+    key = os.environ.get("LUXTUNES_GITHUB_TOKEN", "").strip()
     if key:
-        # Not passed on when GitHub redirects the download to its file storage.
+        # Not passed on when GitHub redirects a download to its file storage.
         request.add_unredirected_header("Authorization", f"Bearer {key}")
     return request
 
@@ -164,74 +130,86 @@ def _open(request: urllib.request.Request, timeout: float = 30):
 
 
 @dataclass
+class Asset:
+    name: str
+    url: str
+    size: int = 0
+
+
+@dataclass
 class Release:
     version: str               # "0.3.0"
     tag: str                   # "v0.3.0"
     notes: str
-    wheel_name: str
-    wheel_url: str             # the API address of the wheel (works for private repos)
-    wheel_size: int
     page: str                  # the release's page on github.com
+    assets: list[Asset] = field(default_factory=list)
+
+    def asset(self, kind_: str | None = None) -> Asset | None:
+        """The download this copy needs: the AppImage or the .whl package."""
+        suffix = ".AppImage" if (kind_ or kind()) == "appimage" else ".whl"
+        return next((a for a in self.assets if a.name.endswith(suffix)), None)
 
 
 def latest_release(*, approved: bool) -> Release:
     """The newest published release. Raises UpdateError (with what to do)."""
     if approved is not True:
         raise NotApproved("Checking for updates needs your OK first.")
-    key = token()
     try:
-        with _open(_request(LATEST, "application/vnd.github+json", key)) as response:
+        with _open(_request(LATEST, "application/vnd.github+json")) as response:
             data = json.loads(response.read())
     except urllib.error.HTTPError as error:
-        if error.code in (401, 403) and key:
-            raise UpdateError("GitHub didn't accept the access token. Check it in "
-                              "Preferences → Advanced (it needs read access to the "
-                              "repository's contents).") from error
         if error.code == 404:
-            if not key:
-                raise UpdateError(
-                    "GitHub didn't show the releases. While the LuxTunes repository is private, "
-                    "updates need a GitHub access token: add one in Preferences → Advanced "
-                    "(or log in with the GitHub command-line tool: gh auth login).") from error
-            raise UpdateError("No release found yet: publish one by pushing a version tag "
-                              "(see the README).") from error
+            raise UpdateError("No LuxTunes release has been published yet.") from error
+        if error.code in (403, 429):
+            raise UpdateError("GitHub is busy or limiting how often it can be asked. "
+                              "Try again in an hour.") from error
         raise UpdateError(f"GitHub answered {error.code}.") from error
     except (urllib.error.URLError, OSError, ValueError) as error:
         raise UpdateError(f"Couldn't reach GitHub ({getattr(error, 'reason', error)}).") from error
-    wheels = [a for a in data.get("assets") or [] if a.get("name", "").endswith(".whl")]
-    if not wheels:
-        raise UpdateError(f"The latest release ({data.get('tag_name', '?')}) has no installable "
-                          "package attached yet. If it was just tagged, GitHub may still be "
-                          "building it: try again in a few minutes.")
-    wheel = wheels[0]
+    assets = [Asset(a["name"], a.get("browser_download_url") or a["url"], int(a.get("size") or 0))
+              for a in data.get("assets") or [] if a.get("name")]
     tag = data.get("tag_name") or ""
-    return Release(version=tag.lstrip("vV"), tag=tag, notes=(data.get("body") or "").strip(),
-                   wheel_name=wheel["name"], wheel_url=wheel["url"],
-                   wheel_size=int(wheel.get("size") or 0),
-                   page=data.get("html_url") or RELEASES_PAGE)
+    release = Release(version=tag.lstrip("vV"), tag=tag, notes=(data.get("body") or "").strip(),
+                      page=data.get("html_url") or RELEASES_PAGE, assets=assets)
+    if not release.asset("appimage") and not release.asset("installed"):
+        raise UpdateError(f"The latest release ({tag or '?'}) has nothing to install yet. If it "
+                          "was just published, GitHub may still be building it: try again in "
+                          "a few minutes.")
+    return release
 
 
-def download(release: Release, folder: Path, *, approved: bool, progress=None) -> Path:
-    """Download the release's wheel into `folder`. progress(done, total) as it goes."""
-    if approved is not True:
-        raise NotApproved("Downloading an update needs your OK first.")
-    if "/" in release.wheel_name or not release.wheel_name.startswith("luxtunes-"):
-        raise UpdateError(f"Unexpected file in the release: {release.wheel_name}")
-    target = Path(folder) / release.wheel_name
+def _fetch(asset: Asset, target: Path, progress=None) -> None:
     try:
-        with _open(_request(release.wheel_url, "application/octet-stream", token()), timeout=120) \
-                as response, open(target, "wb") as out:
+        with _open(_request(asset.url, "application/octet-stream"), timeout=120) as response, \
+                open(target, "wb") as out:
             done = 0
-            while True:
-                chunk = response.read(256 * 1024)
-                if not chunk:
-                    break
+            while chunk := response.read(256 * 1024):
                 out.write(chunk)
                 done += len(chunk)
                 if progress is not None:
-                    progress(done, release.wheel_size)
+                    progress(done, asset.size)
     except (urllib.error.URLError, OSError) as error:
         raise UpdateError(f"The download didn't finish ({getattr(error, 'reason', error)}).") from error
+
+
+def _checked_name(asset: Asset | None, prefix: str) -> Asset:
+    if asset is None:
+        raise UpdateError("This release doesn't have the download this copy needs yet. "
+                          "Try again in a few minutes.")
+    if "/" in asset.name or not asset.name.startswith(prefix):
+        raise UpdateError(f"Unexpected file in the release: {asset.name}")
+    return asset
+
+
+# ---- Package (.whl) updates, for install.sh copies ----------------------------------
+
+def download(release: Release, folder: Path, *, approved: bool, progress=None) -> Path:
+    """Download the release's .whl package into `folder`."""
+    if approved is not True:
+        raise NotApproved("Downloading an update needs your OK first.")
+    asset = _checked_name(release.asset("installed"), "luxtunes-")
+    target = Path(folder) / asset.name
+    _fetch(asset, target, progress)
     if not zipfile.is_zipfile(target):
         raise UpdateError("The downloaded file isn't a LuxTunes package.")
     with zipfile.ZipFile(target) as wheel:
@@ -241,9 +219,7 @@ def download(release: Release, folder: Path, *, approved: bool, progress=None) -
 
 
 def install(wheel: Path) -> None:
-    """Install the downloaded version into this copy's own environment (pip).
-    Only for the installed copy; the running window keeps working, and the new
-    version starts next time."""
+    """pip-install the package into this copy's own environment."""
     if not installed_copy():
         raise UpdateError("This copy of LuxTunes runs from its source folder: update it with "
                           "git pull instead.")
@@ -258,6 +234,59 @@ def install(wheel: Path) -> None:
         raise UpdateError("Installing didn't work:\n" + "\n".join(lines[-6:]))
 
 
-def download_and_install(release: Release, *, approved: bool, progress=None) -> None:
+# ---- AppImage updates --------------------------------------------------------------
+
+def looks_like_appimage(path: Path) -> bool:
+    """An x86-64 ELF program with the AppImage type 2 mark."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(20)
+    except OSError:
+        return False
+    return (len(head) == 20 and head[:4] == b"\x7fELF" and head[8:11] == b"AI\x02"
+            and head[18:20] == b"\x3e\x00")
+
+
+def replace_appimage(release: Release, current: Path, *, approved: bool, progress=None) -> Path:
+    """Download the new AppImage next to `current` and swap it in.
+
+    The running app keeps working (it still holds the old file open); the new
+    version starts on the next launch. If anything goes wrong the old file is
+    left as it was.
+    """
+    if approved is not True:
+        raise NotApproved("Downloading an update needs your OK first.")
+    asset = _checked_name(release.asset("appimage"), "LuxTunes")
+    folder = current.parent
+    if not os.access(folder, os.W_OK):
+        raise UpdateError(f"LuxTunes can't write to {folder}, so it can't update itself there. "
+                          f"Download the new version from {RELEASES_PAGE} instead.")
+    fd, temp = tempfile.mkstemp(prefix=".LuxTunes-update-", suffix=".AppImage", dir=folder)
+    os.close(fd)
+    temp = Path(temp)
+    try:
+        _fetch(asset, temp, progress)
+        if not looks_like_appimage(temp):
+            raise UpdateError("The downloaded file isn't a LuxTunes AppImage.")
+        temp.chmod(0o755)
+        os.replace(temp, current)
+    finally:
+        temp.unlink(missing_ok=True)
+    return current
+
+
+# ---- Either kind ---------------------------------------------------------------------
+
+def download_and_install(release: Release, *, approved: bool, progress=None,
+                         installing=None) -> None:
+    """Update this copy, whichever kind it is. installing() is called once the
+    download is done and the install step starts."""
+    appimage = running_appimage()
+    if appimage:
+        replace_appimage(release, appimage, approved=approved, progress=progress)
+        return
     with tempfile.TemporaryDirectory(prefix="luxtunes-update-") as folder:
-        install(download(release, Path(folder), approved=approved, progress=progress))
+        wheel = download(release, Path(folder), approved=approved, progress=progress)
+        if installing is not None:
+            installing()
+        install(wheel)

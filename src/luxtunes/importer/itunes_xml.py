@@ -1,6 +1,6 @@
 """Import an iTunes library from "iTunes Music Library.xml".
 
-iTunes 10.6.3 rewrites that XML every time the library changes. It's an Apple
+iTunes rewrites that XML every time the library changes. It's an Apple
 "property list" (plist): one big dictionary with a "Tracks" dictionary
 (keyed by Track ID) and a "Playlists" list. Python's built-in plistlib reads
 it straight into dicts, lists, ints, strings and datetimes.
