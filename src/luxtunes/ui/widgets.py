@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 import math
+import time
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QIcon, QPalette, QPen, QPixmap, QPolygonF
+from PySide6.QtGui import QFont, QFontMetrics, QIcon, QPalette, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -44,19 +45,48 @@ def themed_icon(names: list[str], fallback: QStyle.StandardPixmap) -> QIcon:
 # ---- Star ratings ----------------------------------------------------------
 
 class RatingDelegate(QStyledItemDelegate):
-    """Draws 0-5 stars, and sets the rating when you click on them.
+    """Draws 0-5 stars, and sets the rating where you click on them.
 
-    Ratings inherited from an album rating are drawn as hollow stars.
+    It takes two clicks: the first selects the song, a click on an already
+    selected song sets its rating. A click that brings the window to the
+    front only does that. Ratings inherited from an album rating are drawn
+    as hollow stars.
     """
 
     STAR, HOLLOW = "★", "☆"
     PADDING = 4
+    FOCUS_CLICK = 0.4          # seconds after the window became active
 
     def __init__(self, parent=None, key="rating", editable=True):
         super().__init__(parent)
         self.key = key                       # "rating" or "album_rating"
         self.computed_key = f"{key}_computed"
         self.editable = editable
+        self._activated_at = 0.0
+        if editable and QApplication.instance() is not None:
+            QApplication.instance().focusChanged.connect(self._focus_changed)
+
+    def _focus_changed(self, old, new):
+        # Focus coming in from another window (or another program).
+        if new is not None and (old is None or old.window() is not new.window()):
+            self._activated_at = time.monotonic()
+
+    def _window_was_in_front(self, widget) -> bool:
+        if widget is None or not widget.window().isActiveWindow():
+            return False
+        return time.monotonic() - self._activated_at > self.FOCUS_CLICK
+
+    @staticmethod
+    def _row_selected(view, index) -> bool:
+        selection = view.selectionModel() if view is not None else None
+        return selection is not None and selection.isRowSelected(index.row(), index.parent())
+
+    def stars_at(self, option, index, x: float) -> int:
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)     # the same font the stars are drawn in
+        star_width = max(1, QFontMetrics(opt.font).horizontalAdvance(self.STAR))
+        x -= option.rect.left() + self.PADDING
+        return 0 if x < 0 else min(5, int(x // star_width) + 1)
 
     def paint(self, painter, option, index):
         opt = QStyleOptionViewItem(option)
@@ -86,16 +116,18 @@ class RatingDelegate(QStyledItemDelegate):
         painter.restore()
 
     def editorEvent(self, event, model, option, index):
-        if (
-            self.editable
-            and event.type() == QEvent.Type.MouseButtonRelease
-            and event.button() == Qt.MouseButton.LeftButton
-        ):
-            star_width = max(1, option.fontMetrics.horizontalAdvance(self.STAR))
-            x = event.position().x() - option.rect.left() - self.PADDING
-            stars = 0 if x < 0 else min(5, int(x // star_width) + 1)
-            model.setData(index, stars * 20, Qt.ItemDataRole.EditRole)
-            return True
+        if not self.editable or getattr(event, "button", lambda: None)() != Qt.MouseButton.LeftButton:
+            return False
+        kind = event.type()
+        if kind in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick):
+            # Checked before the view handles the click (and selects the row).
+            if self._window_was_in_front(option.widget) and self._row_selected(option.widget, index):
+                model.setData(index, self.stars_at(option, index, event.position().x()) * 20,
+                              Qt.ItemDataRole.EditRole)
+            # A press still selects the row; a quick second click mustn't play the song.
+            return kind == QEvent.Type.MouseButtonDblClick
+        if kind == QEvent.Type.MouseButtonRelease:
+            return True                      # the press already did it; no text editor
         return False
 
 
@@ -132,12 +164,14 @@ class NowPlayingDisplay(QFrame):
     """The display in the middle of the toolbar: the song name, then
     "Artist — Album", then a progress bar you can click or drag to seek.
 
-    While an iPod syncs or a CD imports it shows that progress instead (like
-    before), with a small button on the left to flip between it and the song
-    that's playing, and a ✕ on the right to stop it."""
+    While something runs in the background (an iPod sync, a CD import) it
+    shows that progress instead. With several at once, the button on the left
+    steps through each of them and then Now Playing, round and round; the ✕
+    on the right stops the one on show. Each task has a key ("sync",
+    "import"), and its progress is kept up to date even while it isn't shown."""
 
     seek_requested = Signal(int)
-    stop_sync_requested = Signal()
+    stop_requested = Signal(str)        # the key of the task on show
 
     IDLE, TRACK, SYNC = 0, 1, 2
 
@@ -147,10 +181,9 @@ class NowPlayingDisplay(QFrame):
         self.setMinimumWidth(260)
         self.setFixedHeight(46)
         self._playing_page = self.IDLE      # what "Now Playing" shows (idle or the song)
-        self._sync_active = False
-        self._end_timer = QTimer(self)
-        self._end_timer.setSingleShot(True)
-        self._end_timer.timeout.connect(self.end_sync)
+        self._tasks: dict[str, dict] = {}   # key -> title, detail, bar, stop_tip, stoppable, done
+        self._shown: str | None = None      # the task on show, or None for Now Playing
+        self._end_timers: dict[str, QTimer] = {}
 
         self._pages = QStackedWidget(self)
         idle = QLabel("LuxTunes")
@@ -201,13 +234,12 @@ class NowPlayingDisplay(QFrame):
         self.toggle_button = QToolButton()
         self.toggle_button.setObjectName("lcdButton")
         self.toggle_button.setText("⇆")
-        self.toggle_button.setToolTip("Switch between the iPod sync and Now Playing")
         self.toggle_button.clicked.connect(self.toggle)
         self.stop_button = QToolButton()
         self.stop_button.setObjectName("lcdButton")
         self.stop_button.setText("✕")
-        self.stop_button.setToolTip("Stop syncing")
-        self.stop_button.clicked.connect(self.stop_sync_requested.emit)
+        self.stop_button.clicked.connect(
+            lambda: self._shown is not None and self.stop_requested.emit(self._shown))
         for button in (self.toggle_button, self.stop_button):
             button.setFixedSize(20, 20)
             button.hide()
@@ -236,12 +268,12 @@ class NowPlayingDisplay(QFrame):
         self.subtitle.setText(" — ".join(parts))
         self.update_position(0, track.get("total_time") or 0)
         self._playing_page = self.TRACK
-        if not self.showing_sync:
+        if self._shown is None:
             self._pages.setCurrentIndex(self.TRACK)
 
     def clear(self):
         self._playing_page = self.IDLE
-        if not self.showing_sync:
+        if self._shown is None:
             self._pages.setCurrentIndex(self.IDLE)
 
     def update_position(self, position: int, duration: int):
@@ -252,69 +284,127 @@ class NowPlayingDisplay(QFrame):
         self.elapsed.setText(format_duration(position))
         self.remaining.setText("-" + format_duration(max(0, duration - position)))
 
-    # ---- Sync progress ---------------------------------------------------------------
+    # ---- Background tasks ------------------------------------------------------------
 
     @property
-    def showing_sync(self) -> bool:
-        return self._pages.currentIndex() == self.SYNC
-
-    def start_sync(self, name: str):
-        self.start_task(f"Syncing “{name}”", "Preparing to sync…", "Stop syncing",
-                        "Switch between the iPod sync and Now Playing")
-
-    def start_task(self, title: str, detail: str, stop_tip: str, toggle_tip: str):
-        """Show a background job (iPod sync, CD import) in place of Now Playing."""
-        self._end_timer.stop()
-        self._sync_active = True
-        self.sync_title.setText(title)
-        self.sync_detail.setText(detail)
-        self.sync_bar.setRange(0, 0)            # busy until there's a count
-        self.stop_button.setToolTip(stop_tip)
-        self.toggle_button.setToolTip(toggle_tip)
-        self.toggle_button.show()
-        self.stop_button.show()
-        self.stop_button.setEnabled(True)
-        self._pages.setCurrentIndex(self.SYNC)
-
-    def update_sync(self, text: str, done: int, total: int):
-        self.sync_detail.setText(f"{text} ({done + 1} of {total})" if total else text)
-        self.sync_bar.setRange(0, total)
-        if total:
-            self.sync_bar.setValue(done)
-
-    def update_task(self, title: str, detail: str, fraction: float | None):
-        """Both lines, and the bar (None = busy, no amount known)."""
-        self.sync_title.setText(title)
-        self.sync_detail.setText(detail)
-        if fraction is None:
-            self.sync_bar.setRange(0, 0)
-        else:
-            self.sync_bar.setRange(0, 1000)
-            self.sync_bar.setValue(int(max(0.0, min(1.0, fraction)) * 1000))
+    def showing_task(self) -> str | None:
+        """The key of the task on show, or None while Now Playing shows."""
+        return self._shown
 
     @property
     def task_active(self) -> bool:
-        return self._sync_active
+        return bool(self._tasks)
 
-    def finish_sync(self, message: str, seconds: int = 6):
-        """Show how the sync ended, then go back to Now Playing."""
-        self.sync_detail.setText(message)
-        self.sync_bar.setRange(0, 1)
-        self.sync_bar.setValue(1)
-        self.stop_button.hide()
-        self._end_timer.start(seconds * 1000)
+    def task_keys(self) -> list[str]:
+        return list(self._tasks)
 
-    def end_sync(self):
-        self._sync_active = False
-        self.toggle_button.hide()
-        self.stop_button.hide()
-        self._pages.setCurrentIndex(self._playing_page)
+    def start_task(self, key: str, title: str, detail: str, stop_tip: str):
+        """A background task starts (or starts again): show it."""
+        timer = self._end_timers.pop(key, None)
+        if timer is not None:
+            timer.stop()
+            timer.deleteLater()
+        self._tasks.pop(key, None)              # a restarted task goes to the end of the round
+        self._tasks[key] = {"title": title, "detail": detail, "bar": (0, 0, 0),
+                            "stop_tip": stop_tip, "stoppable": True, "done": False}
+        self._show(key)
+
+    def update_task(self, key: str, title: str | None, detail: str, fraction: float | None):
+        """Both lines and the bar (fraction None: busy, no amount known)."""
+        task = self._tasks.get(key)
+        if task is None:
+            return
+        if title is not None:
+            task["title"] = title
+        task["detail"] = detail
+        task["bar"] = (0, 0, 0) if fraction is None else \
+            (0, 1000, int(max(0.0, min(1.0, fraction)) * 1000))
+        self._refresh(key)
+
+    def update_count(self, key: str, text: str, done: int, total: int):
+        """"Copying “Song” (3 of 40)" and the bar to match."""
+        task = self._tasks.get(key)
+        if task is None:
+            return
+        task["detail"] = f"{text} ({done + 1} of {total})" if total else text
+        task["bar"] = (0, total, done) if total else (0, 0, 0)
+        self._refresh(key)
+
+    def set_stopping(self, key: str, detail: str):
+        """Stop was pressed: say so, and the ✕ can't be pressed again."""
+        task = self._tasks.get(key)
+        if task is None:
+            return
+        task["detail"] = detail
+        task["stoppable"] = False
+        self._refresh(key)
+
+    def finish_task(self, key: str, message: str, seconds: int = 6):
+        """A task ended: show how for a few seconds, then it leaves the display."""
+        task = self._tasks.get(key)
+        if task is None:
+            return
+        task.update(detail=message, bar=(0, 1, 1), stoppable=False, done=True)
+        self._refresh(key)
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda: self.end_task(key))
+        self._end_timers[key] = timer
+        timer.start(seconds * 1000)
+
+    def end_task(self, key: str):
+        timer = self._end_timers.pop(key, None)
+        if timer is not None:
+            timer.stop()
+            timer.deleteLater()
+        keys = list(self._tasks)
+        if key not in keys:
+            return
+        position = keys.index(key)
+        del self._tasks[key]
+        if self._shown == key:
+            # The next task in the round, or Now Playing when none are left.
+            rest = list(self._tasks)
+            self._show(rest[position] if position < len(rest) else (rest[0] if rest else None))
+        else:
+            self._update_buttons()
 
     def toggle(self):
-        if self.showing_sync:
+        """Step to the next task, then Now Playing, then round again."""
+        round_ = list(self._tasks) + [None]
+        position = round_.index(self._shown) if self._shown in round_ else -1
+        self._show(round_[(position + 1) % len(round_)])
+
+    def _show(self, key: str | None):
+        self._shown = key if key in self._tasks else None
+        if self._shown is None:
             self._pages.setCurrentIndex(self._playing_page)
-        elif self._sync_active:
+        else:
+            self._refresh(self._shown)
             self._pages.setCurrentIndex(self.SYNC)
+        self._update_buttons()
+
+    def _refresh(self, key: str):
+        if key != self._shown:
+            return
+        task = self._tasks[key]
+        self.sync_title.setText(task["title"])
+        self.sync_detail.setText(task["detail"])
+        low, high, value = task["bar"]
+        self.sync_bar.setRange(low, high)
+        if high:
+            self.sync_bar.setValue(value)
+        self._update_buttons()
+
+    def _update_buttons(self):
+        self.toggle_button.setVisible(bool(self._tasks))
+        names = [t["title"] for t in self._tasks.values()]
+        self.toggle_button.setToolTip("Show the next: " + ", ".join(names + ["Now Playing"]))
+        task = self._tasks.get(self._shown) if self._shown else None
+        self.stop_button.setVisible(task is not None and not task["done"])
+        if task is not None:
+            self.stop_button.setEnabled(task["stoppable"])
+            self.stop_button.setToolTip(task["stop_tip"])
 
 
 # ---- Sidebar ---------------------------------------------------------------

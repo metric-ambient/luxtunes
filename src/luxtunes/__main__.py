@@ -28,8 +28,22 @@ def _restore_library_path() -> None:
         os.environ.pop("LD_LIBRARY_PATH", None)
 
 
+COMMANDS = ("import-itunes", "stats")
+
+
+def _drop_opened_items(argv: list[str]) -> list[str]:
+    """The desktop starts LuxTunes with the plugged-in iPod or CD's address
+    (e.g. file:///media/you/IPOD) when it's chosen for "Music player" or
+    "Audio CD" in the removable media settings. LuxTunes finds those itself,
+    so such an address just means: open the window."""
+    if argv and not argv[0].startswith("-") and argv[0] not in COMMANDS:
+        return []
+    return argv
+
+
 def main(argv: list[str] | None = None) -> int:
     _restore_library_path()
+    argv = _drop_opened_items(sys.argv[1:] if argv is None else list(argv))
     parser = argparse.ArgumentParser(prog="luxtunes")
     parser.add_argument(
         "--db", help=f"library database file (default: {db.default_db_path()})"

@@ -8,4 +8,5 @@ Icon=luxtunes
 Terminal=false
 Categories=AudioVideo;Audio;Player;
 Keywords=music;player;library;ipod;cd;
+MimeType=x-content/audio-player;x-content/audio-cdda;
 StartupWMClass=luxtunes

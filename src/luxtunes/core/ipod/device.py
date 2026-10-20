@@ -363,6 +363,62 @@ def format_gb(size: int) -> str:
 
 # ---- Ejecting ----------------------------------------------------------------------
 
+def is_busy_error(message: str | None) -> bool:
+    """udisks/umount's way of saying a program still has files open on it."""
+    text = (message or "").lower()
+    return "busy" in text
+
+
+def users_of(mountpoint: str, proc: str = "/proc") -> list[tuple[int, str, str]]:
+    """The programs (pid, name, a path they use) that keep a mounted drive busy:
+    open files, memory-mapped files, or a folder they're in. Only your own
+    programs are visible, which are the ones that matter here."""
+    root = os.path.realpath(mountpoint).rstrip("/") + "/"
+
+    def inside(path: str) -> bool:
+        return (path.rstrip("/") + "/").startswith(root)
+
+    found = []
+    try:
+        pids = [int(n) for n in os.listdir(proc) if n.isdigit()]
+    except OSError:
+        return found
+    for pid in pids:
+        base = os.path.join(proc, str(pid))
+        hit = None
+        links = [os.path.join(base, n) for n in ("cwd", "root", "exe")]
+        try:
+            links += [os.path.join(base, "fd", n) for n in os.listdir(os.path.join(base, "fd"))]
+        except OSError:
+            pass
+        for link in links:
+            try:
+                target = os.readlink(link)
+            except OSError:
+                continue
+            if inside(target):
+                hit = target
+                break
+        if hit is None:
+            try:
+                with open(os.path.join(base, "maps"), encoding="utf-8", errors="replace") as maps:
+                    for line in maps:
+                        path = line.rstrip("\n").split(None, 5)[-1] if line.count(" ") >= 5 else ""
+                        if path.startswith("/") and inside(path):
+                            hit = path
+                            break
+            except OSError:
+                pass
+        if hit is not None:
+            try:
+                with open(os.path.join(base, "comm"), encoding="utf-8", errors="replace") as f:
+                    name = f.read().strip()
+            except OSError:
+                name = "?"
+            found.append((pid, name, hit))
+    return found
+
+
 def eject(ipod: IPod) -> str | None:
     """Unmount the iPod and power it off so it shows "OK to disconnect".
     Returns None, or what went wrong."""

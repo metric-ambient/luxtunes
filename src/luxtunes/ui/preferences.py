@@ -2,7 +2,7 @@
 
 General: the library's name, which sources show in the sidebar, text sizes,
 the Grid view's colour, source icons and list checkboxes, and what happens
-when you insert a CD (plus Import Settings…).
+when you insert a CD (plus Import Settings…) and the sound when an import ends.
 Advanced: the LuxTunes Media folder and keeping it organized.
 
 Looking up CD names or album artwork online is never a setting: LuxTunes
@@ -44,6 +44,7 @@ APPEARANCE = {
     "grid_dark": True,              # Grid View: dark / light
     "show_source_icons": True,
     "show_list_checkboxes": True,
+    "import_done_sound": True,      # play the desktop's notification sound after a CD import
 }
 
 
@@ -142,6 +143,8 @@ class PreferencesDialog(QDialog):
         row.addWidget(self.insert_action)
         row.addWidget(settings_button)
         row.addStretch(1)
+        self.import_sound = QCheckBox("Play a sound when a CD finishes importing")
+        self.import_sound.setChecked(look["import_done_sound"])
         online = QLabel("Looking up CD track names or artwork online always asks first.")
         online.setEnabled(False)
         layout = QVBoxLayout(page)
@@ -150,6 +153,7 @@ class PreferencesDialog(QDialog):
         layout.addLayout(grid)
         layout.addWidget(_line())
         layout.addLayout(row)
+        layout.addWidget(self.import_sound)
         layout.addWidget(online)
         layout.addStretch(1)
         return page
@@ -209,6 +213,7 @@ class PreferencesDialog(QDialog):
         s = self.settings
         s.setValue("prefs/show_movies", self.show_movies.isChecked())
         s.setValue("prefs/show_tv_shows", self.show_tv_shows.isChecked())
+        s.setValue("prefs/import_done_sound", self.import_sound.isChecked())
         s.setValue("prefs/source_text", self.source_text.currentData())
         s.setValue("prefs/list_text", self.list_text.currentData())
         s.setValue("prefs/grid_dark", bool(self.grid_view.currentData()))

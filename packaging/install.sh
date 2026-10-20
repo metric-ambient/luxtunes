@@ -66,11 +66,12 @@ Type=Application
 Name=LuxTunes
 GenericName=Music Player
 Comment=Play and organize your music, import CDs and sync your iPod
-Exec=$APP/bin/luxtunes
+Exec=$APP/bin/luxtunes %U
 Icon=luxtunes
 Terminal=false
 Categories=AudioVideo;Audio;Player;
 Keywords=music;player;library;ipod;cd;
+MimeType=x-content/audio-player;x-content/audio-cdda;
 StartupWMClass=luxtunes
 DESKTOP
 command -v update-desktop-database >/dev/null && update-desktop-database "$DATA/applications" || true
