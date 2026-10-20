@@ -1,0 +1,49 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# ---- Virtual environments ----
+venv/
+.venv/
+
+# ---- Editors ----
+.vscode/
+.idea/
+*.swp
+
+# ---- Personal data: NEVER commit these ----
+# Your real library database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+# iTunes library exports (contain your username and file paths)
+iTunes*Library*.xml
+iTunes*Library*.itl
+# Music and artwork (copyrighted / large)
+*.mp3
+*.m4a
+*.flac
+*.wav
+*.aac
+*.itc
+# iPod backups made during testing
+ipod-backups/
+iPod_Control/
+# libgpod files copied for testing the iPod sync (system files, not ours)
+.ipodtest/
+
+# Files Claude made for you during development
+Claude outputs/
+
+# Personal notes (remove this line if you want them in the repo)
+LuxTunes scratchpad.odt
+.~lock.LuxTunes scratchpad.odt#
+
+# ---- Test fixtures ARE allowed (small, fake, made by us) ----
+!tests/fixtures/**

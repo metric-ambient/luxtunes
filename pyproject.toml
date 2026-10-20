@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "luxtunes"
+dynamic = ["version"]
+description = "A native Linux music manager for your library, your CDs and your iPod Classic"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+requires-python = ">=3.12"
+dependencies = [
+    "PySide6>=6.6",
+    "mutagen>=1.47",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+luxtunes = "luxtunes.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/metric-ambient/luxtunes"
+Releases = "https://github.com/metric-ambient/luxtunes/releases"
+
+[tool.setuptools.dynamic]
+version = { attr = "luxtunes.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+luxtunes = ["resources/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# If a test hangs (e.g. on a window waiting for a click), print where after 60 s.
+faulthandler_timeout = 60
