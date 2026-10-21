@@ -242,6 +242,12 @@ class Player(QObject):
             if track is not None and track.get("id") == track_id:
                 track.update(fields)
 
+    def update_locations(self, locations: dict[int, str]):
+        """Files moved (e.g. a new LuxTunes Media folder): track id -> new path."""
+        for track in (self._current, *self._context, *self.up_next):
+            if track is not None and track.get("id") in locations:
+                track["location"] = locations[track["id"]]
+
     # ---- Up Next ------------------------------------------------------------
 
     def add_to_up_next(self, tracks: list[dict]):

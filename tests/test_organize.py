@@ -139,3 +139,31 @@ def test_organize_library(tmp_path):
     assert (moved, problems) == ([track_id], [])
     assert (root / "Music" / "The 1975" / "Moved" / "06 Robbers.mp3").exists()
     assert organize.plan_library(conn) == []
+
+
+def test_a_moved_media_folder_is_followed(tmp_path):
+    conn = db.connect(tmp_path / "library.db")
+    old, new = tmp_path / "home" / "LuxTunes Media", tmp_path / "drive" / "LuxTunes Media"
+    songs = {"Moved": "Music/Artist/Album/01 Moved.mp3",
+             "Not copied yet": "Music/Artist/Album/02 Not copied yet.mp3"}
+    for name, relative in songs.items():
+        (old / relative).parent.mkdir(parents=True, exist_ok=True)
+        (old / relative).write_bytes(b"x")
+        conn.execute("INSERT INTO tracks (persistent_id, name, location) VALUES (?, ?, ?)",
+                     (f"00000000000000{len(name):02d}", name, str(old / relative)))
+    outside = tmp_path / "elsewhere" / "song.mp3"
+    conn.execute("INSERT INTO tracks (persistent_id, name, location) VALUES "
+                 "('00000000000000FF', 'Outside', ?)", (str(outside),))
+    conn.commit()
+    (new / songs["Moved"]).parent.mkdir(parents=True)
+    (new / songs["Moved"]).write_bytes(b"x")                    # only this one was copied
+
+    result = organize.relocate_media_folder(conn, old, new)
+    assert (result.updated, result.not_found) == (1, 1)
+    where = dict(conn.execute("SELECT name, location FROM tracks"))
+    assert where["Moved"] == str(new / songs["Moved"])
+    assert where["Not copied yet"] == str(old / songs["Not copied yet"])   # still plays
+    assert where["Outside"] == str(outside)
+    again = organize.relocate_media_folder(conn, old, new)                # choosing it again
+    assert (again.updated, again.not_found) == (0, 1)
+    assert organize.relocate_media_folder(conn, new, new).updated == 0

@@ -12,6 +12,12 @@ Create iPod Version makes an .m4v the iPod can play (H.264 Baseline, at most
 which is never changed. The copy gets the original's details (name, show,
 season, episode...) and appears in the library beside it.
 
+A converted copy always stays in the original's folder (it isn't filed by
+"Keep LuxTunes Media folder organized" when it's made, which used to put a
+TV episode's copy under Movies). With Preferences → Advanced → "Delete
+original after conversion" on, the original's file goes to the Trash and the
+copy takes its place in the library (replace_original).
+
 No Qt in here; the window runs the commands so it can show progress.
 """
 
@@ -25,8 +31,47 @@ from pathlib import Path
 from luxtunes.core import add_files, library, organize
 from luxtunes.core.tags import TAG_FIELDS, TagError, read_details, write_tags
 
+KEY_DELETE_ORIGINAL = "delete_original_after_conversion"
 BIT_RATE = "320k"
 MP3_MAX_SAMPLE_RATE = 48000        # MP3 can't go higher; 88.2/96 kHz FLACs become 44.1 kHz
+
+
+def delete_original(conn: sqlite3.Connection) -> bool:
+    """Preferences → Advanced → Delete original after conversion (off unless turned on)."""
+    row = conn.execute("SELECT value FROM library_info WHERE key = ?",
+                       (KEY_DELETE_ORIGINAL,)).fetchone()
+    return bool(row) and row[0] == "1"
+
+
+def set_delete_original(conn: sqlite3.Connection, on: bool) -> None:
+    with conn:
+        conn.execute("INSERT INTO library_info (key, value) VALUES (?, ?) "
+                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                     (KEY_DELETE_ORIGINAL, "1" if on else "0"))
+
+
+# What the converted copy takes over from the original it replaces.
+CARRIED_OVER = ("play_count", "play_date", "skip_count", "skip_date", "date_added",
+                "enabled", "volume_adjustment", "equalizer", "start_time", "stop_time",
+                "bookmarkable", "bookmark_time", "skip_when_shuffling")
+
+
+def replace_original(conn: sqlite3.Connection, original_id: int, copy_id: int) -> None:
+    """The original's file is gone (to the Trash): the copy takes its place,
+    with its plays, settings and place in every playlist; the original's entry
+    is removed."""
+    row = conn.execute("SELECT * FROM tracks WHERE id = ?", (original_id,)).fetchone()
+    if row is None:
+        return
+    keys = row.keys()
+    carried = {k: row[k] for k in CARRIED_OVER if k in keys}
+    with conn:
+        if carried:
+            conn.execute(f"UPDATE tracks SET {', '.join(f'{k} = ?' for k in carried)} "
+                         "WHERE id = ?", (*carried.values(), copy_id))
+        conn.execute("UPDATE playlist_items SET track_id = ? WHERE track_id = ?",
+                     (copy_id, original_id))
+    library.delete_tracks(conn, [original_id])
 
 
 def ffmpeg_path() -> str | None:
@@ -68,7 +113,9 @@ def finish(conn: sqlite3.Connection, source_track: dict, source: str, target: st
     fields = {key: source_track.get(key) for key in TAG_FIELDS}
     lyrics = details.get("lyrics") or source_track.get("lyrics") or ""
     write_tags(target, fields, lyrics=lyrics, artworks=details.get("artworks", []))
-    track_id = add_files.add_file(conn, target, copy=False, root=organize.media_folder(conn))
+    track_id = add_files.add_file(conn, target, copy=False, root=organize.media_folder(conn),
+                                  details={"media_kind": source_track.get("media_kind")},
+                                  file_it=False)       # stays beside the original
     # Carry your rating over to the new version.
     if source_track.get("rating") and not source_track.get("rating_computed"):
         library.set_rating(conn, track_id, source_track["rating"])
@@ -145,14 +192,12 @@ def ipod_video_command(ffmpeg: str, source: str, target: str) -> list[str]:
 def finish_video(conn: sqlite3.Connection, source_track: dict, target: str) -> int:
     """After FFmpeg made the iPod version: add it to the library with the
     original's details. Returns the new item's id."""
-    track_id = add_files.add_file(conn, target, copy=False, root=organize.media_folder(conn))
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(tracks)")}
-    details = {k: source_track.get(k) for k in VIDEO_DETAILS
-               if k in columns and source_track.get(k) is not None}
-    if details:
-        with conn:
-            conn.execute(f"UPDATE tracks SET {', '.join(f'{k} = ?' for k in details)} WHERE id = ?",
-                         (*details.values(), track_id))
+    # The original's details (TV show, season...) from the start, and the file
+    # stays beside the original: filing it now would go by the bare .m4v
+    # (a "movie") and put a TV episode's copy under Movies.
+    details = {k: source_track.get(k) for k in VIDEO_DETAILS if source_track.get(k) is not None}
+    track_id = add_files.add_file(conn, target, copy=False, root=organize.media_folder(conn),
+                                  details=details, file_it=False)
     if source_track.get("rating") and not source_track.get("rating_computed"):
         library.set_rating(conn, track_id, source_track["rating"])
     return track_id

@@ -1,5 +1,5 @@
-"""Asked before a sync takes songs off an iPod. "Show Details" opens a
-sortable list of every song that would be removed, and why."""
+"""Asked before a sync takes songs off an iPod or a phone. "Show Details"
+opens a sortable list of every song that would be removed, and why."""
 
 from __future__ import annotations
 
@@ -34,8 +34,10 @@ class SyncConfirmDialog(QDialog):
         text = QLabel(
             f"<b>This sync will remove {removing:,} song{'s' if removing != 1 else ''} from "
             f"“{ipod_name}” and copy {adding:,} from your library.</b><br><br>"
-            "Songs are removed from the iPod only; your LuxTunes library isn't changed.")
+            f"Songs are removed from “{ipod_name}” only; your LuxTunes library isn't changed.")
         text.setWordWrap(True)
+        text.setMinimumWidth(380)
+        self.text = text
         top = QHBoxLayout()
         top.addWidget(icon)
         top.addWidget(text, 1)
@@ -90,9 +92,28 @@ class SyncConfirmDialog(QDialog):
         self.copy.setVisible(shown)
         self.details.setText("Hide Details" if shown else "Show Details")
         if shown:
+            self.setMinimumHeight(0)
             self.resize(max(self.width(), 760), max(self.height(), 480))
         else:
-            self.adjustSize()
+            self._fit()
+
+    def _fit(self):
+        """Without the list: tall enough for all of the wrapped text at this
+        width (a wrapped label's height depends on its width, which Qt's
+        automatic sizing gets wrong, cutting the text off)."""
+        layout = self.layout()
+        layout.activate()
+        width = max(self.width(), self.minimumWidth())
+        height = layout.totalHeightForWidth(width)
+        if height < 0:
+            height = layout.totalSizeHint().height()
+        self.setMinimumHeight(height)
+        self.resize(width, height)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self.table.isVisible():
+            self._fit()
 
     def list_text(self) -> str:
         rows = ["\t".join(COLUMNS)]

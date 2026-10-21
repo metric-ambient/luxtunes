@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from luxtunes.core import add_files, cd, encoders, library, organize
+from luxtunes.core import add_files, cd, convert, encoders, library, organize
 
 # Look-and-feel choices, kept in the app's settings (QSettings), with their defaults.
 APPEARANCE = {
@@ -78,6 +78,7 @@ class PreferencesDialog(QDialog):
         self.setWindowTitle("Preferences")
         self.resize(540, 460)
         self._folder = str(organize.media_folder(conn))
+        self.old_folder = self._folder           # to point songs at a moved folder after OK
         self._import_settings = encoders.load(conn)
 
         tabs = QTabWidget()
@@ -204,11 +205,22 @@ class PreferencesDialog(QDialog):
         self.copy_files = QCheckBox("Copy files to LuxTunes Media folder when adding to library")
         self.copy_files.setChecked(add_files.copy_when_adding(self.conn))
 
+        self.delete_original = QCheckBox("Delete original after conversion")
+        self.delete_original.setChecked(convert.delete_original(self.conn))
+        delete_note = QLabel("After Create MP3 Version or Create iPod Version works, the "
+                             "original file (FLAC, AVI…) goes to the Trash and the new version "
+                             "takes its place in your library, keeping its plays, rating and "
+                             "playlists.")
+        delete_note.setWordWrap(True)
+        delete_note.setContentsMargins(24, 0, 0, 0)
+
         layout = QVBoxLayout(page)
         layout.addWidget(box)
         layout.addWidget(self.keep_organized)
         layout.addWidget(note)
         layout.addWidget(self.copy_files)
+        layout.addWidget(self.delete_original)
+        layout.addWidget(delete_note)
         layout.addStretch(1)
         return page
 
@@ -223,6 +235,7 @@ class PreferencesDialog(QDialog):
         organize.set_enabled(self.conn, self.keep_organized.isChecked())
         organize.set_media_folder(self.conn, self._folder)
         add_files.set_copy_when_adding(self.conn, self.copy_files.isChecked())
+        convert.set_delete_original(self.conn, self.delete_original.isChecked())
         cd.set_insert_action(self.conn, self.insert_action.currentData())
         cd.set_ask_lookup(self.conn, self.ask_lookup.isChecked())
         encoders.save(self.conn, self._import_settings)
