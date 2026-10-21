@@ -17,6 +17,11 @@ LuxTunes/
     .luxtunes-sync.json          LuxTunes' own list of what it put here
 ```
 
+Songs keep their own embedded artwork (also converted ones: "Convert higher bit rate
+songs" writes the details, lyrics and artwork back into the converted copy). Each album
+folder also gets a `cover.jpg` (or `.png`) from the first of its songs that has artwork,
+written as soon as that song is copied; `tracks.artwork` in `library.db` points to it.
+
 LuxTunes never writes or deletes anything outside the `LuxTunes` folder (it follows
 links before deciding, so a link can't lead it elsewhere). With **Delete media not in this
 selection** on (the default), each sync removes media that's no longer chosen, and any

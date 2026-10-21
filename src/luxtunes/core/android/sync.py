@@ -56,6 +56,7 @@ MEDIA = "LuxTunes Media"
 PLAYLISTS = "Playlists"
 DATABASE = "library.db"
 MANIFEST = ".luxtunes-sync.json"
+SAVE_EVERY = 100            # songs between saves of the record during a sync
 FORMAT_VERSION = 2          # 2: smart rules, reference playlists, playlists back
 
 
@@ -131,12 +132,28 @@ def _write(root: Path, relative, data: bytes) -> None:
         out.write(data)
 
 
-def _copy(source: str, root: Path, relative) -> None:
+CHUNK = 4 * 1024 * 1024
+
+
+def _copy(source: str, root: Path, relative, stop=None) -> None:
+    """Copy a file into the LuxTunes folder. With `stop` (a threading.Event),
+    a piece at a time, so Stop (or closing LuxTunes) doesn't wait for a whole
+    movie: the half-copied file is removed and SyncCancelled raised."""
     target = contained(root, relative)
     target.parent.mkdir(parents=True, exist_ok=True)
     _delete(root, relative)
     try:
-        shutil.copyfile(source, target)
+        if stop is None:
+            shutil.copyfile(source, target)
+        else:
+            with open(source, "rb") as src, open(target, "wb") as dst:
+                while True:
+                    if stop.is_set():
+                        raise SyncCancelled()
+                    block = src.read(CHUNK)
+                    if not block:
+                        break
+                    dst.write(block)
     except BaseException:
         try:
             _delete(root, relative)          # no half-copied song left behind
@@ -379,12 +396,13 @@ def playlist_text(entry: dict, tracks: list[dict], placed: dict) -> str:
 # ---- The sync ---------------------------------------------------------------------------
 
 def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRecord,
-         progress=None, confirm=None, confirm_playlists=None) -> SyncReport:
+         progress=None, confirm=None, confirm_playlists=None, stop=None) -> SyncReport:
     """Sync this phone. progress(text, done, total) may return False to stop
     copying; confirm(adding, removing, removals) is asked before anything on the
     phone changes; confirm_playlists(names) before deleting playlists the phone
-    deleted (no: they're kept, and go back to the phone). Raises OSError if the
-    phone can't be written to."""
+    deleted (no: they're kept, and go back to the phone). stop: a threading.Event
+    that also cuts a long copy short. Raises OSError if the phone can't be
+    written to."""
     report = SyncReport()
     settings = record.settings
 
@@ -494,6 +512,7 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
 
     # 4. Copy new and changed songs.
     taken = {f["path"].casefold() for f in files.values()}      # incl. kept ones
+    fresh: set[str] = set()                   # album folders that got songs this sync
     scratch = tempfile.TemporaryDirectory(prefix="luxtunes-android-")
     try:
         for i, track in enumerate(to_copy):
@@ -509,6 +528,7 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
                 sending = _convert_for_ipod(source, kbps, scratch.name, report, track)
                 if sending is None:
                     continue
+                _tag_converted(sending, source, track)
             tell(f"Copying “{track.get('name')}”", i, len(to_copy))
             old = files.get(pid)
             if old:
@@ -519,7 +539,7 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
                     pass
             relative = phone_path(track, Path(sending).suffix.lower(), taken)
             try:
-                _copy(sending, root, relative)
+                _copy(sending, root, relative, stop)
             except OSError as error:
                 report.problems.append(f"{track.get('name')}: {error.strerror or error}")
                 files.pop(pid, None)
@@ -537,6 +557,14 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
                           "name": track.get("name"), "artist": track.get("artist"),
                           "album": track.get("album")}
             report.added += 1
+            # The album's cover goes with its first song, so it's there even if
+            # the sync is stopped later.
+            fresh.add(str(Path(relative).parent))
+            _add_cover(root, relative, track, source, manifest, report)
+            if report.added % SAVE_EVERY == 0:
+                # Now and then, the record of what's here (if LuxTunes is cut
+                # off, the next sync knows these songs are already there).
+                _save_manifest(root, manifest, conn)
     except SyncCancelled:
         report.cancelled = True
     finally:
@@ -546,19 +574,60 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
     # 5–7. Covers, playlists and the database, also after Stop: they describe
     # exactly what's on the phone now, so a player can use the songs copied so far.
     _finish(conn, root, phone, record, report, manifest, the_plan, tell,
-            stopped=report.cancelled)
+            stopped=report.cancelled, fresh=fresh)
     return report
 
 
+def _tag_converted(converted: str, source: str, track: dict) -> None:
+    """A converted copy has no tags (FFmpeg drops them): write the library's
+    details, lyrics and the original's artwork into it, so players on the
+    phone show them. The library's own file is never touched."""
+    from luxtunes.core import tags as tag_io
+    fields = {k: track.get(k) for k in tag_io.TAG_FIELDS}
+    art = artwork_reader.read_embedded_artwork(source)
+    try:
+        tag_io.write_tags(converted, fields,
+                          lyrics=track.get("lyrics") or tag_io.UNCHANGED,
+                          artworks=[art] if art else tag_io.UNCHANGED)
+    except (tag_io.TagError, OSError, ValueError) as error:
+        log.warning("couldn't tag the converted copy of %s: %s", source, error)
+
+
+def _cover_name(folder: str, art: bytes) -> str:
+    name = "cover.png" if art[:4] == b"\x89PNG" else "cover.jpg"
+    return f"{folder}/{name}"
+
+
+def _add_cover(root: Path, relative: str, track: dict, source: str, manifest: dict,
+               report: SyncReport) -> None:
+    """cover.jpg for this song's album folder, if it has none yet."""
+    if (track.get("media_kind") or "music") not in library.AUDIO_KINDS:
+        return
+    folder = str(Path(relative).parent)
+    covers = manifest.setdefault("covers", [])
+    if any(str(Path(c).parent) == folder for c in covers):
+        return
+    art = artwork_reader.read_embedded_artwork(source)
+    if not art:
+        return                       # another song of the album may have one (see _write_covers)
+    cover = _cover_name(folder, art)
+    try:
+        _write(root, cover, art)
+        covers.append(cover)
+    except OSError as error:
+        report.problems.append(f"Cover for {folder}: {error.strerror or error}")
+
+
 def _finish(conn, root: Path, phone: Phone, record, report: SyncReport, manifest: dict,
-            the_plan, tell, stopped: bool) -> None:
+            the_plan, tell, stopped: bool, fresh: set[str] = frozenset()) -> None:
     placed = {pid: f["path"] for pid, f in manifest["files"].items()}
 
     # 5. Album covers (for players that look for cover.jpg next to the songs).
     # After Stop, only the covers already there (no artwork is read, to stop quickly).
     tell("Adding album covers…", can_stop=False)
     by_pid = {t["persistent_id"]: t for t in library.load_tracks(conn) if t.get("persistent_id")}
-    covers = _write_covers(root, placed, by_pid, manifest, report, read_new=not stopped)
+    covers = _write_covers(root, placed, by_pid, manifest, report, read_new=not stopped,
+                           fresh=fresh)
 
     # 6. Playlists as .m3u8 files.
     tell("Writing playlists…", can_stop=False)
@@ -607,29 +676,40 @@ def _save_manifest(root: Path, manifest: dict, conn) -> None:
 
 
 def _write_covers(root: Path, placed: dict, tracks: dict, manifest: dict,
-                  report: SyncReport, read_new: bool = True) -> dict:
-    """One cover file per album folder, from the first song's artwork
-    (read_new False: only keep the covers already there)."""
+                  report: SyncReport, read_new: bool = True, fresh=frozenset()) -> dict:
+    """One cover file per album folder, from the artwork of the first of its
+    songs that has some. read_new False: only keep the covers already there.
+    Folders where no song had artwork are remembered (no_cover) and only looked
+    at again when one of their songs was copied (fresh)."""
     covers = {}
     old = set(manifest.get("covers") or [])
-    by_folder: dict[str, str] = {}
-    for pid, path in placed.items():
-        by_folder.setdefault(str(Path(path).parent), pid)
-    for folder, pid in sorted(by_folder.items()):
-        track = tracks.get(pid)
-        if track is None or (track.get("media_kind") or "music") not in library.AUDIO_KINDS:
+    no_cover = set(manifest.get("no_cover") or [])
+    by_folder: dict[str, list[str]] = {}
+    for pid, path in sorted(placed.items(), key=lambda item: item[1]):
+        by_folder.setdefault(str(Path(path).parent), []).append(pid)
+    still_none = set()
+    for folder, pids in sorted(by_folder.items()):
+        songs = [tracks[p] for p in pids if p in tracks and
+                 (tracks[p].get("media_kind") or "music") in library.AUDIO_KINDS]
+        if not songs:
             continue
         existing = next((c for c in old if str(Path(c).parent) == folder), None)
         if existing and (root / existing).exists():
             covers[folder] = existing
             continue
-        if not read_new:
+        if not read_new or (folder in no_cover and folder not in fresh):
+            if folder in no_cover:
+                still_none.add(folder)
             continue
-        art = artwork_reader.read_embedded_artwork(find_file(track.get("location")))
+        art = None
+        for song in songs:
+            art = artwork_reader.read_embedded_artwork(find_file(song.get("location")))
+            if art:
+                break
         if not art:
+            still_none.add(folder)
             continue
-        name = "cover.png" if art[:4] == b"\x89PNG" else "cover.jpg"
-        relative = f"{folder}/{name}"
+        relative = _cover_name(folder, art)
         try:
             _write(root, relative, art)
             covers[folder] = relative
@@ -642,6 +722,7 @@ def _write_covers(root: Path, placed: dict, tracks: dict, manifest: dict,
         except OSError:
             pass
     manifest["covers"] = sorted(covers.values())
+    manifest["no_cover"] = sorted(still_none)
     return covers
 
 

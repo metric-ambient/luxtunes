@@ -258,3 +258,31 @@ def test_songs_converted_on_the_way_to_the_ipod(tmp_path):
             assert path.endswith(".m4a") and os.path.getsize(path) > 0
     # The library's own files are untouched.
     assert all((tmp_path / f"{i}.mp3").read_bytes() == data for i, data in originals.items())
+
+
+def test_song_files_the_ipod_doesnt_list_are_cleaned_up(tmp_path):
+    mount, conn = fake_ipod(tmp_path), small_library(tmp_path)
+    do_sync(conn, mount)
+    music = mount / "iPod_Control" / "Music"
+    listed = sorted(p for p in music.rglob("*") if p.is_file())
+    assert len(listed) == 3
+    # A file left by a sync that was cut off, and something that isn't a song folder.
+    folder = next(p for p in music.iterdir() if p.is_dir())
+    (folder / "ZZZZ.mp3").write_bytes(b"left over")
+    (mount / "iPod_Control" / "Notes.txt").write_text("not ours")
+    do_sync(conn, mount)
+    assert sorted(p for p in music.rglob("*") if p.is_file()) == listed
+    assert (mount / "iPod_Control" / "Notes.txt").exists()
+    # Songs taken off: their files go only after the database is saved.
+    report = do_sync(conn, mount, music_mode="selected", playlists=[], artists=[],
+                     albums=[], genres=[])
+    assert report.removed == 3 and not [p for p in music.rglob("*") if p.is_file()]
+
+
+def test_unlisted_files_with_an_empty_database_are_left_alone(tmp_path):
+    folder = tmp_path / "iPod_Control" / "Music" / "F01"
+    folder.mkdir(parents=True)
+    (folder / "ABCD.mp3").write_bytes(b"x")
+    assert sync.unlisted_song_files(str(tmp_path), []) == []
+    assert sync.unlisted_song_files(str(tmp_path), [str(tmp_path / "other.mp3")]) == \
+        [str(folder / "ABCD.mp3")]

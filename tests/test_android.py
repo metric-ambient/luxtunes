@@ -436,3 +436,99 @@ def test_saying_no_at_the_sync_question_still_updates_the_database(tmp_path):
     assert report.cancelled
     with _db(root) as out:
         assert out.execute("SELECT COUNT(*) FROM tracks").fetchone()[0] == 3
+
+
+ART = b"\xff\xd8\xff\xe0" + b"\x00" * 64           # stands in for a JPEG
+
+
+def test_album_covers_arrive_with_their_songs_even_if_stopped(tmp_path):
+    conn = small_library(tmp_path)
+    tags.write_tags(str(tmp_path / "1.mp3"), {}, artworks=[ART])     # only Chocolate has art
+    phone = fake_phone(tmp_path)
+    root = _phone_root(tmp_path)
+    record = settings.load_device(conn, phone.key, phone.name)
+    copied = []
+
+    def progress(text, done, total):
+        if text.startswith("Copying"):
+            if any("Chocolate" in c for c in copied):
+                return False                         # Stop, right after Chocolate's copy
+            copied.append(text)
+        return True
+
+    sync.sync(conn, phone, record, progress)
+    [cover] = (root / "LuxTunes Media").rglob("cover.jpg")
+    assert cover.read_bytes() == ART                 # written with Chocolate, before Stop
+    # A full sync: the album gets the cover even though its first song has no art.
+    run(conn, phone)
+    [cover] = (root / "LuxTunes Media").rglob("cover.jpg")
+    assert cover.read_bytes() == ART
+    with _db(root) as out:
+        assert {r[0] for r in out.execute("SELECT artwork FROM tracks")} == \
+            {str(cover.relative_to(root))}
+
+
+def test_an_album_without_artwork_isnt_searched_every_sync(tmp_path, monkeypatch):
+    conn = small_library(tmp_path)
+    phone = fake_phone(tmp_path)
+    run(conn, phone)
+    reads = []
+    real = sync.artwork_reader.read_embedded_artwork
+    monkeypatch.setattr(sync.artwork_reader, "read_embedded_artwork",
+                        lambda path: reads.append(path) or real(path))
+    run(conn, phone)
+    assert reads == []                    # nothing new on the phone: no artwork looked for
+
+
+def test_converted_copies_keep_their_details_and_artwork(tmp_path):
+    import subprocess
+
+    from luxtunes.core import convert
+    ffmpeg = convert.ffmpeg_path()
+    if ffmpeg is None:
+        pytest.skip("needs FFmpeg")
+    source = tmp_path / "song.mp3"
+    source.write_bytes(FRAME * 200)
+    tags.write_tags(str(source), {"name": "Robbers", "artist": "The 1975"}, artworks=[ART])
+    target = str(tmp_path / "copy.m4a")
+    result = subprocess.run(convert.ipod_audio_command(ffmpeg, str(source), target, 128),
+                            capture_output=True)
+    if result.returncode != 0:
+        pytest.skip("FFmpeg couldn't convert the test file")
+    sync._tag_converted(target, str(source), {"name": "Robbers", "artist": "The 1975",
+                                              "album": "The 1975", "lyrics": "La la"})
+    fields = tags.read_fields(target)
+    assert (fields["name"], fields["artist"], fields["album"]) == \
+        ("Robbers", "The 1975", "The 1975")
+    assert fields["lyrics"] == "La la" and fields["artwork_count"] == 1
+
+
+def test_a_stopped_copy_leaves_no_half_file_on_the_phone(tmp_path):
+    import threading
+
+    root = tmp_path / "LuxTunes"
+    root.mkdir()
+    big = tmp_path / "movie.mkv"
+    big.write_bytes(b"x" * (2 * sync.CHUNK + 5))
+    stop = threading.Event()
+    stop.set()
+    with pytest.raises(sync.SyncCancelled):
+        sync._copy(str(big), root, "LuxTunes Media/Movies/movie.mkv", stop)
+    assert not (root / "LuxTunes Media" / "Movies" / "movie.mkv").exists()
+    sync._copy(str(big), root, "LuxTunes Media/Movies/movie.mkv", threading.Event())
+    assert (root / "LuxTunes Media" / "Movies" / "movie.mkv").stat().st_size == big.stat().st_size
+
+
+def test_the_record_is_saved_during_a_long_sync(tmp_path, monkeypatch):
+    conn = small_library(tmp_path)
+    phone = fake_phone(tmp_path)
+    monkeypatch.setattr(sync, "SAVE_EVERY", 1)          # (100 in real use)
+    seen = []
+    real = sync._save_manifest
+    monkeypatch.setattr(sync, "_save_manifest",
+                        lambda root, manifest, conn: seen.append(len(manifest["files"]))
+                        or real(root, manifest, conn))
+    run(conn, phone)
+    # Saved after each song while copying, so a sync that's cut off (LuxTunes
+    # killed) still left a record of the songs already copied.
+    assert seen[:3] == [1, 2, 3]

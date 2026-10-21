@@ -213,6 +213,33 @@ def _convert_for_ipod(path: str, kbps: int, folder: str, report: SyncReport,
     return target
 
 
+def unlisted_song_files(mountpoint: str, listed: list) -> list[str]:
+    """Song files in the iPod's music folders (iPod_Control/Music/F00…F99)
+    that its database doesn't list. Nothing else on the iPod is looked at.
+    With an empty database nothing counts as unlisted (to be safe)."""
+    known = {os.path.normcase(os.path.realpath(p)).lower() for p in listed if p}
+    if not known:
+        return []
+    music = Path(mountpoint) / "iPod_Control" / "Music"
+    found = []
+    try:
+        folders = [e for e in os.scandir(music) if e.is_dir(follow_symlinks=False)
+                   and len(e.name) == 3 and e.name[0] in "Ff" and e.name[1:].isdigit()]
+    except OSError:
+        return []
+    for folder in folders:
+        try:
+            entries = list(os.scandir(folder.path))
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.is_file(follow_symlinks=False) or entry.name.startswith("."):
+                continue
+            if os.path.normcase(os.path.realpath(entry.path)).lower() not in known:
+                found.append(entry.path)
+    return found
+
+
 def _sync_photos(ipod: IPod, settings, report: SyncReport, progress) -> None:
     from luxtunes.core.ipod import photos
     try:
@@ -325,16 +352,15 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
         report.stats = stats.merge(conn, read_ipod_stats(db, ratings_too=not first_sync))
         set_aside_play_counts(ipod)
 
-        # 2. Take unwanted songs off the iPod (never out of the library).
+        # 2. Take unwanted songs off the iPod (never out of the library). Only
+        # out of its database for now: the files go once the database is saved,
+        # so if LuxTunes is stopped before that the iPod stays as it was.
+        doomed_files = []
         for i, pointer in enumerate(to_remove):
             tell("Removing songs from the iPod…", i, len(to_remove), can_stop=False)
             path = db.file_of(pointer)
-            if path and os.path.exists(path):
-                try:
-                    os.remove(path)
-                except OSError as error:
-                    report.problems.append(f"{gpod.get_str(pointer.contents, 'title')}: {error}")
-                    continue
+            if path:
+                doomed_files.append(path)
             db.remove_track(pointer)
             report.removed += 1
 
@@ -420,6 +446,25 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
         tell("Updating the iPod's database…", can_stop=False)
         db.write()
         name = db.name()
+
+        # 6b. Now the removed songs' files, and any song file the database
+        # doesn't list (left by a sync that was cut off, e.g. LuxTunes killed).
+        for path in doomed_files:
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                log.warning("couldn't delete %s from the iPod: %s", path, error)
+        listed = [db.file_of(t) for t in db.tracks()]
+        orphans = unlisted_song_files(ipod.mountpoint, listed)
+        for path in orphans:
+            try:
+                os.remove(path)
+            except OSError as error:
+                log.warning("couldn't delete %s from the iPod: %s", path, error)
+        if orphans:
+            log.info("removed %d song files the iPod's database didn't list", len(orphans))
 
     # 7. Photos: one way, from the chosen folder (never back from the iPod).
     if not report.cancelled:
