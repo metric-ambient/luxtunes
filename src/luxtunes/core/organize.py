@@ -84,6 +84,41 @@ def set_media_folder(conn: sqlite3.Connection, folder: str | os.PathLike) -> Non
     _set(conn, KEY_FOLDER, str(Path(os.path.expanduser(str(folder)))))
 
 
+@dataclass
+class Relocation:
+    updated: int = 0          # songs now pointing into the new folder
+    not_found: int = 0        # inside the old folder, but not (yet) in the new one: left as they were
+
+
+def relocate_media_folder(conn: sqlite3.Connection, old: str | os.PathLike,
+                          new: str | os.PathLike) -> Relocation:
+    """The LuxTunes Media folder now lives somewhere else (you moved or copied
+    it): songs inside the old folder point to the same place in the new one.
+    Only songs whose file is really there are changed; files aren't moved."""
+    from luxtunes.core.paths import find_file
+    old_root = Path(os.path.expanduser(str(old)))
+    new_root = Path(os.path.expanduser(str(new)))
+    result = Relocation()
+    if old_root == new_root:
+        return result
+    changes = []
+    for track_id, location in conn.execute(
+            "SELECT id, location FROM tracks WHERE location IS NOT NULL"):
+        try:
+            relative = Path(location).relative_to(old_root)
+        except ValueError:
+            continue                                  # not in the old folder
+        target = find_file(str(new_root / relative))  # also finds a different capitalisation
+        if target is None:
+            result.not_found += 1
+        else:
+            changes.append((target, track_id))
+    with conn:
+        conn.executemany("UPDATE tracks SET location = ? WHERE id = ?", changes)
+    result.updated = len(changes)
+    return result
+
+
 # ---- Names ----------------------------------------------------------------------
 
 def safe_name(text: str, limit: int, folder: bool) -> str:

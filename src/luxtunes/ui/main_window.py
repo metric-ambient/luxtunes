@@ -57,7 +57,7 @@ from PySide6.QtWidgets import (
 
 from luxtunes import __version__
 from luxtunes.core import (add_files, artwork, cd, convert, encoders, equalizer, library, organize,
-                           smart, tag_sync)
+                           smart, tag_sync, trash)
 from luxtunes.core.tags import UNCHANGED, TagError
 from luxtunes.core.paths import find_file, nearest_existing_folder
 from luxtunes.importer.itunes_xml import import_library
@@ -1131,6 +1131,7 @@ class MainWindow(QMainWindow):
 
     def _set_shuffle(self, on: bool):
         self.player.shuffle = on
+        self.settings.setValue("shuffle", on)         # remembered for next time
         for widget in (self.shuffle_button, self.shuffle_action):
             if widget.isChecked() != on:
                 widget.setChecked(on)
@@ -1141,6 +1142,7 @@ class MainWindow(QMainWindow):
 
     def _set_repeat(self, mode: str):
         self.player.repeat = mode
+        self.settings.setValue("repeat", mode)        # remembered for next time
         self.repeat_actions[mode].setChecked(True)
         self.repeat_button.setText("↻¹" if mode == REPEAT_ONE else "↻")
         self.repeat_button.setCheckable(True)
@@ -1525,6 +1527,31 @@ class MainWindow(QMainWindow):
         dialog = PreferencesDialog(self.conn, self, self.settings)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._apply_appearance()
+            new_folder = str(organize.media_folder(self.conn))
+            if os.path.normpath(new_folder) != os.path.normpath(dialog.old_folder):
+                self._relocate_media_folder(dialog.old_folder, new_folder)
+
+    def _relocate_media_folder(self, old: str, new: str):
+        """The media folder moved: songs in the old folder point to the new one
+        (those whose files are there)."""
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            result = organize.relocate_media_folder(self.conn, old, new)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if not result.updated and not result.not_found:
+            return                                   # no songs lived in the old folder
+        if result.updated:
+            self.reload_library()
+            self.player.update_locations(dict(self.conn.execute("SELECT id, location FROM tracks")))
+        lines = []
+        if result.updated:
+            lines.append(f"{result.updated:,} songs now play from “{new}”.")
+        if result.not_found:
+            lines.append(f"{result.not_found:,} songs from “{old}” weren't found in the new "
+                         "folder, so they still point to the old one. Copy them over and choose "
+                         "the folder again, or use File → Display Missing to find them.")
+        QMessageBox.information(self, "LuxTunes Media Folder", "\n\n".join(lines))
 
     def _apply_appearance(self):
         """Preferences → General: text sizes, icons, checkboxes, Grid colour,
@@ -2228,34 +2255,76 @@ class MainWindow(QMainWindow):
         box.setIcon(QMessageBox.Icon.Question)
         box.setText(f"Do you want to move the selected {noun} to the Trash, "
                     "or keep the files in your LuxTunes Media folder?")
-        trash = box.addButton("Move to Trash", QMessageBox.ButtonRole.DestructiveRole)
+        to_trash = box.addButton("Move to Trash", QMessageBox.ButtonRole.DestructiveRole)
         keep = box.addButton("Keep Files", QMessageBox.ButtonRole.AcceptRole)
         box.addButton(QMessageBox.StandardButton.Cancel)
         box.setDefaultButton(keep)
         box.exec()
-        if box.clickedButton() not in (trash, keep):
+        if box.clickedButton() not in (to_trash, keep):
             return
 
         ids = {t["id"] for t in tracks}
         self.player.forget_tracks(ids)
-        failed = 0
-        if box.clickedButton() is trash:
-            for t in tracks:
-                path = find_file(t.get("location"))
-                if path and not self._move_to_trash(path):
-                    failed += 1
+        failures = []
+        if box.clickedButton() is to_trash:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                for t in tracks:
+                    failure = trash.move_to_trash(t.get("location"))
+                    if failure is not None:
+                        failures.append((t, *failure))
+            finally:
+                QApplication.restoreOverrideCursor()
         library.delete_tracks(self.conn, list(ids))
         self.show_source(self._current_source)
-        if failed:
-            QMessageBox.warning(self, "LuxTunes",
-                                f"{failed} file(s) could not be moved to the Trash.")
+        if failures:
+            self._report_trash_failures(
+                failures, "LuxTunes",
+                f"{len(failures):,} of the {count:,} deleted {noun} still "
+                f"{'has its file' if len(failures) == 1 else 'have their files'} on disk. "
+                "They're no longer in your library.")
 
-    @staticmethod
-    def _move_to_trash(path: str) -> bool:
-        try:
-            return subprocess.run(["gio", "trash", path], timeout=15).returncode == 0
-        except (OSError, subprocess.SubprocessError):
-            return False
+    def _report_trash_failures(self, failures: list, title: str, summary: str) -> list[dict]:
+        """Say which files couldn't go to the Trash, and why. Files on a drive
+        without a usable Trash can be deleted for good instead, if you say so.
+        Returns the songs whose files were deleted that way."""
+        lines = [f"• {t.get('name') or 'Untitled'}: {trash.explain(t.get('location'), kind, message)}"
+                 for t, kind, message in failures]
+        no_trash = [t for t, kind, _ in failures if kind == trash.NO_TRASH]
+        box = QMessageBox(self)
+        box.setWindowTitle(title)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText(summary)
+        box.setInformativeText("\n".join(lines[:12]) + (f"\n… and {len(lines) - 12:,} more "
+                                                        "(Show Details)." if len(lines) > 12 else ""))
+        if len(lines) > 12:
+            box.setDetailedText("\n".join(lines))
+        delete = None
+        if no_trash:
+            delete = box.addButton(f"Delete {len(no_trash):,} File{'s' if len(no_trash) != 1 else ''} "
+                                   "Permanently…", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(QMessageBox.StandardButton.Ok)
+        box.exec()
+        if delete is None or box.clickedButton() is not delete:
+            return []
+        if QMessageBox.warning(
+                self, title,
+                f"Delete {len(no_trash):,} file{'s' if len(no_trash) != 1 else ''} for good? "
+                "They don't go to the Trash and can't be recovered.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Yes:
+            return []
+        deleted, problems = [], []
+        for t in no_trash:
+            error = trash.delete_permanently(t.get("location"))
+            if error is None:
+                deleted.append(t)
+            else:
+                problems.append(f"• {t.get('name') or 'Untitled'}: {error}")
+        if problems:
+            QMessageBox.warning(self, title, "These files couldn't be deleted:\n\n"
+                                + "\n".join(problems[:12]))
+        return deleted
 
     # ======================================================================
     # iPods (the DEVICES section)
@@ -3177,7 +3246,7 @@ class MainWindow(QMainWindow):
         progress.setWindowTitle("Create MP3 Version")
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
-        made, problems = 0, []
+        made, problems, converted = 0, [], []
         for done, track in enumerate(tracks):
             progress.setValue(done)
             progress.setLabelText(f"Converting “{track.get('name')}”…")
@@ -3206,11 +3275,13 @@ class MainWindow(QMainWindow):
                 problems.append(f"{track.get('name')}: {error.splitlines()[-1] if error else 'FFmpeg failed'}")
                 continue
             try:
-                convert.finish(self.conn, source_track, source, target)
+                converted.append((source_track, convert.finish(self.conn, source_track, source,
+                                                               target)))
                 made += 1
             except (OSError, ValueError, TagError) as problem:
                 problems.append(f"{track.get('name')}: {problem}")
         progress.setValue(len(tracks))
+        self._delete_originals(converted, "Create MP3 Version")
         if made:
             self.reload_library()
             self.show_source(self._current_source or SOURCE_MUSIC)
@@ -3236,7 +3307,7 @@ class MainWindow(QMainWindow):
         progress.setWindowTitle("Create iPod Version")
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
-        made, problems = 0, []
+        made, problems, converted = 0, [], []
         for done, track in enumerate(tracks):
             source = find_file(track.get("location"))
             if source is None:
@@ -3282,11 +3353,13 @@ class MainWindow(QMainWindow):
                                 f"{error.splitlines()[-1] if error else 'FFmpeg failed'}")
                 continue
             try:
-                convert.finish_video(self.conn, source_track, target)
+                converted.append((source_track, convert.finish_video(self.conn, source_track,
+                                                                     target)))
                 made += 1
             except (OSError, ValueError, TagError) as problem:
                 problems.append(f"{track.get('name')}: {problem}")
         progress.setValue(100 * len(tracks))
+        self._delete_originals(converted, "Create iPod Version")
         if made:
             self.reload_library()
             self.show_source(self._current_source or SOURCE_MUSIC)
@@ -3295,6 +3368,32 @@ class MainWindow(QMainWindow):
         if problems:
             QMessageBox.warning(self, "Create iPod Version",
                                 "Some videos couldn't be converted:\n\n" + "\n".join(problems[:20]))
+
+    def _delete_originals(self, converted: list[tuple[dict, int]], title: str):
+        """Preferences → Advanced → Delete original after conversion: each
+        original's file goes to the Trash and its converted copy takes its
+        place in the library. If the file can't go to the Trash, the original
+        stays (both are kept) and you're told why."""
+        if not converted or not convert.delete_original(self.conn):
+            return
+        copies = {original["id"]: copy_id for original, copy_id in converted}
+        kept = []
+        for original, copy_id in converted:
+            failure = trash.move_to_trash(original.get("location"))
+            if failure is None:
+                self.player.forget_tracks({original["id"]})
+                convert.replace_original(self.conn, original["id"], copy_id)
+            else:
+                kept.append((original, *failure))
+        if kept:
+            deleted = self._report_trash_failures(
+                kept, title,
+                f"The converted copies were made, but {len(kept):,} original"
+                f"{'s' if len(kept) != 1 else ''} couldn't be deleted, so "
+                f"{'they stay' if len(kept) != 1 else 'it stays'} in your library too.")
+            for original in deleted:
+                self.player.forget_tracks({original["id"]})
+                convert.replace_original(self.conn, original["id"], copies[original["id"]])
 
     # ---- Display Duplicates -------------------------------------------------------
 
@@ -3746,6 +3845,11 @@ class MainWindow(QMainWindow):
         volume = s.value("volume", 80, type=int)
         self.volume.setValue(volume)
         self.player.set_volume(volume)
+
+        # Shuffle and Repeat as you left them.
+        self._set_shuffle(s.value("shuffle", False, type=bool))
+        repeat = s.value("repeat", REPEAT_OFF)
+        self._set_repeat(repeat if repeat in (REPEAT_OFF, REPEAT_ALL, REPEAT_ONE) else REPEAT_OFF)
 
         self._refresh_view_icons()
         mode = s.value("view_mode", "list")

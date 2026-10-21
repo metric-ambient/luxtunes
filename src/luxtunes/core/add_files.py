@@ -204,9 +204,13 @@ class AlreadyAdded(Exception):
 
 
 def add_file(conn: sqlite3.Connection, path: str, copy: bool, root: Path,
-             known: dict[str, int] | None = None, stop=None) -> int:
+             known: dict[str, int] | None = None, stop=None, details: dict | None = None,
+             file_it: bool = True) -> int:
     """Add one file and return its new track id. Raises TagError / OSError,
-    or AlreadyAdded if an earlier copy of this file is already in the library."""
+    or AlreadyAdded if an earlier copy of this file is already in the library.
+    details: song details that win over the file's own (e.g. a converted
+    copy's media kind and show). file_it=False leaves the file where it is
+    instead of filing it in the media folder now."""
     try:
         fields = read_fields(path)
     except TagError:
@@ -221,6 +225,7 @@ def add_file(conn: sqlite3.Connection, path: str, copy: bool, root: Path,
         from luxtunes.core.tags import media_kind_hint
         fields["media_kind"] = media_kind_hint(path) or "music"
         fields.update(library.kind_defaults(fields["media_kind"]))
+    fields.update({k: v for k, v in (details or {}).items() if v is not None})
     fields["date_added"] = library.now_utc()
     fields["date_modified"] = _utc(os.path.getmtime(path))
 
@@ -247,5 +252,6 @@ def add_file(conn: sqlite3.Connection, path: str, copy: bool, root: Path,
             f"INSERT INTO tracks ({', '.join(row)}) VALUES ({', '.join('?' for _ in row)})",
             list(row.values()))
     track_id = cursor.lastrowid
-    organize.organize_track(conn, track_id)     # files already in the media folder get filed
+    if file_it:
+        organize.organize_track(conn, track_id)     # files already in the media folder get filed
     return track_id

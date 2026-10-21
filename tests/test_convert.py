@@ -70,3 +70,34 @@ def test_ipod_video_name_and_settings(tmp_path):
     assert "640" in command[command.index("-vf") + 1] and command[-1] == "out.m4v"
     assert convert.can_make_ipod_video({"media_kind": "movie", "location": "/a.mkv"})
     assert not convert.can_make_ipod_video({"media_kind": "music", "location": "/a.mp3"})
+
+
+def test_conversion_copies_stay_beside_the_original_and_can_replace_it(tmp_path):
+    conn = db.connect(tmp_path / "library.db")
+    organize.set_media_folder(conn, tmp_path / "Media")
+    episode = tmp_path / "Media" / "TV Shows" / "Show" / "Season 1" / "01 Pilot.avi"
+    episode.parent.mkdir(parents=True)
+    episode.write_bytes(b"x")
+    conn.execute("INSERT INTO tracks (persistent_id, name, media_kind, show, season, location, "
+                 "play_count, rating) VALUES ('00000000000000E1', 'Pilot', 'tvshow', 'Show', 1, "
+                 "?, 7, 80)", (str(episode),))
+    conn.commit()
+    original = library.load_tracks(conn)[0]
+    playlist = library.create_playlist(conn, "Watch")
+    library.add_to_playlist(conn, playlist, [original["id"]])
+    copy = episode.with_name("01 Pilot (iPod).m4v")
+    copy.write_bytes(b"x")
+    copy_id = convert.finish_video(conn, original, str(copy))
+    made = library.load_track(conn, copy_id)
+    assert made["location"] == str(copy)                     # not moved under Movies
+    assert made["media_kind"] == "tvshow" and made["show"] == "Show"
+
+    assert not convert.delete_original(conn)                  # off unless turned on
+    convert.set_delete_original(conn, True)
+    assert convert.delete_original(conn)
+    convert.replace_original(conn, original["id"], copy_id)
+    assert library.load_track(conn, original["id"]) is None
+    made = library.load_track(conn, copy_id)
+    assert made["play_count"] == 7
+    items = [r[0] for r in conn.execute("SELECT track_id FROM playlist_items")]
+    assert items == [copy_id]

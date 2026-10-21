@@ -1022,8 +1022,14 @@ def test_sync_warning_lists_the_songs_it_removes(window):
 
     removals = [Removal("Song B", "Artist B", "Album B", "Not in your sync settings"),
                 Removal("Song A", "Artist A", "Album A", "Not in your LuxTunes library")]
+    from PySide6.QtWidgets import QApplication
+
     dialog = SyncConfirmDialog("Test iPod", 5, removals, window)
     assert dialog.table.isHidden()
+    dialog.show()
+    QApplication.instance().processEvents()
+    text = dialog.text                                   # all of it shows before expanding
+    assert text.height() >= text.heightForWidth(text.width())
     dialog.details.setChecked(True)                      # Show Details
     assert not dialog.table.isHidden() and dialog.table.rowCount() == 2
     assert dialog.table.item(0, 1).text() == "Artist A"  # sorted by artist
@@ -1031,6 +1037,8 @@ def test_sync_warning_lists_the_songs_it_removes(window):
         "Song A\tArtist A\tAlbum A\tNot in your LuxTunes library"
     dialog.details.setChecked(False)
     assert dialog.table.isHidden()
+    QApplication.instance().processEvents()
+    assert text.height() >= text.heightForWidth(text.width())
     dialog.deleteLater()
 
 
@@ -1634,3 +1642,50 @@ def test_now_playing_bar_and_mini_player(window):
     app.processEvents()
     assert window._mini_player is None and window.isVisible()
     assert window.isMaximized()                            # the whole screen, not its old size
+
+
+def test_shuffle_and_repeat_are_remembered(window):
+    from luxtunes.ui.player import REPEAT_OFF, REPEAT_ONE
+
+    window._set_shuffle(True)
+    window._set_repeat(REPEAT_ONE)
+    window.player.shuffle = False                     # as a fresh start would be
+    window.player.repeat = REPEAT_OFF
+    window._restore_settings()                        # what a restart does
+    assert window.player.shuffle and window.shuffle_button.isChecked()
+    assert window.shuffle_action.isChecked()
+    assert window.player.repeat == REPEAT_ONE and window.repeat_actions[REPEAT_ONE].isChecked()
+    window.settings.setValue("repeat", "nonsense")    # a bad stored value: back to off
+    window._restore_settings()
+    assert window.player.repeat == REPEAT_OFF
+
+
+def test_trash_failures_say_why(window, monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QMessageBox
+
+    from luxtunes.core import library, trash
+
+    tracks = window.model.visible_tracks()[:2]
+    library.set_location(window.conn, tracks[0]["id"], str(tmp_path / "gone.avi"))
+    tracks[0]["location"] = str(tmp_path / "gone.avi")
+    calls = iter([QMessageBox.StandardButton.Yes])
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: next(calls))
+    shown = []
+
+    def fake_exec(box):
+        shown.append(box.text() + "\n" + box.informativeText())
+        for button in box.buttons():                   # choose "Move to Trash"
+            if button.text() == "Move to Trash":
+                box.clickedButton = lambda b=button: b
+        return 0
+
+    monkeypatch.setattr(QMessageBox, "exec", fake_exec)
+    monkeypatch.setattr(trash, "move_to_trash", lambda location: (
+        (trash.MISSING, "") if "gone" in location else (trash.NO_TRASH, "Trashing not supported")))
+    window._delete_tracks(tracks)
+    report = shown[-1]
+    assert "couldn't be found at" in report and "gone.avi" in report
+    assert "has no Trash LuxTunes can use" in report
+    for t in tracks:
+        assert library.load_track(window.conn, t["id"]) is None
+
