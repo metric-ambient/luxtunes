@@ -167,6 +167,7 @@ class MainWindow(QMainWindow):
         self._mount_tries: dict[str, int] = {}  # iPod partition -> times we tried to mount it
         self._mount_ejected: set[str] = set()   # ejected here: left alone until replugged
         self._sync_worker = None                # the iPod sync running in the background
+        self._closing_after_sync = False        # closing was asked for during a sync
         self._discs: dict[str, cd.Disc] = {}    # audio CDs in the drives, by "cd:/dev/sr0"
         self._cd_unreadable: set[str] = set()   # drives we couldn't open (told you once)
         self._lookups: dict[str, object] = {}   # MusicBrainz lookups running, by disc key
@@ -2428,12 +2429,15 @@ class MainWindow(QMainWindow):
         if report.stats and report.stats.plays:
             self.statusBar().showMessage(
                 f"{report.stats.plays:,} plays were read from “{self._sync_name}”.", 8000)
-        if report.problems:
+        if report.problems and not self._closing_after_sync:
             QMessageBox.warning(self, "Sync", "Some items couldn't be synced:\n\n"
                                 + "\n".join(report.problems[:20]))
 
     def _sync_failed(self, message: str):
         self._lcd_finished("sync", "The sync didn't finish.", 4)
+        if self._closing_after_sync:
+            log.warning("sync didn't finish while closing: %s", message)
+            return
         QMessageBox.warning(self, "Sync", f"“{self._sync_name}” couldn't be synced:\n\n{message}")
 
     def _sync_thread_done(self):
@@ -2443,6 +2447,8 @@ class MainWindow(QMainWindow):
         self.device_page.set_syncing(None)
         self.sidebar.set_syncing(None)
         self._update_device_actions()
+        if self._closing_after_sync:
+            QTimer.singleShot(0, self.close)      # stopped safely: now close
 
     def _eject_current_device(self):
         if self._current_source and self._current_source[0] == "device" \
@@ -3602,14 +3608,37 @@ class MainWindow(QMainWindow):
         self._set_view_mode(mode if mode in VIEW_MODES else "list")
 
     def closeEvent(self, event):
+        if self._sync_worker is not None:
+            # Never close in the middle of a sync: ask, then stop it safely and
+            # close once it has (see _sync_thread_done).
+            event.ignore()
+            if self._closing_after_sync:
+                self.statusBar().showMessage(
+                    "LuxTunes will close as soon as the sync has stopped safely.", 8000)
+                return
+            answer = QMessageBox.warning(
+                self, "Sync in Progress",
+                f"A sync with “{self._sync_name}” is ongoing. Closing LuxTunes during a sync "
+                "could result in sync progress loss or other irregularities.\n\n"
+                "Are you sure you want to close LuxTunes?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if answer != QMessageBox.StandardButton.Yes or self._sync_worker is None:
+                if self._sync_worker is None and answer == QMessageBox.StandardButton.Yes:
+                    QTimer.singleShot(0, self.close)        # it ended while you were asked
+                return
+            # The quickest safe stop: the copy in progress is cut short (its
+            # half-copied file removed), then what's there is saved.
+            self._closing_after_sync = True
+            self.lcd.set_stopping("sync", "Stopping safely, then closing…")
+            self.statusBar().showMessage(
+                "Stopping the sync safely; LuxTunes closes when it's done.")
+            self._sync_worker.stop()
+            return
         self._device_timer.stop()            # no more looking for iPods and CDs
         if self._mpris is not None:
             self._mpris.close()              # media keys go to other players now
         self._cd_pending.clear()             # and no "Import this CD?" after closing
-        if self._sync_worker is not None:
-            # Let the sync stop safely (it saves the iPod's database first).
-            self._sync_worker.stop()
-            self._sync_worker.wait(120_000)
         if self._import_worker is not None:
             # Stop the CD import (the half-imported song's file is removed).
             worker = self._import_worker

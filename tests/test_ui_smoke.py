@@ -1413,3 +1413,39 @@ def test_a_phone_remembers_where_it_syncs_to(window, tmp_path):
     page.set_device(window.conn, phone, record)                         # seen again later
     assert page.storage.currentData() == "SD card"
     del window._phones[phone.key]
+
+
+def test_closing_during_a_sync_asks_then_stops_safely_first(window, monkeypatch):
+    from PySide6.QtGui import QCloseEvent
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    stops, closes = [], []
+
+    class FakeWorker:
+        def stop(self):
+            stops.append(True)
+
+        def deleteLater(self):
+            pass
+
+    window._sync_worker = FakeWorker()
+    window._sync_name = "Pixel 7"
+    window.lcd.start_task("sync", "Syncing", "…", "Stop syncing")
+    answers = [QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes]
+    asked = []
+    monkeypatch.setattr(QMessageBox, "warning",
+                        staticmethod(lambda *a, **k: asked.append(a[2]) or answers.pop(0)))
+    # No: nothing happens, the sync carries on.
+    event = QCloseEvent()
+    window.closeEvent(event)
+    assert not event.isAccepted() and not stops and "sync" in asked[0].lower()
+    # Yes: the sync is told to stop; the window waits for it.
+    event = QCloseEvent()
+    window.closeEvent(event)
+    assert not event.isAccepted() and stops == [True] and window._closing_after_sync
+    # The sync has stopped and saved: now LuxTunes closes.
+    monkeypatch.setattr(window, "close", lambda: closes.append(True))
+    window._sync_thread_done()
+    QApplication.processEvents()
+    assert closes == [True] and window._sync_worker is None
+    window._closing_after_sync = False
