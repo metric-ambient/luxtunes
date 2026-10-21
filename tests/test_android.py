@@ -532,3 +532,119 @@ def test_the_record_is_saved_during_a_long_sync(tmp_path, monkeypatch):
     # Saved after each song while copying, so a sync that's cut off (LuxTunes
     # killed) still left a record of the songs already copied.
     assert seen[:3] == [1, 2, 3]
+
+
+def test_folders_that_differ_only_in_case_become_one_on_the_phone(tmp_path):
+    # Phone storage ignores case: "Crown The Empire" can't be made next to
+    # "Crown the Empire" (input/output error), so the phone's spelling is used.
+    conn = small_library(tmp_path)
+    conn.execute("UPDATE tracks SET artist = 'the 1975' WHERE name = 'Chocolate'")
+    conn.commit()
+    phone = fake_phone(tmp_path)
+    root = _phone_root(tmp_path)
+    report = run(conn, phone)
+    assert report.added == 3 and not report.problems
+    music = root / "LuxTunes Media" / "Music"
+    assert len([p for p in music.iterdir() if p.is_dir()]) == 1
+    # Fixing the spelling later moves nothing out from under the phone either.
+    conn.execute("UPDATE tracks SET artist = 'THE 1975'")
+    conn.commit()
+    for i in range(3):
+        import os
+        os.utime(tmp_path / f"{i}.mp3", ns=(1, 1))      # tags rewritten after the edit
+    report = run(conn, phone)
+    assert report.added == 3 and not report.problems
+    assert len(list(music.rglob("*.mp3"))) == 3
+    assert len([p for p in music.iterdir() if p.is_dir()]) == 1
+
+
+def test_a_failed_recopy_keeps_the_old_copy(tmp_path, monkeypatch):
+    conn = small_library(tmp_path)
+    phone = fake_phone(tmp_path)
+    root = _phone_root(tmp_path)
+    run(conn, phone)
+    conn.execute("UPDATE tracks SET album = 'Renamed'")
+    conn.commit()
+    import os
+    for i in range(3):
+        os.utime(tmp_path / f"{i}.mp3", ns=(2, 2))
+
+    real_copy = sync._copy
+
+    def broken(source, root_, relative, stop=None):
+        if str(relative).startswith("LuxTunes Media"):
+            raise OSError(5, "Input/output error")      # as the phone said for those songs
+        return real_copy(source, root_, relative, stop)
+
+    monkeypatch.setattr(sync, "_copy", broken)
+    report = run(conn, phone)
+    assert len(report.problems) == 3
+    assert len(list((root / "LuxTunes Media").rglob("*.mp3"))) == 3      # old copies stay
+
+
+def test_finishing_a_sync_doesnt_ask_the_phone_about_every_cover(tmp_path, monkeypatch):
+    # Asking the phone whether each album's cover is there took a second or more
+    # per album over USB ("Adding album covers…" for many minutes).
+    import pathlib
+    conn = small_library(tmp_path)
+    tags.write_tags(str(tmp_path / "0.mp3"), {}, artworks=[ART])
+    phone = fake_phone(tmp_path)
+    root = _phone_root(tmp_path)
+    run(conn, phone)
+    assert list((root / "LuxTunes Media").rglob("cover.jpg"))
+    asked = []
+    real_exists = pathlib.Path.exists
+    monkeypatch.setattr(pathlib.Path, "exists",
+                        lambda self, *a, **k: asked.append(str(self)) or real_exists(self, *a, **k))
+    written = []
+    real_write = sync._write
+    monkeypatch.setattr(sync, "_write", lambda root_, relative, data:
+                        written.append(str(relative)) or real_write(root_, relative, data))
+    run(conn, phone)
+    assert not [a for a in asked if a.endswith(("cover.jpg", "cover.png"))]
+    assert not [w for w in written if w.startswith(("Playlists/", "LuxTunes Media/"))]  # unchanged
+
+
+def test_leftovers_the_phone_wont_remove_are_one_clear_message(tmp_path, monkeypatch):
+    conn = small_library(tmp_path)
+    phone = fake_phone(tmp_path)
+    root = _phone_root(tmp_path)
+    run(conn, phone)
+    ghosts = root / "LuxTunes Media" / "Music" / "Ghost"
+    ghosts.mkdir()
+    for n in range(7):
+        (ghosts / f"{n:02d} Song.mp3").write_bytes(b"")
+    real_delete = sync._delete
+
+    def refuse(root_, relative):
+        if "Ghost" in str(relative):
+            raise OSError(5, "Input/output error")
+        return real_delete(root_, relative)
+
+    monkeypatch.setattr(sync, "_delete", refuse)
+    report = run(conn, phone)
+    [problem] = report.problems
+    assert problem.startswith("7 leftover files") and "restart it" in problem
+
+
+def test_the_equalizer_goes_to_the_phone(tmp_path):
+    from luxtunes.core import equalizer
+
+    conn = small_library(tmp_path)
+    settings = equalizer.Settings(on=True, preset="Rock")
+    settings.make_preset("Car")
+    equalizer.save(conn, settings)
+    library.update_track_fields(conn, 1, {"equalizer": "Jazz"})
+    root = tmp_path / "phone" / "Internal shared storage" / "LuxTunes"
+    run(conn, fake_phone(tmp_path))
+    with sqlite3.connect(root / "library.db") as out:
+        info = dict(out.execute("SELECT key, value FROM info"))
+        assert info["equalizer_on"] == "1" and info["equalizer_preset"] == "Car"
+        assert dict(out.execute("SELECT name, equalizer FROM tracks"))["Robbers"] == "Jazz"
+        rock = out.execute("SELECT * FROM equalizer_presets WHERE name = 'Rock'").fetchone()
+        assert rock[2:] == (0.0, 5.0, 4.0, 3.0, 1.5, -0.5, -1.0, 0.5, 2.5, 3.5, 4.5)
+        names = [r[0] for r in out.execute(
+            "SELECT name FROM equalizer_presets WHERE position IS NOT NULL ORDER BY position")]
+        assert names == settings.names()
+        assert out.execute("SELECT COUNT(*) FROM equalizer_presets WHERE name = 'Manual' "
+                           "AND position IS NULL").fetchone()[0] == 1

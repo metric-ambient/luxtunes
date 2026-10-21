@@ -160,6 +160,13 @@ MEDIATYPE_MUSICVIDEO = 1 << 5
 MEDIATYPE_TVSHOW = 1 << 6
 
 
+class Itdb_IpodInfo(Structure):
+    _fields_ = [("model_number", c_char_p), ("capacity", ctypes.c_double),
+                ("ipod_model", c_int32), ("ipod_generation", c_int32), ("musicdirs", c_uint32),
+                ("reserved_int1", c_int32), ("reserved_int2", c_int32),
+                ("reserved1", c_void_p), ("reserved2", c_void_p)]
+
+
 class GpodError(Exception):
     pass
 
@@ -213,11 +220,29 @@ def _load():
     fn("itdb_device_set_sysinfo", None, c_void_p, c_char_p, c_char_p)
     fn("itdb_device_get_sysinfo", c_void_p, c_void_p, c_char_p)
     fn("itdb_device_write_sysinfo", gboolean, c_void_p, PERR)
+    fn("itdb_info_get_ipod_info_table", POINTER(Itdb_IpodInfo))
+    fn("itdb_info_get_ipod_model_name_string", c_char_p, c_int32)
     glib.g_strdup.restype, glib.g_strdup.argtypes = c_void_p, [c_char_p]
     glib.g_free.restype, glib.g_free.argtypes = None, [c_void_p]
     glib.g_error_free.restype, glib.g_error_free.argtypes = None, [POINTER(GError)]
     _lib, _glib = lib, glib
     return lib
+
+
+def ipod_models() -> list[tuple[str, float, str, int]]:
+    """libgpod's table of every iPod model it knows: (model number, capacity
+    in GB, model name such as "Nano (Black)", generation number)."""
+    lib = _load()
+    table = lib.itdb_info_get_ipod_info_table()
+    found = []
+    i = 0
+    while table[i].model_number:
+        entry = table[i]
+        name = lib.itdb_info_get_ipod_model_name_string(entry.ipod_model) or b""
+        found.append((entry.model_number.decode(), entry.capacity, name.decode(),
+                      entry.ipod_generation))
+        i += 1
+    return found
 
 
 def available() -> bool:

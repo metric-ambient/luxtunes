@@ -29,15 +29,13 @@ from pathlib import Path
 
 from luxtunes.core import artwork as artwork_reader
 from luxtunes.core import library
-from luxtunes.core.ipod import gpod, plan as ipod_plan, settings as ipod_settings, stats
+from luxtunes.core.ipod import gpod, models, plan as ipod_plan, settings as ipod_settings, stats
 from luxtunes.core.ipod.device import IPod, usb_details
 from luxtunes.core.paths import find_file
 
 log = logging.getLogger(__name__)
 
 # iPod classic (all of 6G/6.5G/7G) reports this USB product id; they need hash58.
-CLASSIC_USB_PRODUCT = "1261"
-GENERIC_CLASSIC_MODEL = "xB147"      # any classic model number makes libgpod sign the database
 
 
 class SyncCancelled(Exception):
@@ -105,10 +103,11 @@ def dbid_of(track: dict) -> int:
 # ---- The iPod's FireWire GUID (needed for the 6G/7G signature) ---------------------
 
 def prepare_device_info(db: gpod.Database, ipod: IPod) -> None:
-    """Make sure libgpod knows the FireWire GUID and that it's an iPod classic,
-    so it signs the database. SysInfo is often empty on iPods that were never
-    plugged into a Linux machine with libgpod's helper; the GUID is written
-    into SysInfo for next time, the model only kept in memory."""
+    """Make sure libgpod knows the FireWire GUID and the iPod's model, so it
+    signs the song list on iPods that check one (classics, nano 3rd–5th
+    generation). SysInfo is often empty on iPods that were never plugged into
+    a Linux machine with libgpod's helper; the GUID is written into SysInfo
+    for next time, the model only kept in memory."""
     product, serial = usb_details(ipod.device)
     if not db.sysinfo("FirewireGuid") and serial:
         db.set_sysinfo("FirewireGuid", f"0x{serial}")
@@ -116,8 +115,10 @@ def prepare_device_info(db: gpod.Database, ipod: IPod) -> None:
             db.write_sysinfo()
         except gpod.GpodError as error:
             log.warning("couldn't save SysInfo: %s", error)
-    if not db.sysinfo("ModelNumStr") and product == CLASSIC_USB_PRODUCT:
-        db.set_sysinfo("ModelNumStr", GENERIC_CLASSIC_MODEL)
+    if not db.sysinfo("ModelNumStr"):
+        stand_in = models.stand_in_model_number(product)
+        if stand_in:
+            db.set_sysinfo("ModelNumStr", stand_in)
 
 
 # ---- Copying details from the library to an iPod track -------------------------
@@ -299,6 +300,13 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
     the iPod changes (removals: a Removal for each song to come off) and may
     return False to cancel. Raises gpod.GpodError."""
     report = SyncReport()
+    if ipod.unsupported:
+        raise gpod.GpodError(ipod.unsupported)
+    if not os.access(ipod.mountpoint, os.W_OK):
+        raise gpod.GpodError(
+            "The iPod can only be read, not written to. iPods formatted for Mac can't be "
+            "written to on Linux; restoring it with the Windows format fixes that (it erases "
+            "the iPod).")
 
     def tell(text, done=0, total=0, can_stop=True):
         if progress is not None and progress(text, done, total) is False and can_stop:
@@ -324,7 +332,8 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
             capacity = space.f_blocks * space.f_frsize
             from luxtunes.core import smart
             smart.refresh_all(conn)          # smart playlists go over as they are right now
-            the_plan = ipod_plan.build_plan(conn, settings, free_space=capacity)
+            the_plan = ipod_plan.build_plan(conn, settings, free_space=capacity,
+                                            video=ipod.supports_video)
             wanted = {dbid_of(t): t for t in the_plan.tracks if dbid_of(t)}
             keep = set(wanted)
             for t in the_plan.missing:
@@ -407,7 +416,8 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
                             os.remove(source)
                         except OSError:
                             pass
-                art = artwork_reader.read_embedded_artwork(path)
+                art = artwork_reader.read_embedded_artwork(path) if ipod.supports_artwork \
+                    else None
                 if art:
                     db.set_artwork(pointer, art)
                 added[dbid_of(song)] = pointer
@@ -444,7 +454,14 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
         if record.pending_name:
             db.set_name(record.pending_name)
         tell("Updating the iPod's database…", can_stop=False)
-        db.write()
+        try:
+            db.write()
+        except gpod.GpodError as error:
+            if ipod.identity.family.signature == models.HASH72:
+                raise gpod.GpodError(
+                    f"{error}. This iPod nano needs to have been synced with iTunes once, so "
+                    "LuxTunes can reuse its signature.") from error
+            raise
         name = db.name()
 
         # 6b. Now the removed songs' files, and any song file the database
@@ -467,7 +484,7 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
             log.info("removed %d song files the iPod's database didn't list", len(orphans))
 
     # 7. Photos: one way, from the chosen folder (never back from the iPod).
-    if not report.cancelled:
+    if not report.cancelled and ipod.supports_photos:
         _sync_photos(ipod, settings, report, progress)
 
     ipod_settings.mark_synced(conn, record.id, name)

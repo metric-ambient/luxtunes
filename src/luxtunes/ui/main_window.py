@@ -56,7 +56,8 @@ from PySide6.QtWidgets import (
 )
 
 from luxtunes import __version__
-from luxtunes.core import add_files, artwork, cd, convert, encoders, library, organize, smart, tag_sync
+from luxtunes.core import (add_files, artwork, cd, convert, encoders, equalizer, library, organize,
+                           smart, tag_sync)
 from luxtunes.core.tags import UNCHANGED, TagError
 from luxtunes.core.paths import find_file, nearest_existing_folder
 from luxtunes.importer.itunes_xml import import_library
@@ -67,6 +68,7 @@ from luxtunes.ui.about import AboutDialog
 from luxtunes.ui.album_view import TrackTableView
 from luxtunes.ui.art_cache import ART_CACHE
 from luxtunes.ui.artwork_window import ArtworkWindow
+from luxtunes.ui.mini_player import MiniPlayer
 from luxtunes.ui.cover_flow import CoverFlow
 from luxtunes.ui.cd_page import CdPage
 from luxtunes.ui.device_page import DevicePage
@@ -75,6 +77,7 @@ from luxtunes.core.android import device as android_device
 from luxtunes.core.android import sync as android_sync
 from luxtunes.core.ipod import device as ipod_device
 from luxtunes.core.ipod import settings as ipod_settings
+from luxtunes.ui.equalizer_window import EqualizerWindow
 from luxtunes.ui.get_info import InfoDialog, MultiInfoDialog
 from luxtunes.ui.grid_view import GridView
 from luxtunes.ui.view_icons import view_icons
@@ -129,6 +132,17 @@ class MainWindow(QMainWindow):
 
         self.model = TrackTableModel(self)
         self.player = Player(self)
+        if equalizer.has_saved(conn):
+            self.eq_settings = equalizer.load(conn)
+        else:                           # kept in the app's settings by earlier test builds
+            self.eq_settings = equalizer.Settings.from_json(self.settings.value("equalizer"))
+        self.player.set_equalizer(self.eq_settings)
+        self._eq_window = None
+        self._eq_save_timer = QTimer(self)
+        self._eq_save_timer.setSingleShot(True)
+        self._eq_save_timer.setInterval(500)            # once a slider stops moving
+        self._eq_save_timer.timeout.connect(
+            lambda: equalizer.save(self.conn, self.eq_settings))
         # Movies and TV shows play inside the main window, in place of the
         # sidebar and song list (built in _build_ui).
         self.video_panel = VideoPanel()
@@ -144,6 +158,7 @@ class MainWindow(QMainWindow):
         self._was_maximized = False
         self._art_mode = "selected"      # or "playing"
         self._art_window: ArtworkWindow | None = None
+        self._mini_player: MiniPlayer | None = None
         self._playing_source = None      # the list the current song was started from
         self.view_mode = "list"
         self._table_layout = "list"      # which column layout the song table has now
@@ -492,6 +507,11 @@ class MainWindow(QMainWindow):
         view_menu.addSeparator()
         self.show_art_action = self._action(view_menu, "Show Artwork", self._toggle_artwork, "Ctrl+G")
         self.show_art_action.setCheckable(True)
+        self.equalizer_action = self._action(view_menu, "Show Equalizer", self._toggle_equalizer,
+                                             "Ctrl+T")
+        view_menu.aboutToShow.connect(lambda: self.equalizer_action.setText(
+            "Hide Equalizer" if self._eq_window is not None and self._eq_window.isVisible()
+            else "Show Equalizer"))
         view_menu.addSeparator()
         self.dark_action = self._action(view_menu, "Dark Mode", self._toggle_dark_mode)
         self.dark_action.setCheckable(True)
@@ -503,6 +523,8 @@ class MainWindow(QMainWindow):
         self.current_song_action = self._action(controls, "Go to Current Song",
                                                 self._go_to_current_song, "Ctrl+L")
         controls.aboutToShow.connect(self._update_controls_menu)
+        self._action(controls, "Pop-Out Player", self._open_art_window)
+        self._action(controls, "Mini Player", self._open_mini_player, "Ctrl+Shift+M")
         self.recent_menu = controls.addMenu("Play Recent")
         self.recent_menu.aboutToShow.connect(self._fill_recent_menu)
         controls.addSeparator()
@@ -973,6 +995,8 @@ class MainWindow(QMainWindow):
 
     def _on_track_started(self, track: dict):
         self._remember_recent(track["id"])
+        if self._eq_window is not None:
+            self._eq_window.show_song(track)
         self.model.set_missing(track["id"], False)  # it's back, if it was ever missing
         self.lcd.show_track(track)
         self.model.set_now_playing(track["id"])
@@ -989,6 +1013,8 @@ class MainWindow(QMainWindow):
                                     QAbstractItemView.ScrollHint.PositionAtCenter)
         if self._art_window is not None:
             self._art_window.show_track(track, self._artwork_for(track))
+        if self._mini_player is not None:
+            self._mini_player.show_track(track)
         # Movies and TV shows play in the video window; music closes it.
         if track.get("media_kind") in VIDEO_KINDS:
             self._show_video(track)
@@ -1000,6 +1026,8 @@ class MainWindow(QMainWindow):
         self.video_panel.set_playing(playing)
         if self._art_window is not None:
             self._art_window.set_playing(playing)
+        if self._mini_player is not None:
+            self._mini_player.set_playing(playing)
 
     def _on_position(self, position: int, duration: int):
         self.lcd.update_position(position, duration)
@@ -1007,6 +1035,8 @@ class MainWindow(QMainWindow):
             self.video_panel.update_position(position, duration)
         if self._art_window is not None:
             self._art_window.update_position(position, duration)
+        if self._mini_player is not None:
+            self._mini_player.update_position(position, duration)
 
     def _on_track_finished(self, track: dict):
         self.model.update_track(track["id"], library.record_play(self.conn, track["id"]))
@@ -1060,6 +1090,8 @@ class MainWindow(QMainWindow):
         self.settings.setValue("volume", value)
         if self._art_window is not None:
             self._art_window.set_volume(value)
+        if self._mini_player is not None:
+            self._mini_player.set_volume(value)
         self.video_panel.set_volume(value)
 
     # ---- Movies and TV shows ------------------------------------------------------
@@ -1298,6 +1330,9 @@ class MainWindow(QMainWindow):
         if current is not None and current["id"] == track_id:
             self.lcd.show_track(current)        # the display shows the new name
             self.player.apply_volume()          # a new Volume Adjustment applies right away
+            self.player.apply_equalizer()       # and a new Equalizer Preset
+            if self._eq_window is not None:
+                self._eq_window.show_song(current)
 
     def _resort_after_edit(self):
         """Edited songs jump to their new place in the sorted list,
@@ -1330,13 +1365,16 @@ class MainWindow(QMainWindow):
         self._info_changed = self._kind_changed = False
         if len(tracks) == 1:
             if row < 0:                 # e.g. a one-song album in Grid view
-                dialog = InfoDialog(self.conn, tracks, 0, self._apply_info, self)
+                dialog = InfoDialog(self.conn, tracks, 0, self._apply_info, self,
+                                    presets=self.eq_settings.names())
             else:                       # Previous/Next walk through the list
-                dialog = InfoDialog(self.conn, self.model.visible_tracks(), row, self._apply_info, self)
+                dialog = InfoDialog(self.conn, self.model.visible_tracks(), row, self._apply_info,
+                                    self, presets=self.eq_settings.names())
         else:
             if not self._confirm_multi_info():
                 return
-            dialog = MultiInfoDialog(self.conn, tracks, self._apply_info, self)
+            dialog = MultiInfoDialog(self.conn, tracks, self._apply_info, self,
+                                     presets=self.eq_settings.names())
         dialog.exec()
         if self._kind_changed:
             self.reload_library()            # moved between Music and Movies
@@ -1683,6 +1721,35 @@ class MainWindow(QMainWindow):
             self._current_source = SOURCE_MUSIC
         self.reload_library()
 
+    # ---- Equalizer ---------------------------------------------------------------------
+
+    def _toggle_equalizer(self):
+        """View > Show Equalizer (Ctrl+T); hides it when it's already showing."""
+        if self._eq_window is not None and self._eq_window.isVisible():
+            self._eq_window.hide()
+        else:
+            self._show_equalizer()
+
+    def _show_equalizer(self):
+        if self._eq_window is None:
+            self._eq_window = EqualizerWindow(self.eq_settings, self)
+            self._eq_window.changed.connect(self._equalizer_changed)
+            self._eq_window.preset_renamed.connect(self._equalizer_preset_renamed)
+            self._eq_window.preset_deleted.connect(lambda name: self._equalizer_preset_renamed(name, None))
+        self._eq_window.show_song(self.player.current)
+        self._eq_window.show()
+        self._eq_window.raise_()
+        self._eq_window.activateWindow()
+
+    def _equalizer_changed(self):
+        self.player.apply_equalizer()
+        self._eq_save_timer.start()
+
+    def _equalizer_preset_renamed(self, old: str, new: str | None):
+        """Songs with this preset follow the rename (or lose the deleted preset)."""
+        for track_id in library.rename_equalizer_preset(self.conn, old, new):
+            self._after_edit(track_id)
+
     # ---- Pop-out artwork player ------------------------------------------------
 
     def _artwork_for(self, track: dict | None) -> bytes | None:
@@ -1710,6 +1777,47 @@ class MainWindow(QMainWindow):
         w.show()
         w.raise_()
         w.activateWindow()
+
+    def _open_mini_player(self):
+        """Controls > Mini Player: the main window is minimized and a small
+        player takes its place; closing that brings the window back."""
+        if self._mini_player is None:
+            w = MiniPlayer()                 # its own window: it stays when this one is minimized
+            w.play_clicked.connect(self._on_play_clicked)
+            w.next_clicked.connect(self.player.next)
+            w.previous_clicked.connect(self.player.previous)
+            w.seek_requested.connect(self.player.seek)
+            w.volume_changed.connect(self.volume.setValue)
+            w.restore_requested.connect(self._close_mini_player)
+            self._mini_player = w
+        w = self._mini_player
+        w.show_track(self.player.current)
+        w.set_volume(self.volume.value())
+        w.set_playing(self.player.is_playing)
+        w.update_position(*self._mini_position())
+        w.show()
+        w.raise_()
+        w.activateWindow()
+        self._full_screen_before_mini = self.isFullScreen()
+        self.showMinimized()
+
+    def _mini_position(self) -> tuple[int, int]:
+        player = self.player._player
+        return (player.position(), player.duration()) if self.player.current else (0, 0)
+
+    def _close_mini_player(self):
+        """The mini player was closed (or ⤢): back to the window, filling the
+        screen (full screen again if it was). Not showNormal(): that brings
+        back the window's last "normal" size, e.g. snapped to half the screen."""
+        w, self._mini_player = self._mini_player, None
+        if w is not None:
+            w.deleteLater()
+        if getattr(self, "_full_screen_before_mini", False):
+            self.showFullScreen()
+        else:
+            self.showMaximized()
+        self.raise_()
+        self.activateWindow()
 
     # ---- New / renamed playlists -----------------------------------------------
 
@@ -1892,6 +2000,9 @@ class MainWindow(QMainWindow):
 
         menu.addAction("Get Info", self._get_info)
         menu.addAction("Get Track Info Online…", lambda: self._get_track_info_online(tracks))
+        paste = menu.addAction("Paste Artwork", lambda: self._paste_artwork(tracks))
+        mime = QApplication.clipboard().mimeData()
+        paste.setEnabled(bool(mime) and (mime.hasImage() or mime.hasUrls()))
         menu.addMenu(self._rating_menu(menu, tracks))
         reveal = menu.addAction("Show in File Manager", lambda: self._show_in_file_manager(clicked))
         reveal.setEnabled(find_file(clicked.get("location")) is not None)
@@ -1919,6 +2030,39 @@ class MainWindow(QMainWindow):
         menu.addAction("Check Selection" if all_unchecked else "Uncheck Selection",
                        lambda: self._set_checked(tracks, all_unchecked))
         return menu
+
+    def _paste_artwork(self, tracks: list[dict]):
+        """Right-click → Paste Artwork: the copied picture becomes the artwork
+        of every selected song (written into each file, replacing its art)."""
+        from luxtunes.ui.get_info import images_from_mime
+        images = images_from_mime(QApplication.clipboard().mimeData())
+        tracks = [t for t in tracks if t.get("id") is not None]
+        if not images or not tracks:
+            QMessageBox.information(self, "Paste Artwork",
+                                    "Copy a picture (or a picture file) first, then paste it.")
+            return
+        if len(tracks) > 1 and QMessageBox.question(
+                self, "Paste Artwork",
+                f"Replace the artwork of these {len(tracks):,} songs with the copied picture?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
+            return
+        problems = []
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            for track in tracks:
+                error = self._apply_info(track["id"], {}, None, [images[0]])
+                if error:
+                    problems.append(f"{track.get('name') or track['id']}: {error}")
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._refresh_artwork()         # (the list and Grid refresh after each edit)
+        self.statusBar().showMessage(
+            f"Artwork pasted into {len(tracks) - len(problems):,} "
+            f"song{'s' if len(tracks) - len(problems) != 1 else ''}.", 6000)
+        if problems:
+            QMessageBox.warning(self, "Paste Artwork", "Some songs couldn't be changed:\n\n"
+                                + "\n".join(problems[:20]))
 
     def _rating_menu(self, parent, tracks) -> QMenu:
         menu = QMenu("Rating", parent)
@@ -3665,5 +3809,9 @@ class MainWindow(QMainWindow):
         s.setValue("header_version", HEADER_LAYOUT_VERSION)
         s.setValue("songs_split", self.songs_split.saveState())
         s.setValue("view_mode", self.view_mode)
+        equalizer.save(self.conn, self.eq_settings)
+        if self._mini_player is not None:
+            self._mini_player.restore_requested.disconnect()
+            self._mini_player.close()
         self.player.stop()
         super().closeEvent(event)

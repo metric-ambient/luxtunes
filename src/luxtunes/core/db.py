@@ -21,7 +21,7 @@ import sqlite3
 from pathlib import Path
 
 # Bump this when the schema changes, and add a step to _migrate().
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS library_info (
@@ -217,8 +217,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
             fields["extra_json"] = json.dumps(extra) if extra else None
             assignments = ", ".join(f"{k} = ?" for k in fields)
             conn.execute(f"UPDATE tracks SET {assignments} WHERE id = ?", [*fields.values(), track_id])
+    if version < 8:
+        # Get Info's Equalizer Preset: the name of the song's own preset.
+        conn.execute("ALTER TABLE tracks ADD COLUMN equalizer TEXT")
     # Future schema changes go here:
-    # if version < 8:
+    # if version < 9:
     #     conn.execute("ALTER TABLE tracks ADD COLUMN ...")
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()

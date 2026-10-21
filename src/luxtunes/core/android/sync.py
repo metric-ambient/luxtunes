@@ -263,6 +263,38 @@ def phone_path(track: dict, extension: str, taken: set[str]) -> str:
     return path
 
 
+class PhoneNames:
+    """Phone storage ignores the case of names, but the computer's view of it
+    doesn't: making "Crown The Empire" next to an existing "Crown the Empire"
+    fails with an input/output error. So each part of a path is spelled the
+    way it already is on the phone (listings are read once and remembered)."""
+
+    def __init__(self, root: Path):
+        self.root = Path(root)
+        self._folders: dict[str, dict[str, str]] = {}
+
+    def _names(self, parent: str) -> dict[str, str]:
+        if parent not in self._folders:
+            try:
+                names = os.listdir(self.root / parent) if parent else os.listdir(self.root)
+            except OSError:
+                names = []
+            self._folders[parent] = {n.casefold(): n for n in names}
+        return self._folders[parent]
+
+    def resolve(self, relative: str) -> str:
+        done: list[str] = []
+        for part in relative.split("/"):
+            done.append(self._names("/".join(done)).get(part.casefold(), part))
+        return "/".join(done)
+
+    def add(self, relative: str) -> None:
+        """A file was written there (its folders exist now too)."""
+        parts = relative.split("/")
+        for i, part in enumerate(parts):
+            self._names("/".join(parts[:i])).setdefault(part.casefold(), part)
+
+
 def transfer_kbps(song: dict, settings) -> int | None:
     """Android plays FLAC, Ogg and the rest, so only "Convert higher bit rate
     songs" ever converts."""
@@ -282,7 +314,13 @@ TRACK_COLUMNS = (
     "show", "season", "episode_number", "sort_name", "sort_artist", "sort_album",
     "sort_album_artist", "sort_composer", "enabled",
     # v2: everything else a smart playlist rule can test (smart.FIELDS)
-    "bpm", "kind", "date_modified", "purchased")
+    "bpm", "kind", "date_modified", "purchased",
+    # LuxTunes 0.7.0: the song's own equalizer preset (a name in equalizer_presets)
+    "equalizer")
+
+# The equalizer's bands as equalizer_presets columns.
+EQ_COLUMNS = ("band_32", "band_64", "band_125", "band_250", "band_500", "band_1k", "band_2k",
+              "band_4k", "band_8k", "band_16k")
 
 SCHEMA = """
 CREATE TABLE info (key TEXT PRIMARY KEY, value TEXT);
@@ -294,7 +332,23 @@ CREATE INDEX playlist_items_by_list ON playlist_items (playlist_id, position);
 CREATE TABLE reference_playlists (id TEXT PRIMARY KEY, name TEXT NOT NULL, is_smart INTEGER,
                                   is_folder INTEGER);
 CREATE TABLE reference_items (playlist_id TEXT, track_id TEXT);
+CREATE TABLE equalizer_presets (name TEXT PRIMARY KEY, position INTEGER, preamp REAL,
+                                {eq_columns});
 """
+
+
+def _write_equalizer(out, conn) -> None:
+    """The equalizer: on/off and the chosen preset in info, every preset (and
+    the Manual values, position NULL) in equalizer_presets."""
+    from luxtunes.core import equalizer
+    settings = equalizer.load(conn)
+    out.executemany("INSERT INTO info VALUES (?, ?)",
+                    [("equalizer_on", "1" if settings.on else "0"),
+                     ("equalizer_preset", settings.current.name)])
+    rows = [(p.name, i, p.preamp, *p.bands) for i, p in enumerate(settings.presets)]
+    rows.append((equalizer.MANUAL, None, settings.manual.preamp, *settings.manual.bands))
+    marks = ", ".join("?" for _ in range(3 + len(EQ_COLUMNS)))
+    out.executemany(f"INSERT INTO equalizer_presets VALUES ({marks})", rows)
 
 
 def _referenced(group, found: set[str]) -> set[str]:
@@ -347,7 +401,8 @@ def build_database(path: str, conn: sqlite3.Connection, placed: dict, covers: di
     columns = [c for c in TRACK_COLUMNS if c in existing]
     out = sqlite3.connect(path)
     try:
-        out.executescript(SCHEMA.format(columns=", ".join(columns)))
+        out.executescript(SCHEMA.format(columns=", ".join(columns),
+                                        eq_columns=", ".join(f"{c} REAL" for c in EQ_COLUMNS)))
         info = {"format_version": str(FORMAT_VERSION), "library_id": library_id(conn),
                 "library_name": library.library_name(conn), "luxtunes_version": __version__,
                 "synced_at": library.now_utc()}
@@ -374,6 +429,7 @@ def build_database(path: str, conn: sqlite3.Connection, placed: dict, covers: di
                             [(entry["persistent_id"], i, pid) for i, pid in enumerate(ids)
                              if pid in placed])
         _write_references(out, conn, playlists, placed)
+        _write_equalizer(out, conn)
         out.commit()
     finally:
         out.close()
@@ -487,12 +543,14 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
         # Nothing on the phone changes, but its database still gets brought up
         # to date with what's there (the phone's own changes are in already).
         report.cancelled = True
-        _finish(conn, root, phone, record, report, manifest, the_plan, tell, stopped=True)
+        _finish(conn, root, phone, record, report, manifest, the_plan, tell, stopped=True,
+                on_phone=present)
         return report
 
     # 3. Take off what's no longer wanted (only ever inside the LuxTunes folder).
     gone = [(files[pid]["path"], pid, files[pid].get("name")) for pid in to_remove] + \
            [(p, None, Path(p).name) for p in strays]
+    stuck: list[str] = []
     for i, (relative, pid, name) in enumerate(gone):
         tell("Removing media from the phone…", i, len(gone), can_stop=False)
         try:
@@ -503,16 +561,28 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
                 del files[pid]               # a bad entry in the record: forget it
             continue
         except OSError as error:
-            report.problems.append(f"{name}: {error.strerror or error}")
+            if pid is None:
+                stuck.append(name)           # a leftover file the phone won't let go of
+                log.warning("couldn't remove leftover %s from the phone: %s", relative, error)
+            else:
+                report.problems.append(f"{name}: {error.strerror or error}")
             continue
         _remove_empty_folders(root, relative)
         if pid is not None:
             del files[pid]
         report.removed += 1
+    if stuck:
+        report.problems.append(
+            f"{len(stuck):,} leftover file{'s' if len(stuck) != 1 else ''} on the phone couldn't "
+            "be removed (" + ", ".join(stuck[:5]) + (", …" if len(stuck) > 5 else "") + "). "
+            "These are usually left by an earlier copy that failed. Your songs aren't affected. "
+            "To clear them, unplug the phone, restart it, and sync again.")
 
     # 4. Copy new and changed songs.
     taken = {f["path"].casefold() for f in files.values()}      # incl. kept ones
     fresh: set[str] = set()                   # album folders that got songs this sync
+    new_covers: set[str] = set()              # covers written this sync
+    names = PhoneNames(root)
     scratch = tempfile.TemporaryDirectory(prefix="luxtunes-android-")
     try:
         for i, track in enumerate(to_copy):
@@ -533,16 +603,15 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
             old = files.get(pid)
             if old:
                 taken.discard(old["path"].casefold())
-                try:
-                    _delete(root, old["path"])
-                except OSError:
-                    pass
-            relative = phone_path(track, Path(sending).suffix.lower(), taken)
+            relative = names.resolve(phone_path(track, Path(sending).suffix.lower(), taken))
             try:
                 _copy(sending, root, relative, stop)
             except OSError as error:
                 report.problems.append(f"{track.get('name')}: {error.strerror or error}")
-                files.pop(pid, None)
+                if old and old["path"].casefold() != relative.casefold():
+                    taken.add(old["path"].casefold())     # the old copy stays for now
+                else:
+                    files.pop(pid, None)
                 continue
             finally:
                 if sending != source:
@@ -556,11 +625,20 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
                           "source_size": st.st_size, "source_mtime": st.st_mtime_ns,
                           "name": track.get("name"), "artist": track.get("artist"),
                           "album": track.get("album")}
+            names.add(relative)
+            if old and old["path"].casefold() != relative.casefold():
+                # Moved (e.g. its album was renamed): the old copy goes only
+                # now that the new one is there.
+                try:
+                    _delete(root, old["path"])
+                    _remove_empty_folders(root, old["path"])
+                except OSError:
+                    pass
             report.added += 1
             # The album's cover goes with its first song, so it's there even if
             # the sync is stopped later.
             fresh.add(str(Path(relative).parent))
-            _add_cover(root, relative, track, source, manifest, report)
+            _add_cover(root, relative, track, source, manifest, report, new_covers)
             if report.added % SAVE_EVERY == 0:
                 # Now and then, the record of what's here (if LuxTunes is cut
                 # off, the next sync knows these songs are already there).
@@ -574,7 +652,7 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
     # 5–7. Covers, playlists and the database, also after Stop: they describe
     # exactly what's on the phone now, so a player can use the songs copied so far.
     _finish(conn, root, phone, record, report, manifest, the_plan, tell,
-            stopped=report.cancelled, fresh=fresh)
+            stopped=report.cancelled, fresh=fresh, on_phone=present | new_covers)
     return report
 
 
@@ -599,7 +677,7 @@ def _cover_name(folder: str, art: bytes) -> str:
 
 
 def _add_cover(root: Path, relative: str, track: dict, source: str, manifest: dict,
-               report: SyncReport) -> None:
+               report: SyncReport, new_covers: set | None = None) -> None:
     """cover.jpg for this song's album folder, if it has none yet."""
     if (track.get("media_kind") or "music") not in library.AUDIO_KINDS:
         return
@@ -614,20 +692,24 @@ def _add_cover(root: Path, relative: str, track: dict, source: str, manifest: di
     try:
         _write(root, cover, art)
         covers.append(cover)
+        if new_covers is not None:
+            new_covers.add(cover)
     except OSError as error:
         report.problems.append(f"Cover for {folder}: {error.strerror or error}")
 
 
 def _finish(conn, root: Path, phone: Phone, record, report: SyncReport, manifest: dict,
-            the_plan, tell, stopped: bool, fresh: set[str] = frozenset()) -> None:
+            the_plan, tell, stopped: bool, fresh: set[str] = frozenset(),
+            on_phone: set[str] | None = None) -> None:
     placed = {pid: f["path"] for pid, f in manifest["files"].items()}
 
     # 5. Album covers (for players that look for cover.jpg next to the songs).
     # After Stop, only the covers already there (no artwork is read, to stop quickly).
-    tell("Adding album covers…", can_stop=False)
     by_pid = {t["persistent_id"]: t for t in library.load_tracks(conn) if t.get("persistent_id")}
     covers = _write_covers(root, placed, by_pid, manifest, report, read_new=not stopped,
-                           fresh=fresh)
+                           fresh=fresh, on_phone=on_phone,
+                           tell=lambda done, total: tell("Adding album covers…", done, total,
+                                                         can_stop=False))
 
     # 6. Playlists as .m3u8 files.
     tell("Writing playlists…", can_stop=False)
@@ -676,25 +758,40 @@ def _save_manifest(root: Path, manifest: dict, conn) -> None:
 
 
 def _write_covers(root: Path, placed: dict, tracks: dict, manifest: dict,
-                  report: SyncReport, read_new: bool = True, fresh=frozenset()) -> dict:
+                  report: SyncReport, read_new: bool = True, fresh=frozenset(),
+                  on_phone: set[str] | None = None, tell=None) -> dict:
     """One cover file per album folder, from the artwork of the first of its
     songs that has some. read_new False: only keep the covers already there.
     Folders where no song had artwork are remembered (no_cover) and only looked
-    at again when one of their songs was copied (fresh)."""
+    at again when one of their songs was copied (fresh).
+
+    on_phone: the files known to be on the phone (read once at the start of
+    the sync, plus covers written since). Asking the phone about each cover
+    instead takes a second or more per album over USB: many minutes for a big
+    library."""
     covers = {}
-    old = set(manifest.get("covers") or [])
+    old = {str(Path(c).parent): c for c in manifest.get("covers") or []}
     no_cover = set(manifest.get("no_cover") or [])
+    there = {p.casefold() for p in on_phone} if on_phone is not None else None
+
+    def exists(relative: str) -> bool:
+        if there is not None:
+            return relative.casefold() in there
+        return (root / relative).exists()
+
     by_folder: dict[str, list[str]] = {}
     for pid, path in sorted(placed.items(), key=lambda item: item[1]):
         by_folder.setdefault(str(Path(path).parent), []).append(pid)
     still_none = set()
-    for folder, pids in sorted(by_folder.items()):
+    for done, (folder, pids) in enumerate(sorted(by_folder.items())):
+        if tell is not None and done % 25 == 0:
+            tell(done, len(by_folder))
         songs = [tracks[p] for p in pids if p in tracks and
                  (tracks[p].get("media_kind") or "music") in library.AUDIO_KINDS]
         if not songs:
             continue
-        existing = next((c for c in old if str(Path(c).parent) == folder), None)
-        if existing and (root / existing).exists():
+        existing = old.get(folder)
+        if existing and exists(existing):
             covers[folder] = existing
             continue
         if not read_new or (folder in no_cover and folder not in fresh):
@@ -715,7 +812,7 @@ def _write_covers(root: Path, placed: dict, tracks: dict, manifest: dict,
             covers[folder] = relative
         except OSError as error:
             report.problems.append(f"Cover for {folder}: {error.strerror or error}")
-    for gone in old - set(covers.values()):
+    for gone in set(old.values()) - set(covers.values()):
         try:
             _delete(root, gone)
             _remove_empty_folders(root, gone)
@@ -728,9 +825,14 @@ def _write_covers(root: Path, placed: dict, tracks: dict, manifest: dict,
 
 def _write_playlists(conn, root: Path, playlists: list[dict], placed: dict,
                      manifest: dict) -> dict:
-    """Returns playlist persistent id -> its file (relative to the LuxTunes folder)."""
+    """Returns playlist persistent id -> its file (relative to the LuxTunes folder).
+    A playlist file that hasn't changed since the last sync isn't written again
+    (each write to the phone takes a moment)."""
+    import hashlib
     written = {}
     names = set()
+    old_hashes = manifest.get("playlist_hashes") or {}
+    hashes = {}
     for entry in playlists:
         name = organize.safe_name(entry["name"] or "Playlist", organize.FOLDER_MAX, True)
         while name.casefold() in names:
@@ -738,7 +840,11 @@ def _write_playlists(conn, root: Path, playlists: list[dict], placed: dict,
         names.add(name.casefold())
         relative = f"{PLAYLISTS}/{name}.m3u8"
         tracks = library.load_tracks_by_ids(conn, entry["track_ids"])
-        _write(root, relative, playlist_text(entry, tracks, placed).encode("utf-8"))
+        data = playlist_text(entry, tracks, placed).encode("utf-8")
+        digest = hashlib.sha1(data).hexdigest()
+        if old_hashes.get(relative) != digest or not (root / relative).exists():
+            _write(root, relative, data)
+        hashes[relative] = digest
         written[entry["persistent_id"]] = relative
     for gone in set(manifest.get("playlists") or []) - set(written.values()):
         try:
@@ -746,4 +852,5 @@ def _write_playlists(conn, root: Path, playlists: list[dict], placed: dict,
         except OSError:
             pass
     manifest["playlists"] = sorted(written.values())
+    manifest["playlist_hashes"] = hashes
     return written

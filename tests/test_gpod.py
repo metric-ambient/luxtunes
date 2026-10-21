@@ -286,3 +286,15 @@ def test_unlisted_files_with_an_empty_database_are_left_alone(tmp_path):
     assert sync.unlisted_song_files(str(tmp_path), []) == []
     assert sync.unlisted_song_files(str(tmp_path), [str(tmp_path / "other.mp3")]) == \
         [str(folder / "ABCD.mp3")]
+
+
+def test_an_ipod_luxtunes_cant_write_to_is_refused_up_front(tmp_path):
+    from luxtunes.core.ipod import models
+    mount, conn = fake_ipod(tmp_path), small_library(tmp_path)
+    ipod = device.read_ipod(str(mount), "", "vfat")
+    ipod.identity = models.identify("", "1266")                  # nano 6th generation
+    record = settings.load_device(conn, ipod.key, ipod.name)
+    with pytest.raises(gpod.GpodError, match="signature"):
+        sync.sync(conn, ipod, record)
+    with gpod.Database(str(mount)) as ipod_db:
+        assert ipod_db.tracks() == []                            # nothing was touched

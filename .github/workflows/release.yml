@@ -33,7 +33,7 @@ jobs:
       - name: Run the tests that need no screen or devices
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
-          python -m pip install -q mutagen pytest
+          python -m pip install -q mutagen numpy pytest
           PYTHONPATH=src python -m pytest -q --ignore=tests/test_ui_smoke.py --ignore=tests/test_gpod.py
 
       - name: Build

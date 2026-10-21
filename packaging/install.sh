@@ -6,7 +6,7 @@
 #
 # What it does, step by step:
 #   1. Makes LuxTunes its own Python environment in ~/.local/share/luxtunes/app
-#      and installs LuxTunes (and PySide6 + mutagen) into it with pip.
+#      and installs LuxTunes (and PySide6, mutagen and numpy) into it with pip.
 #   2. Links the `luxtunes` command into ~/.local/bin.
 #   3. Adds the menu entry (~/.local/share/applications/luxtunes.desktop) and
 #      the penguin icon (~/.local/share/icons/hicolor/...).

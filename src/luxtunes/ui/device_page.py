@@ -99,45 +99,128 @@ def checked_keys(widget: QListWidget) -> list:
             if widget.item(i).checkState() == Qt.CheckState.Checked]
 
 
-class IPodPicture(QWidget):
-    """A drawn iPod classic (silver or black), for the Summary tab."""
+# Body colours for the iPod picture (from the model's colour name).
+BODY_COLOURS = {
+    "black": "#2c2c2e", "white": "#f2f2f3", "silver": "#d9dbde", "grayscale": "#f2f2f3",
+    "color": "#f2f2f3", "stainless": "#cfd1d4", "pink": "#e9a6c3", "blue": "#7cafdd",
+    "green": "#a0cf85", "gold": "#d9c58b", "red": "#c8333c", "yellow": "#e7d35b",
+    "purple": "#9b83c7", "orange": "#ec9b4b",
+}
 
-    def __init__(self, colour: str = "black", parent=None):
+# How each kind of iPod is drawn, in the 110 x 140 picture: the body, where the
+# screen sits and what the controls are (a click wheel, a wheel with buttons
+# around it, a row of buttons, a round control pad, a single button, or none).
+# Rough outlines only, to tell the kinds apart at a glance.
+SHAPES = {
+    "wheel":     dict(body=(18, 4, 74, 118, 9), screen=(25, 12, 60, 42), wheel=(55, 83, 21)),
+    "early":     dict(body=(18, 4, 74, 118, 9), screen=(25, 12, 60, 42), wheel=(55, 83, 21),
+                      wheel_buttons=True),
+    "third":     dict(body=(18, 4, 74, 118, 9), screen=(25, 12, 60, 40), wheel=(55, 89, 18),
+                      button_row=60),
+    "mini":      dict(body=(28, 14, 54, 104, 8), screen=(33, 21, 44, 32), wheel=(55, 88, 17)),
+    "nano_tall": dict(body=(33, 6, 44, 116, 6), screen=(37, 12, 36, 32), wheel=(55, 90, 16)),
+    "nano_4":    dict(body=(33, 6, 44, 116, 6), screen=(37, 12, 36, 44), wheel=(55, 96, 15)),
+    "nano_5":    dict(body=(33, 6, 44, 116, 6), screen=(37, 11, 36, 50), wheel=(55, 98, 14)),
+    "nano_3":    dict(body=(22, 22, 66, 90, 9), screen=(29, 29, 52, 38), wheel=(55, 92, 15)),
+    "nano_6":    dict(body=(25, 30, 60, 66, 7), screen=(29, 34, 52, 58)),
+    "nano_7":    dict(body=(34, 16, 42, 104, 6), screen=(37, 23, 36, 76), button=(55, 111, 4)),
+    "shuffle_1": dict(body=(42, 18, 26, 100, 6), pad=(55, 50, 10)),
+    "shuffle_2": dict(body=(24, 40, 62, 50, 6), pad=(55, 65, 16)),
+    "shuffle_3": dict(body=(46, 34, 18, 72, 5)),
+    "shuffle_4": dict(body=(27, 38, 56, 60, 7), pad=(55, 68, 17)),
+    "slab":      dict(body=(28, 12, 54, 112, 10), screen=(32, 23, 46, 82), button=(55, 115, 4)),
+}
+FAMILY_SHAPES = {
+    "first": "early", "second": "early", "third": "third", "mini": "mini", "mini_1": "mini",
+    "mini_2": "mini", "nano_1": "nano_tall", "nano_2": "nano_tall", "nano_4": "nano_4",
+    "nano_5": "nano_5", "nano_3": "nano_3", "nano_6": "nano_6", "nano_7": "nano_7",
+    "shuffle_1": "shuffle_1", "shuffle_2": "shuffle_2", "shuffle_3": "shuffle_3",
+    "shuffle_4": "shuffle_4", "touch": "slab", "iphone": "slab", "ipad": "slab",
+}
+
+
+class IPodPicture(QWidget):
+    """A drawn iPod for the Summary tab, shaped like the kind of iPod it is
+    (classic, mini, nano, shuffle...) and in its colour."""
+
+    def __init__(self, colour: str = "black", family: str = "", parent=None):
         super().__init__(parent)
         self.colour = colour
+        self.family = family
         self.setFixedSize(110, 140)
+
+    @property
+    def default_colour(self) -> str:
+        """When the model's colour isn't known: the colour most of its kind came in."""
+        if self.family.startswith(("mini", "nano", "shuffle")):
+            return "silver"
+        if self.family in ("first", "second", "third", "fourth", "photo"):
+            return "white"
+        return "black"
+
+    @property
+    def shape(self) -> dict:
+        return SHAPES[FAMILY_SHAPES.get(self.family, "wheel")]
 
     def paintEvent(self, event):
         painter = QPainter(self)
         try:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            dark = self.colour != "silver"
-            body = QRectF(18, 4, 70, 118)
+            shape = self.shape
+            base = QColor(BODY_COLOURS.get((self.colour or "").lower(),
+                                           BODY_COLOURS[self.default_colour]))
+            dark = base.lightness() < 110
+            x, y, w, h, radius = shape["body"]
+            body = QRectF(x, y, w, h)
             gradient = QLinearGradient(body.topLeft(), body.topRight())
-            gradient.setColorAt(0, QColor("#3b3b3d" if dark else "#e9eaec"))
-            gradient.setColorAt(0.5, QColor("#626266" if dark else "#fafafa"))
-            gradient.setColorAt(1, QColor("#2c2c2e" if dark else "#cfd1d4"))
-            painter.setPen(QPen(QColor("#1b1b1c" if dark else "#9a9ca0"), 1.2))
+            gradient.setColorAt(0, base.lighter(112) if dark else base.darker(104))
+            gradient.setColorAt(0.5, base.lighter(150) if dark else base.lighter(106))
+            gradient.setColorAt(1, base.darker(115))
+            painter.setPen(QPen(base.darker(170 if dark else 140), 1.2))
             painter.setBrush(gradient)
-            painter.drawRoundedRect(body, 9, 9)
-            painter.setBrush(QColor("#121214"))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(QRectF(25, 12, 56, 42), 3, 3)
-            screen = QLinearGradient(0, 14, 0, 52)
-            screen.setColorAt(0, QColor("#5b5d63"))
-            screen.setColorAt(1, QColor("#2a2b30"))
-            painter.setBrush(screen)
-            painter.drawRect(QRectF(28, 15, 50, 36))
-            painter.setBrush(QColor("#1e1e20" if dark else "#f4f4f5"))
-            painter.setPen(QPen(QColor("#0e0e0f" if dark else "#b9bbbf"), 1))
-            painter.drawEllipse(QRectF(32, 62, 42, 42))
-            painter.setBrush(QColor("#3b3b3e" if dark else "#d7d9dc"))
-            painter.drawEllipse(QRectF(45, 75, 16, 16))
-            painter.setPen(QColor("#9a9a9e"))
-            font = painter.font()
-            font.setPixelSize(5)
-            painter.setFont(font)
-            painter.drawText(QRectF(32, 63, 42, 8), Qt.AlignmentFlag.AlignCenter, "MENU")
+            painter.drawRoundedRect(body, radius, radius)
+
+            if "screen" in shape:
+                sx, sy, sw, sh = shape["screen"]
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor("#121214"))
+                painter.drawRoundedRect(QRectF(sx, sy, sw, sh), 3, 3)
+                glass = QLinearGradient(0, sy, 0, sy + sh)
+                glass.setColorAt(0, QColor("#5b5d63"))
+                glass.setColorAt(1, QColor("#2a2b30"))
+                painter.setBrush(glass)
+                painter.drawRect(QRectF(sx + 3, sy + 3, sw - 6, sh - 6))
+
+            control = QColor("#1e1e20") if dark else QColor("#f6f6f7")
+            edge = QPen(QColor("#0e0e0f") if dark else base.darker(125), 1)
+            if "wheel" in shape:
+                cx, cy, r = shape["wheel"]
+                painter.setBrush(control)
+                painter.setPen(edge)
+                painter.drawEllipse(QRectF(cx - r, cy - r, 2 * r, 2 * r))
+                painter.setBrush(base.darker(108) if not dark else QColor("#3b3b3e"))
+                painter.drawEllipse(QRectF(cx - r * 0.38, cy - r * 0.38, r * 0.76, r * 0.76))
+                if shape.get("wheel_buttons"):        # buttons around the wheel
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.drawEllipse(QRectF(cx - r - 4, cy - r - 4, 2 * r + 8, 2 * r + 8))
+            if "button_row" in shape:                 # a row of four buttons
+                painter.setBrush(control)
+                painter.setPen(edge)
+                for i in range(4):
+                    painter.drawEllipse(QRectF(29 + i * 14, shape["button_row"], 10, 10))
+            if "pad" in shape:                        # a round control pad
+                cx, cy, r = shape["pad"]
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(base.darker(150), 2.4))
+                painter.drawEllipse(QRectF(cx - r, cy - r, 2 * r, 2 * r))
+                painter.setPen(edge)
+                painter.setBrush(base.darker(115))
+                painter.drawEllipse(QRectF(cx - r * 0.35, cy - r * 0.35, r * 0.7, r * 0.7))
+            if "button" in shape:                     # a single round button
+                cx, cy, r = shape["button"]
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(base.darker(150), 1.2))
+                painter.drawEllipse(QRectF(cx - r, cy - r, 2 * r, 2 * r))
         finally:
             painter.end()
 
@@ -330,12 +413,13 @@ class DevicePage(QWidget):
         self.storage_label.setVisible(android)
         self.storage.setVisible(android)
         self.delete_unselected.setVisible(android)
+        hidden = self.hidden_tabs()
         for i, name in enumerate(TABS):
-            if name in ("Photos", "Games"):
-                self.tab_group.button(i).setVisible(not android)
-        if android and TABS[self.pages.currentIndex()] in ("Photos", "Games"):
+            self.tab_group.button(i).setVisible(name not in hidden)
+        if TABS[self.pages.currentIndex()] in hidden:
             self.tab_group.button(0).setChecked(True)
             self._show_tab(0)
+        self._show_model_note()
         device_word = "phone" if android else "iPod"
         tip = (f"Songs above this rate (and lossless ones) are converted on their way to the "
                f"{device_word}. The files in your library are never changed.")
@@ -406,8 +490,9 @@ class DevicePage(QWidget):
     def _update_buttons(self):
         dirty = self.dirty
         syncing = self._syncing_this()
+        unsupported = bool(getattr(self.ipod, "unsupported", "")) and not self.is_android
         self.sync_button.setText("Syncing…" if syncing else "Sync")
-        self.sync_button.setEnabled(not syncing)
+        self.sync_button.setEnabled(not syncing and not unsupported)
         self.apply_button.setEnabled(not syncing)
         self.revert_button.setVisible(dirty)
         self.apply_button.setVisible(dirty)
@@ -428,6 +513,12 @@ class DevicePage(QWidget):
 
         self.device_heading = heading("iPod")
         column.addWidget(self.device_heading)
+        # What this model can't do (or why it can't be synced), when that applies.
+        self.model_note = QLabel()
+        self.model_note.setObjectName("deviceNote")
+        self.model_note.setWordWrap(True)
+        self.model_note.hide()
+        column.addWidget(self.model_note)
         frame, inner = box()
         row = QHBoxLayout()
         self.picture = IPodPicture()
@@ -523,23 +614,69 @@ class DevicePage(QWidget):
             widget.toggled.connect(self._changed)
         return page
 
+    def hidden_tabs(self) -> set[str]:
+        """Tabs that don't apply: a phone has no Photos or Games; an iPod
+        without video has no Movies or TV Shows, one without a colour screen
+        no Photos."""
+        if self.is_android:
+            return {"Photos", "Games"}
+        hidden = set()
+        if not getattr(self.ipod, "supports_video", True):
+            hidden |= {"Movies", "TV Shows"}
+        if not getattr(self.ipod, "supports_photos", True):
+            hidden.add("Photos")
+        return hidden
+
+    def _show_model_note(self):
+        ipod = self.ipod
+        text = ""
+        if not self.is_android and ipod is not None:
+            if getattr(ipod, "unsupported", ""):
+                text = f"LuxTunes can't sync this iPod. {ipod.unsupported}"
+            else:
+                missing = []
+                if not getattr(ipod, "supports_video", True):
+                    missing.append("videos")
+                if not getattr(ipod, "supports_photos", True):
+                    missing.append("photos")
+                parts = []
+                if missing:
+                    parts.append(f"This iPod doesn't play {' or '.join(missing)}, so "
+                                 f"{'they aren' if len(missing) > 1 else 'those aren'}'t "
+                                 "synced to it.")
+                identity = getattr(ipod, "identity", None)
+                if identity is not None and identity.family.note:
+                    parts.append(identity.family.note)
+                text = " ".join(parts)
+        self.model_note.setText(text)
+        self.model_note.setVisible(bool(text))
+
     def _fill_summary(self):
         if self.is_android:
             self._fill_phone_summary()
             return
         ipod = self.ipod
-        self.picture.colour = ipod.colour or "black"
+        self.picture.colour = ipod.colour or ""
+        identity = getattr(ipod, "identity", None)
+        self.picture.family = identity.family_key if identity is not None else ""
         self.picture.update()
         values = {
             "Name": self.record.name or ipod.name,
             "Capacity": ipod_device.format_gb(self._space.capacity),
             "Software Version": ipod.software_version or "Unknown",
             "Serial Number": ipod.serial or "Unknown",
-            "Model": ipod.model_name or (ipod.model_number or "Unknown"),
+            "Model": self._model_text(ipod),
             "Format": ipod.format_name,
         }
         for key, value in values.items():
             self.summary_values[key].setText(value)
+
+    @staticmethod
+    def _model_text(ipod) -> str:
+        name = ipod.model_name or ipod.model_number or "Unknown"
+        identity = getattr(ipod, "identity", None)
+        size = identity.capacity_label if identity is not None else ""
+        return f"{name}, {size}" if size else name
 
     def _fill_phone_summary(self):
         phone = self.ipod
@@ -1123,7 +1260,9 @@ class DevicePage(QWidget):
             from luxtunes.core.android import sync as android_sync
             kbps_for = android_sync.transfer_kbps
         return ipod_plan.build_plan(self.conn, self.settings, free_space=free, seed=0,
-                                    kbps_for=kbps_for, phone=self.is_android)
+                                    kbps_for=kbps_for, phone=self.is_android,
+                                    video=self.is_android or getattr(self.ipod, "supports_video",
+                                                                      True))
 
     def _refresh_plan(self):
         if self.conn is None or self._space is None:
@@ -1168,5 +1307,6 @@ class DevicePage(QWidget):
             self.warning.hide()
         too_big = free < 0
         syncing = self._syncing_this()
+        unsupported = bool(getattr(self.ipod, "unsupported", "")) and not self.is_android
         self.apply_button.setEnabled(not too_big and not syncing)
-        self.sync_button.setEnabled(not too_big and not syncing)
+        self.sync_button.setEnabled(not too_big and not syncing and not unsupported)

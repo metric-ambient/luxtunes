@@ -13,7 +13,7 @@
 > including fitness for a particular purpose. You run it at your own risk; the author is not
 > liable for any damage or data loss. See the [GPL-3.0 license](LICENSE), sections 15 and 16.
 
-A native Linux music manager for your library, your CDs, your iPod Classic and your Android phone, built for Linux Mint.
+A native Linux music manager for your library, your CDs, your iPod and your Android phone, built for Linux Mint.
 
 ## What it does
 
@@ -25,10 +25,14 @@ A native Linux music manager for your library, your CDs, your iPod Classic and y
   playlists included.
 - "Keep LuxTunes Media folder organized": files are named and filed by
   Artist / Album / `Disc-Track Title.mp3`, and edits are written back into the tags.
+- A 10-band equalizer with presets (View → Show Equalizer); a song can have its own preset
+  and volume adjustment in Get Info.
 - Live smart playlists, Get Info, Display Duplicates/Missing, CD import (MP3, AAC, Apple
   Lossless, AIFF, WAV), movies, TV shows, podcasts and audiobooks.
-- Syncs iPod Classic (5G–7G) on stock firmware: music, videos, podcasts, audiobooks and
-  photos (one way, from a folder), reading play counts back from the iPod.
+- Syncs iPods on stock firmware (classic, mini, nano 1st–5th generation, shuffle): music,
+  podcasts, audiobooks, and videos and photos (one way, from a folder) on models that show
+  them, reading play counts back from the iPod. Not supported: iPod nano 6th/7th generation
+  (their song list needs a signature only Apple's software can make) and iPod touch.
 - Syncs Android phones over USB: songs, videos, podcasts, audiobooks, artwork and playlists
   (smart playlists with their rules) go into one `LuxTunes` folder that any music player
   can use. A player that supports it sends plays, skips, ratings and playlist changes back
@@ -113,6 +117,7 @@ file). `--media-folder` is the folder that holds your copied `Music/` folder.
 | Language | Python 3.12+ |
 | Interface and playback | Qt 6 via [PySide6](https://doc.qt.io/qtforpython-6/) (Qt Multimedia, FFmpeg) |
 | Tags | [mutagen](https://mutagen.readthedocs.io/) |
+| Equalizer | [NumPy](https://numpy.org/) |
 | iPod | [libgpod](https://sourceforge.net/projects/gtkpod/) |
 | CDs | cdparanoia + FFmpeg; names from [MusicBrainz](https://musicbrainz.org/) |
 
@@ -121,7 +126,7 @@ file). `--media-folder` is the folder that holds your copied `Music/` folder.
 ```
 src/luxtunes/
     core/        library database, tags, organizing, smart playlists, CDs, updates
-    core/ipod/   iPod Classic sync (libgpod)
+    core/ipod/   iPod sync (libgpod); models.py says what each model can do
     core/android/  Android sync (over USB file transfer)
     importer/    iTunes library XML import
     ui/          Qt interface
