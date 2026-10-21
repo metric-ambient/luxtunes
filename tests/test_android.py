@@ -377,3 +377,62 @@ def test_version_1_files_still_work_and_new_plays_arent_lost(tmp_path):
     later = json.dumps({"version": 2, "tracks": [{"id": robbers, "plays": 3}]})
     left = changes.emptied(merged, later)
     assert left["tracks"] == [{"id": robbers, "plays": 1, "skips": 0}]
+
+
+def test_the_chosen_storage_is_found_again_by_kind(tmp_path):
+    phone = device.Phone(str(tmp_path), "M", "X", "S",
+                         {"Internal shared storage": "/a", "SD card": "/b"})
+    assert phone.storage("SD card", "removable") == "/b"
+    assert device.storage_kind("SD card") == "removable"
+    assert device.storage_kind("Internal shared storage") == "internal"
+    renamed = device.Phone(str(tmp_path), "M", "X", "S",
+                           {"Internal shared storage": "/a", "SanDisk 64GB": "/c"})
+    assert renamed.storage("SD card", "removable") == "/c"         # same kind, new name
+    assert renamed.storage("", "") == "/a"                         # default: the phone's own
+    no_card = device.Phone(str(tmp_path), "M", "X", "S", {"Internal shared storage": "/a"})
+    assert no_card.storage("SD card", "removable") == "/a"
+
+
+def test_a_missing_sd_card_stops_the_sync_instead_of_filling_the_phone(tmp_path):
+    conn = small_library(tmp_path)
+    phone = fake_phone(tmp_path)                          # no SD card in it
+    with pytest.raises(OSError, match="SD card"):
+        run(conn, phone, android_storage="SD card", android_storage_kind="removable")
+    assert not (tmp_path / "phone" / "Internal shared storage" / "LuxTunes").exists()
+
+
+def test_stopping_still_leaves_a_database_for_the_songs_copied(tmp_path):
+    conn = small_library(tmp_path)
+    phone = fake_phone(tmp_path)
+    root = _phone_root(tmp_path)
+    record = settings.load_device(conn, phone.key, phone.name)
+    copies = []
+
+    def progress(text, done, total):
+        if text.startswith("Copying"):
+            copies.append(text)
+            return len(copies) < 2               # Stop pressed during the second song
+        return True
+
+    report = sync.sync(conn, phone, record, progress)
+    assert report.cancelled and report.added == 1
+    with _db(root) as out:
+        assert out.execute("SELECT COUNT(*) FROM tracks").fetchone()[0] == 1
+    assert (root / "Playlists").is_dir()
+    # A player on the phone gets a changes.json to fill in, even on a first sync.
+    assert json.loads((root / "changes.json").read_text()) == \
+        {"version": 2, "tracks": [], "playlists": []}
+    assert settings.load_device(conn, phone.key).last_sync is None    # not a finished sync
+
+
+def test_saying_no_at_the_sync_question_still_updates_the_database(tmp_path):
+    conn = small_library(tmp_path)
+    phone = fake_phone(tmp_path)
+    root = _phone_root(tmp_path)
+    run(conn, phone)
+    (root / "library.db").unlink()
+    record = settings.load_device(conn, phone.key, phone.name)
+    report = sync.sync(conn, phone, record, confirm=lambda *a: False)
+    assert report.cancelled
+    with _db(root) as out:
+        assert out.execute("SELECT COUNT(*) FROM tracks").fetchone()[0] == 3

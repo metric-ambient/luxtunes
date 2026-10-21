@@ -107,7 +107,7 @@ def read_details(path: str) -> dict:
         details["encoder"] = getattr(info, "encoder_info", "") or ""
     elif isinstance(audio, MP4):
         details["format"] = getattr(info, "codec_description", "") or "MPEG-4 audio"
-        if tags and "\xa9too" in tags:
+        if tags and tags.get("\xa9too"):
             details["encoder"] = str(tags["\xa9too"][0])
         if tags:
             lyrics = tags.get("\xa9lyr")
@@ -338,7 +338,10 @@ def _first(value):
         return ""
     if isinstance(value, (list, tuple)):
         value = value[0] if value else ""
-    return str(getattr(value, "text", [value])[0] if hasattr(value, "text") else value).strip()
+    if hasattr(value, "text"):          # an ID3 frame: its text can be an empty list
+        texts = value.text if isinstance(value.text, (list, tuple)) else [value.text]
+        value = texts[0] if texts else ""
+    return str(value).strip()
 
 
 def _split_pair(text: str) -> tuple[int | None, int | None]:

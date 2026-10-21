@@ -32,9 +32,10 @@ UTF-8 `.m3u8` files with `#EXTM3U`, `#PLAYLIST:<name>` and `#EXTINF:<seconds>,<a
 
 ## library.db
 
-Treat it as read-only: LuxTunes replaces it at every sync. This page describes format
-version **2** (LuxTunes 0.6.0 and newer); version 1 lacked the smart playlist rules,
-the extra song details and the reference tables.
+Treat it as read-only: LuxTunes replaces it at every sync, also one that's stopped
+part-way or cancelled at the sync question (it then lists exactly the songs on the
+phone). This page describes format version **2** (LuxTunes 0.6.0 and newer); version 1
+lacked the smart playlist rules, the extra song details and the reference tables.
 
 | Table | Columns |
 |---|---|

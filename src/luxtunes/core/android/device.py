@@ -48,13 +48,27 @@ class Phone:
     def uri(self) -> str:
         return "mtp://" + os.path.basename(self.folder)[len(PREFIX):] + "/"
 
-    def storage(self, wanted: str = "") -> str | None:
-        """The folder of the chosen storage (or the phone's own storage)."""
+    def storage(self, wanted: str = "", kind: str = "") -> str | None:
+        """The folder of the chosen storage: by name, else the same kind
+        ("internal" or "removable"), else the phone's own storage."""
+        name = self.storage_name(wanted, kind)
+        return self.storages[name] if name else None
+
+    def storage_name(self, wanted: str = "", kind: str = "") -> str | None:
         if wanted in self.storages:
-            return self.storages[wanted]
-        internal = [n for n in self.storages if "internal" in n.lower() or "phone" in n.lower()]
-        names = internal or sorted(self.storages)
-        return self.storages[names[0]] if names else None
+            return wanted
+        internal = sorted(n for n in self.storages if storage_kind(n) == "internal")
+        removable = sorted(n for n in self.storages if storage_kind(n) == "removable")
+        if kind == "removable" and removable:
+            return removable[0]
+        names = internal or removable
+        return names[0] if names else None
+
+
+def storage_kind(name: str) -> str:
+    """ "internal" for the phone's own storage, "removable" for an SD card or USB drive."""
+    lowered = name.lower()
+    return "internal" if "internal" in lowered or "phone" in lowered else "removable"
 
 
 def parse_host(name: str) -> tuple[str, str, str]:

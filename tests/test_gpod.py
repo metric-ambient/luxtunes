@@ -132,7 +132,7 @@ def test_podcasts_and_audiobooks_land_in_their_ipod_menus(tmp_path):
     mount, conn = fake_ipod(tmp_path), small_library(tmp_path)
     library.update_track_fields(conn, 1, {"media_kind": "podcast"})      # Robbers
     library.update_track_fields(conn, 2, {"media_kind": "audiobook"})    # Chocolate
-    report = do_sync(conn, mount)
+    report = do_sync(conn, mount, sync_podcasts=True, sync_books=True)
     assert report.added == 3
     with gpod.Database(str(mount)) as ipod_db:
         kinds = {gpod.get_str(t.contents, "title"): t.contents.mediatype for t in ipod_db.tracks()}

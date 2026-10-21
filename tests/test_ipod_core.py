@@ -108,7 +108,7 @@ def library_with_files(tmp_path):
 
 def test_entire_library_plan(tmp_path):
     conn, ids = library_with_files(tmp_path)
-    p = plan.build_plan(conn, settings.SyncSettings())
+    p = plan.build_plan(conn, settings.SyncSettings(sync_movies=True))
     assert p.track_ids == {ids["A1"], ids["A2"], ids["B1"], ids["M1"]}
     assert [t["persistent_id"] for t in p.missing] == ["GONE"]
     assert p.music_bytes == 300 and p.video_bytes == 500
@@ -127,7 +127,8 @@ def test_selected_and_checked_only(tmp_path):
                               sync_movies=False)
     p = plan.build_plan(conn, s)
     assert p.track_ids == {ids["A1"], ids["B1"]} and len(p.playlists) == 1
-    s = settings.SyncSettings(sync_music=False, movies_rule="1 most recent unwatched")
+    s = settings.SyncSettings(sync_music=False, sync_movies=True,
+                              movies_rule="1 most recent unwatched")
     assert plan.build_plan(conn, s).track_ids == {ids["M1"]}
     choices = plan.library_choices(conn)
     assert choices.artists == ["Band", "Other"] and choices.genres == ["Pop", "Rock"]
@@ -211,7 +212,7 @@ def test_tv_rules_and_ipod_playable_videos(tmp_path):
     conn.commit()
 
     def chosen(rule):
-        s = settings.SyncSettings(sync_music=False, tv_rule=rule)
+        s = settings.SyncSettings(sync_music=False, sync_tv=True, tv_rule=rule)
         return sorted(t["persistent_id"] for t in plan.build_plan(conn, s).tracks)
 
     assert chosen("all") == ["A1", "A2", "A3", "B1"]          # and no .mkv movie
@@ -268,7 +269,8 @@ def test_podcasts_and_audiobooks_in_the_plan(tmp_path):
     ids = {r[1]: r[0] for r in conn.execute("SELECT id, persistent_id FROM tracks")}
 
     def chosen(**options):
-        s = settings.SyncSettings(sync_music=False, sync_movies=False, **options)
+        s = settings.SyncSettings(**{"sync_music": False, "sync_podcasts": True,
+                                     "sync_books": True, **options})
         return {pid for pid, i in ids.items() if i in plan.build_plan(conn, s).track_ids}
 
     books = {"K1", "K2", "K3"}
@@ -308,3 +310,12 @@ def test_which_songs_are_converted_for_the_ipod():
         [128, 128, 128, None, None]
     assert plan.transfer_size(mp3, s) == 960_000              # 60 s at 128 kbps
     assert plan.transfer_kbps({"location": "/m/f.mp3", "bit_rate": 128}, s) is None
+
+
+def test_a_new_device_syncs_only_music():
+    s = settings.SyncSettings()
+    assert s.sync_music
+    assert not (s.sync_movies or s.sync_tv or s.sync_podcasts or s.sync_books)
+    # A saved device keeps its own choices.
+    saved = settings.SyncSettings.from_json('{"sync_movies": true}')
+    assert saved.sync_movies and not saved.sync_tv

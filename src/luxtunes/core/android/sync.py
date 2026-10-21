@@ -42,7 +42,7 @@ from luxtunes.core import artwork as artwork_reader
 from luxtunes.core import library, organize
 from luxtunes.core.android import changes as phone_changes
 from luxtunes.core.android.changes import CHANGES
-from luxtunes.core.android.device import Phone
+from luxtunes.core.android.device import Phone, storage_kind
 from luxtunes.core.ipod import plan as ipod_plan
 from luxtunes.core.ipod import settings as ipod_settings
 from luxtunes.core.ipod import stats
@@ -174,7 +174,10 @@ def _empty_changes(root: Path, merged: phone_changes.PhoneChanges) -> None:
     """Right after merging: empty changes.json, so nothing counts twice, keeping
     anything the phone added since it was read."""
     if merged.text is None:
-        return
+        if not (root / CHANGES).exists():
+            # None yet: an empty one, ready for a player on the phone to fill.
+            _write(root, CHANGES, json.dumps(phone_changes.emptied(merged, None)).encode())
+        return                                    # (an unreadable file is left alone)
     try:
         now = (root / CHANGES).read_text(encoding="utf-8")
     except OSError:
@@ -389,7 +392,11 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
         if progress is not None and progress(text, done, total) is False and can_stop:
             raise SyncCancelled()
 
-    storage = phone.storage(settings.android_storage)
+    storage = phone.storage(settings.android_storage, settings.android_storage_kind)
+    if settings.android_storage_kind == "removable" and storage is not None and \
+            device_storage_kind(phone, storage) != "removable":
+        raise OSError(f"The SD card chosen for this phone (“{settings.android_storage}”) "
+                      "isn't there. Put it back, or choose another storage on the phone's page.")
     if storage is None:
         raise OSError("Can't see the phone's storage. Unlock the phone and choose "
                       "“File transfer” in its USB notification.")
@@ -459,7 +466,10 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
     removals += [Removal(Path(p).name, "", str(Path(p).parent.relative_to(MEDIA)),
                          "Not synced by LuxTunes") for p in strays]
     if confirm is not None and not confirm(len(to_copy), len(removals), removals):
+        # Nothing on the phone changes, but its database still gets brought up
+        # to date with what's there (the phone's own changes are in already).
         report.cancelled = True
+        _finish(conn, root, phone, record, report, manifest, the_plan, tell, stopped=True)
         return report
 
     # 3. Take off what's no longer wanted (only ever inside the LuxTunes folder).
@@ -533,14 +543,22 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
         scratch.cleanup()
         _save_manifest(root, manifest, conn)          # what's there now, even if stopped
 
-    placed = {pid: f["path"] for pid, f in files.items()}
-    if report.cancelled:
-        return report
+    # 5–7. Covers, playlists and the database, also after Stop: they describe
+    # exactly what's on the phone now, so a player can use the songs copied so far.
+    _finish(conn, root, phone, record, report, manifest, the_plan, tell,
+            stopped=report.cancelled)
+    return report
+
+
+def _finish(conn, root: Path, phone: Phone, record, report: SyncReport, manifest: dict,
+            the_plan, tell, stopped: bool) -> None:
+    placed = {pid: f["path"] for pid, f in manifest["files"].items()}
 
     # 5. Album covers (for players that look for cover.jpg next to the songs).
+    # After Stop, only the covers already there (no artwork is read, to stop quickly).
     tell("Adding album covers…", can_stop=False)
     by_pid = {t["persistent_id"]: t for t in library.load_tracks(conn) if t.get("persistent_id")}
-    covers = _write_covers(root, placed, by_pid, manifest, report)
+    covers = _write_covers(root, placed, by_pid, manifest, report, read_new=not stopped)
 
     # 6. Playlists as .m3u8 files.
     tell("Writing playlists…", can_stop=False)
@@ -555,10 +573,15 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
         build_database(local, conn, placed, covers, the_plan.playlists, lists_files)
         _copy(local, root, DATABASE)
     _save_manifest(root, manifest, conn)
-    ipod_settings.mark_synced(conn, record.id)          # a rename stays in LuxTunes
-    log.info("synced %s: +%d -%d, %d playlists", phone.name, report.added, report.removed,
-             report.playlists)
-    return report
+    if not stopped:
+        ipod_settings.mark_synced(conn, record.id)      # a rename stays in LuxTunes
+    log.info("%s %s: +%d -%d, %d playlists", "stopped syncing" if stopped else "synced",
+             phone.name, report.added, report.removed, report.playlists)
+
+
+def device_storage_kind(phone: Phone, folder: str) -> str:
+    name = next((n for n, f in phone.storages.items() if f == folder), "")
+    return storage_kind(name)
 
 
 def media_bytes(storage: str | None) -> int:
@@ -584,8 +607,9 @@ def _save_manifest(root: Path, manifest: dict, conn) -> None:
 
 
 def _write_covers(root: Path, placed: dict, tracks: dict, manifest: dict,
-                  report: SyncReport) -> dict:
-    """One cover file per album folder, from the first song's artwork."""
+                  report: SyncReport, read_new: bool = True) -> dict:
+    """One cover file per album folder, from the first song's artwork
+    (read_new False: only keep the covers already there)."""
     covers = {}
     old = set(manifest.get("covers") or [])
     by_folder: dict[str, str] = {}
@@ -598,6 +622,8 @@ def _write_covers(root: Path, placed: dict, tracks: dict, manifest: dict,
         existing = next((c for c in old if str(Path(c).parent) == folder), None)
         if existing and (root / existing).exists():
             covers[folder] = existing
+            continue
+        if not read_new:
             continue
         art = artwork_reader.read_embedded_artwork(find_file(track.get("location")))
         if not art:
