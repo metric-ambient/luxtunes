@@ -215,12 +215,15 @@ def _podcast_rule(rule: str, episodes: list[dict]) -> list[dict]:
 
 def build_plan(conn: sqlite3.Connection, settings: SyncSettings,
                free_space: int | None = None, seed: int | None = None, kbps_for=None,
-               phone: bool = False) -> Plan:
+               phone: bool = False, video: bool = True) -> Plan:
     """The plan for one sync. free_space (bytes the device could hold for
     songs) is only needed for "Automatically fill free space". phone: an
-    Android device, which plays any video format."""
+    Android device, which plays any video format. video False: an iPod that
+    doesn't play video (no movies or TV shows go, even from a playlist)."""
     plan = Plan()
     playable = (lambda t: True) if phone else ipod_can_play
+    if not video:
+        playable = lambda t: t.get("media_kind") not in ("movie", "tvshow")
     music = library.load_tracks(conn, media_kind="music")
     movies = [t for t in library.load_tracks(conn, media_kind="movie") if playable(t)]
     episodes = [t for t in library.load_tracks(conn, media_kind="tvshow") if playable(t)]

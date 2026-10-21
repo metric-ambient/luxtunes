@@ -263,7 +263,7 @@ EDITABLE_NUMBER_FIELDS = {"year", "bpm", "track_number", "track_count", "disc_nu
 # Get Info's Options tab: settings kept in the library only (never in the file).
 EDITABLE_FLAG_FIELDS = {"compilation", "bookmarkable", "skip_when_shuffling", "part_of_gapless_album"}
 EDITABLE_TIME_FIELDS = {"start_time", "stop_time"}          # milliseconds, or None
-EDITABLE_OTHER_FIELDS = {"volume_adjustment", "media_kind"}
+EDITABLE_OTHER_FIELDS = {"volume_adjustment", "media_kind", "equalizer"}
 EDITABLE_FIELDS = (EDITABLE_TEXT_FIELDS | EDITABLE_NUMBER_FIELDS | EDITABLE_FLAG_FIELDS
                    | EDITABLE_TIME_FIELDS | EDITABLE_OTHER_FIELDS)
 MEDIA_KINDS = ("music", "movie", "tvshow", "podcast", "audiobook")
@@ -289,6 +289,9 @@ def clean_field_value(key: str, value):
         return None if value in (None, "") else max(0, int(value))
     if key == "volume_adjustment":
         return max(-100, min(100, int(value or 0)))
+    if key == "equalizer":
+        name = " ".join(str(value or "").split())          # a preset name; empty = None
+        return name or None
     if key == "media_kind":
         if value not in MEDIA_KINDS:
             raise ValueError(f"unknown media kind {value!r}")
@@ -396,6 +399,18 @@ def all_genres(conn: sqlite3.Connection) -> list[str]:
 def load_track(conn: sqlite3.Connection, track_id: int) -> dict | None:
     row = conn.execute("SELECT * FROM tracks WHERE id = ?", (track_id,)).fetchone()
     return dict(row) if row else None
+
+
+def rename_equalizer_preset(conn: sqlite3.Connection, old: str, new: str | None) -> list[int]:
+    """A preset was renamed (or deleted: new is None): update the songs using it.
+    Returns their ids."""
+    ids = [r[0] for r in conn.execute(
+        "SELECT id FROM tracks WHERE equalizer = ? COLLATE NOCASE", (old,))]
+    if ids:
+        with conn:
+            conn.execute("UPDATE tracks SET equalizer = ? WHERE equalizer = ? COLLATE NOCASE",
+                         (new, old))
+    return ids
 
 
 def delete_playlist(conn: sqlite3.Connection, playlist_id: int) -> None:

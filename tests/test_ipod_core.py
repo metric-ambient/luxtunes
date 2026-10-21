@@ -3,6 +3,8 @@ sync plan, and merging plays from the iPod into the library."""
 
 import struct
 
+import pytest
+
 from luxtunes.core import db, library
 from luxtunes.core.ipod import device, plan, settings, stats
 
@@ -319,3 +321,72 @@ def test_a_new_device_syncs_only_music():
     # A saved device keeps its own choices.
     saved = settings.SyncSettings.from_json('{"sync_movies": true}')
     assert saved.sync_movies and not saved.sync_tv
+
+
+# ---- Models and what they can do -------------------------------------------------------
+
+def test_models_are_told_apart_by_usb_product_without_libgpod():
+    from luxtunes.core.ipod import models
+    nano1 = models.identify("", "120a")
+    assert nano1.name == "iPod nano (1st generation)"
+    assert nano1.family.photos and not nano1.family.video and not nano1.family.unsupported
+    assert models.identify("", "1262").family.signature == models.HASH58      # nano 3G
+    assert models.identify("", "1266").family.unsupported                       # nano 6G
+    assert models.identify("", "1300").family.name == "iPod shuffle (1st generation)"
+    assert not models.identify("", "1300").family.photos
+    unknown = models.identify("", "")
+    assert unknown.name == "iPod" and unknown.family.video                      # as before
+    # Built in for the classics, so they're named even without libgpod.
+    classic = models.identify("xC297", "")
+    assert classic.name == "iPod classic (7th generation)" and classic.capacity_label == "160 GB"
+    assert models.stand_in_model_number("120a") is None          # no signature: nothing needed
+
+
+def test_libgpod_knows_every_model_number():
+    from luxtunes.core.ipod import gpod, models
+    if not gpod.available():
+        pytest.skip("libgpod isn't installed")
+    models.model_table.cache_clear()
+    nano = models.identify("MA004", "")
+    assert nano.name == "iPod nano (1st generation)" and nano.capacity_label == "2 GB"
+    assert nano.colour == "white"
+    assert models.identify("M9282", "").name == "iPod (4th generation)"
+    assert models.identify("MA079", "").family.photos                           # iPod photo
+    # A nano 3G whose SysInfo doesn't say its model still gets signed.
+    stand_in = models.stand_in_model_number("1262")
+    assert stand_in and models.identify(stand_in, "").family_key == "nano_3"
+
+
+def test_an_ipod_without_video_gets_no_movies(tmp_path):
+    conn, ids = library_with_files(tmp_path)
+    mix = conn.execute("SELECT id FROM playlists WHERE name = 'Mix'").fetchone()[0]
+    library.add_to_playlist(conn, mix, [ids["M1"]])
+    s = settings.SyncSettings(sync_movies=True, music_mode="selected",
+                              playlists=[plan.syncable_playlists(conn)[0]["persistent_id"]])
+    assert ids["M1"] in plan.build_plan(conn, s).track_ids
+    assert ids["M1"] not in plan.build_plan(conn, s, video=False).track_ids   # not even via a playlist
+
+
+def test_read_ipod_knows_the_model_and_its_abilities(tmp_path):
+    mount, mounts = make_ipod(tmp_path)
+    (mount / "iPod_Control" / "Device" / "SysInfo").write_text("pszSerialNumber: X\n")
+    [ipod] = device.find_ipods(mounts)
+    assert ipod.model_name == "iPod" and ipod.supports_video          # unknown: as before
+    from luxtunes.core.ipod import models
+    ipod.identity = models.identify("", "120a")
+    assert not ipod.supports_video and ipod.supports_photos and not ipod.needs_hash
+    ipod.identity = models.identify("", "1263")
+    assert ipod.needs_hash
+
+
+def test_an_ipod_that_doesnt_say_its_model_gets_its_size_from_its_disk():
+    from luxtunes.core.ipod import models
+    gib = 1024 ** 3
+    assert models.size_from_disk("nano_1", int(1.9 * gib)) == 2           # your 2 GB nano
+    assert models.size_from_disk("nano_1", int(3.8 * gib)) == 4
+    assert models.size_from_disk("classic", int(149 * gib)) == 160
+    assert models.size_from_disk("shuffle_1", int(0.48 * gib)) == 0.5
+    assert models.size_from_disk("unknown", 10 * gib) is None
+    nano = models.Identity("nano_1", models.FAMILIES["nano_1"], 2)
+    assert nano.capacity_label == "2 GB"
+    assert models.Identity("shuffle_1", models.FAMILIES["shuffle_1"], 0.5).capacity_label == "512 MB"

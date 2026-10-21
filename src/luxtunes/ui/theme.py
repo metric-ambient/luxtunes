@@ -20,6 +20,7 @@ LIGHT = {
     "indicator_border": "#7d7d7d",  # the outline of every checkbox and radio button
     "base": "#ffffff",
     "alt_base": "#f1f5fa",
+    "now_playing": "#d2d5da",       # the bar behind the song that's playing
     "highlight": "#3d80df",
     "highlight_text": "#ffffff",
     "toolbar_top": "#ececec",
@@ -54,6 +55,7 @@ DARK = {
     "indicator_border": "#a8b0ba",  # light enough to see on the dark background
     "base": "#1e1f22",
     "alt_base": "#26272b",
+    "now_playing": "#41444b",
     "highlight": "#2f6fd0",
     "highlight_text": "#ffffff",
     "toolbar_top": "#404146",
@@ -360,6 +362,11 @@ GRID_LIGHT = {"grid_bg": "#f2f2f2", "grid_line": "#c8c8c8", "grid_tab_text": "#3
               "grid_tab_checked": "#d6d6d6", "grid_tab_border": "#b0b0b0", "grid_tab_hover": "#e2e2e2",
               "grid_title": "#1e1e1e", "grid_subtitle": "#6b6b6b", "grid_empty_art": "#d0d0d0"}
 grid_colors = dict(GRID_DARK)       # read by the Grid view when it paints
+
+
+def now_playing_color() -> QColor:
+    """The grey bar behind the playing song in the song lists."""
+    return QColor(grid_colors.get("now_playing", LIGHT["now_playing"]))
 
 
 def apply_theme(app: QApplication, dark: bool, grid_dark: bool = True) -> None:

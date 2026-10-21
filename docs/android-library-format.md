@@ -44,12 +44,13 @@ lacked the smart playlist rules, the extra song details and the reference tables
 
 | Table | Columns |
 |---|---|
-| `info` | `key`, `value`: `format_version` (now `2`), `library_id`, `library_name`, `luxtunes_version`, `synced_at` |
+| `info` | `key`, `value`: `format_version` (now `2`), `library_id`, `library_name`, `luxtunes_version`, `synced_at`, `equalizer_on`, `equalizer_preset` |
 | `tracks` | `id`, `path`, `artwork`, then the song details below |
 | `playlists` | `id`, `name`, `is_smart`, `position` (sidebar order), `file` (its .m3u8, relative to `LuxTunes`), `smart_info`, `smart_criteria` |
 | `playlist_items` | `playlist_id`, `position`, `track_id` |
 | `reference_playlists` | `id`, `name`, `is_smart`, `is_folder` |
 | `reference_items` | `playlist_id`, `track_id` |
+| `equalizer_presets` | `name`, `position`, `preamp`, `band_32`, `band_64`, `band_125`, `band_250`, `band_500`, `band_1k`, `band_2k`, `band_4k`, `band_8k`, `band_16k` |
 
 - `id` is the song's persistent ID: 16 hexadecimal digits that never change for that
   song. Use it to match songs between syncs and in `changes.json`.
@@ -73,6 +74,22 @@ is synced, it's in `playlists`. If not, it's in `reference_playlists` with its s
 (those on the phone) in `reference_items`: use them to evaluate the rule, but don't show
 them as playlists. A folder's songs are those of all its playlists.
 
+### Equalizer
+
+Added in LuxTunes 0.7.0, within format version 2 (only new columns, a new table and new
+`info` keys, so earlier readers are unaffected).
+
+- `info.equalizer_on` is `1` or `0`; `info.equalizer_preset` is the chosen preset's name,
+  or `Manual`.
+- `equalizer_presets` holds every preset in the computer's list, in menu order
+  (`position` 0, 1, …), plus one row named `Manual` with `position` NULL: the values the
+  sliders were left at. Gains are in dB, −12 to +12, for the preamp and ten bands
+  (32 Hz to 16 kHz, one octave apart; each band is a peaking filter one octave wide).
+- `tracks.equalizer` is a song's own preset name (empty: none). While the equalizer is
+  on, a song's own preset is used instead of the chosen one. A name with no row in
+  `equalizer_presets` (the preset was deleted) counts as none.
+- The phone doesn't send equalizer changes back.
+
 ### Song details
 
 Where the library has them: `media_kind` (`music`, `movie`, `tvshow`, `podcast`,
@@ -82,7 +99,8 @@ Where the library has them: `media_kind` (`music`, `movie`, `tvshow`, `podcast`,
 per star), `rating_computed` (1 if the rating is the album's, not set for this song),
 `play_count`, `play_date`, `skip_count`, `skip_date`, `date_added`, `date_modified`,
 `compilation`, `comments`, `lyrics`, `bookmarkable`, `bookmark_time` (milliseconds),
-`skip_when_shuffling`, `start_time`, `stop_time`, `volume_adjustment`, `show`, `season`,
+`skip_when_shuffling`, `start_time`, `stop_time`, `volume_adjustment` (−100 to +100, a
+percentage of the playing volume), `equalizer`, `show`, `season`,
 `episode_number`, the `sort_*` names, `enabled`, `bpm`, `kind` (e.g. "MPEG audio file")
 and `purchased`. That's every detail a smart playlist rule can test. Dates are UTC,
 written as `YYYY-MM-DDTHH:MM:SSZ`.

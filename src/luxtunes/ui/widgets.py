@@ -158,6 +158,92 @@ class JumpSlider(QSlider):
         super().mousePressEvent(event)
 
 
+class ScrollingLabel(QWidget):
+    """One line of text that scrolls sideways when it doesn't fit (pausing at
+    the start of each pass); centred and still when it does."""
+
+    STEP_MS = 30          # one pixel per step
+    PAUSE_MS = 2000       # rest at the start before scrolling again
+    GAP = 40              # space between the end of the text and its next pass
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(parent)
+        self._text = text
+        self._offset = 0
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._step)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+
+    def text(self) -> str:
+        return self._text
+
+    def setText(self, text: str) -> None:
+        if text == self._text:
+            return
+        self._text = text
+        self.setToolTip(text)
+        self._restart()
+
+    def sizeHint(self) -> QSize:
+        return QSize(self.fontMetrics().horizontalAdvance(self._text),
+                     self.fontMetrics().height() + 2)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(10, self.fontMetrics().height() + 2)
+
+    def _overflows(self) -> bool:
+        return self.fontMetrics().horizontalAdvance(self._text) > self.width()
+
+    def _restart(self) -> None:
+        self._offset = 0
+        self._timer.stop()
+        if self._overflows() and self.isVisible():
+            self._timer.start(self.PAUSE_MS)
+        self.update()
+
+    def _step(self) -> None:
+        if not self._overflows():
+            self._restart()
+            return
+        self._timer.setInterval(self.STEP_MS)
+        self._offset += 1
+        if self._offset >= self.fontMetrics().horizontalAdvance(self._text) + self.GAP:
+            self._offset = 0                     # back at the start: rest a moment
+            self._timer.setInterval(self.PAUSE_MS)
+        self.update()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._restart()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._restart()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self._timer.stop()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.FontChange:
+            self.updateGeometry()
+            self._restart()
+
+    def paintEvent(self, event):
+        from PySide6.QtGui import QPainter
+        painter = QPainter(self)
+        painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
+        rect = self.rect()
+        if not self._overflows():
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, self._text)
+            return
+        flags = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        width = self.fontMetrics().horizontalAdvance(self._text)
+        for x in (-self._offset, width + self.GAP - self._offset):
+            painter.drawText(rect.adjusted(x, 0, x + width, 0), flags, self._text)
+
+
 # ---- The LCD ---------------------------------------------------------------
 
 class NowPlayingDisplay(QFrame):

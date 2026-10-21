@@ -18,8 +18,11 @@ import traceback
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 
+from luxtunes.core import equalizer
+from luxtunes.core.library import AUDIO_KINDS
 from luxtunes.core.paths import find_file
 from luxtunes.core.shuffle import artist_key, spread_shuffle
+from luxtunes.ui import eq_output
 
 # A skip counts when you jump to the next song within its first 20 seconds.
 SKIP_WINDOW_MS = 20_000
@@ -70,11 +73,11 @@ class Player(QObject):
         self._pending_seek = None       # Start Time / bookmark to jump to once the file loads
         self._ended = False             # the current song reached its end (or Stop Time)
         self._looping_back = False      # Repeat One jumped from Stop Time back to Start Time
+        self.equalizer = equalizer.Settings()
+        self._eq = eq_output.EqualizerOutput(self._player, self)
 
         self._player.mediaStatusChanged.connect(self._on_media_status)
-        self._player.playbackStateChanged.connect(
-            lambda state: self.playing_changed.emit(state == QMediaPlayer.PlaybackState.PlayingState)
-        )
+        self._player.playbackStateChanged.connect(self._on_playback_state)
         self._player.positionChanged.connect(self._on_position)
         self._player.durationChanged.connect(
             lambda dur: self.position_changed.emit(self._player.position(), dur)
@@ -173,16 +176,43 @@ class Player(QObject):
         if self._current is None:
             return
         if self._player.position() > RESTART_THRESHOLD_MS or self._pos <= 0:
-            self._player.setPosition(self._start_of(self._current))
+            self._jump(self._start_of(self._current))
         else:
             self._start_at(self._pos - 1, step=-1)
 
     def seek(self, ms: int):
-        self._player.setPosition(ms)
+        self._jump(ms)
 
     def set_video_output(self, widget) -> None:
         """Where movies and TV shows draw their picture (the video window)."""
         self._player.setVideoOutput(widget)
+
+    # ---- Equalizer ----------------------------------------------------------------
+
+    def set_equalizer(self, settings: equalizer.Settings) -> None:
+        self.equalizer = settings
+        self.apply_equalizer()
+
+    def apply_equalizer(self) -> None:
+        """Use the equalizer for the current song, or not: it's on, it's
+        available, and the song is audio (movies keep Qt's own output so the
+        sound stays in step with the picture)."""
+        track = self._current
+        preset = self.equalizer.for_song(track) if track is not None else None
+        if preset is not None and (not eq_output.available()
+                                   or (track.get("media_kind") or "music") not in AUDIO_KINDS):
+            preset = None
+        if preset is None:
+            if self._eq.active:
+                self._eq.stop()
+                self._audio.setMuted(False)
+        else:
+            self._eq.set_preset(preset)
+            if not self._eq.active:
+                self._eq.start()
+                self._eq.pause(not self.is_playing)
+                self._audio.setMuted(True)
+        self.apply_volume()
 
     def set_volume(self, percent: int):
         self._base_volume = max(0, min(100, percent)) / 100
@@ -192,13 +222,16 @@ class Player(QObject):
         """Slider volume, adjusted by the song's Get Info "Volume Adjustment"
         (-100% = silent, +100% = up to twice as loud, capped at full volume)."""
         adjust = (self._current or {}).get("volume_adjustment") or 0
-        self._audio.setVolume(max(0.0, min(1.0, self._base_volume * (1 + adjust / 100))))
+        volume = max(0.0, min(1.0, self._base_volume * (1 + adjust / 100)))
+        self._audio.setVolume(volume)
+        self._eq.set_volume(volume)
 
     def stop(self):
         self._remember_position()
         self._player.stop()
         self._player.setSource(QUrl())
         self._current = None
+        self.apply_equalizer()            # nothing playing: back to Qt's own output
         self._context, self._order, self._pos = [], [], -1
         self.stopped.emit()
 
@@ -260,10 +293,22 @@ class Player(QObject):
         if track.get("bookmarkable") and track.get("bookmark_time"):
             start = max(start, track["bookmark_time"])     # pick up where you left off
         self._pending_seek = start or None
-        self.apply_volume()
+        self.apply_equalizer()            # also sets the volume
+        self._eq.flush()
         self._player.setSource(QUrl.fromLocalFile(track["location"]))
         self._player.play()
         self.track_started.emit(track)
+
+    def _jump(self, ms: int) -> None:
+        self._eq.flush()                  # don't finish playing what was before the jump
+        self._player.setPosition(ms)
+
+    def _on_playback_state(self, state) -> None:
+        playing = state == QMediaPlayer.PlaybackState.PlayingState
+        self._eq.pause(not playing)
+        if state == QMediaPlayer.PlaybackState.StoppedState:
+            self._eq.flush()
+        self.playing_changed.emit(playing)
 
     @staticmethod
     def _start_of(track: dict) -> int:
@@ -337,7 +382,7 @@ class Player(QObject):
             # Playing, but the jump to Start Time / the remembered position
             # hasn't happened yet: do it now.
             seek, self._pending_seek = self._pending_seek, None
-            self._player.setPosition(seek)
+            self._jump(seek)
             return
         track = self._current
         stop_at = track.get("stop_time") if track else None
@@ -353,7 +398,7 @@ class Player(QObject):
             log.info("repeat one: looped %r", self._current.get("name"))
             self.track_finished.emit(self._current)
             if self._start_of(self._current):
-                self._player.setPosition(self._start_of(self._current))   # loop from Start Time
+                self._jump(self._start_of(self._current))   # loop from Start Time
         self._last_position = position
         if position > LOOP_DETECT_MS:
             self._repeat_retries = 0      # it's playing fine again
@@ -363,7 +408,7 @@ class Player(QObject):
         if status in (QMediaPlayer.MediaStatus.LoadedMedia, QMediaPlayer.MediaStatus.BufferedMedia):
             if self._pending_seek is not None:
                 seek, self._pending_seek = self._pending_seek, None
-                self._player.setPosition(seek)       # Start Time / remembered position
+                self._jump(seek)       # Start Time / remembered position
             return
         if status != QMediaPlayer.MediaStatus.EndOfMedia:
             return
@@ -383,7 +428,7 @@ class Player(QObject):
         if self._repeat == REPEAT_ONE and track.get("stop_time"):
             self._last_position = 0
             self._looping_back = True
-            self._player.setPosition(self._start_of(track))   # loop the Start-Stop part
+            self._jump(self._start_of(track))   # loop the Start-Stop part
             return
         self._ended = True
         if self._repeat == REPEAT_ONE:

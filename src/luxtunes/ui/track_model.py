@@ -15,7 +15,7 @@ from PySide6.QtCore import QAbstractTableModel, QMimeData, QModelIndex, Qt, Sign
 from PySide6.QtWidgets import QApplication, QStyle
 
 from luxtunes.core.library import EDITABLE_NUMBER_FIELDS, EDITABLE_TEXT_FIELDS
-from luxtunes.ui import formatting
+from luxtunes.ui import formatting, theme
 
 EDITABLE_KEYS = EDITABLE_TEXT_FIELDS | EDITABLE_NUMBER_FIELDS
 
@@ -29,7 +29,7 @@ class Column(NamedTuple):
 
 
 # Every column on offer (right-click a column header to show/hide).
-# Some have no data in LuxTunes yet (TV/podcast fields, Equalizer, ...); they
+# Some have no data in LuxTunes yet (podcast fields, ...); they
 # exist for parity and simply stay empty. Order = order of a fresh layout.
 COLUMNS = [
     Column("enabled", "✓", 26, shown=True),
@@ -238,6 +238,9 @@ class TrackTableModel(QAbstractTableModel):
             return Qt.CheckState.Checked if track.get("enabled", 1) else Qt.CheckState.Unchecked
         if role == Qt.ItemDataRole.TextAlignmentRole and column.align_right:
             return RIGHT_ALIGNED
+        if role == Qt.ItemDataRole.BackgroundRole and track["id"] == self._now_playing_id \
+                and self._now_playing_id is not None:
+            return theme.now_playing_color()        # a grey bar; the selection's blue covers it
         if role == Qt.ItemDataRole.DecorationRole and column.key == "name":
             if track["id"] == self._now_playing_id:
                 if self._speaker_icon is None:
@@ -331,9 +334,9 @@ class TrackTableModel(QAbstractTableModel):
         self._now_playing_id = track_id
         if self._rows:
             self.dataChanged.emit(
-                self.index(0, NAME_COLUMN),
-                self.index(len(self._rows) - 1, NAME_COLUMN),
-                [Qt.ItemDataRole.DecorationRole],
+                self.index(0, 0),
+                self.index(len(self._rows) - 1, len(COLUMNS) - 1),
+                [Qt.ItemDataRole.DecorationRole, Qt.ItemDataRole.BackgroundRole],
             )
 
     def summary(self, selected_rows: list[int] | None = None) -> str:

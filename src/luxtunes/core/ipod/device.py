@@ -19,29 +19,9 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from luxtunes.core.ipod import models
+
 CONTROL = "iPod_Control"
-
-# Model numbers (last four characters of ModelNumStr) of the iPods LuxTunes
-# supports, with their name as Apple sold them.
-MODELS = {
-    "A002": ("iPod 5th generation (video)", "30 GB", "white"),
-    "A146": ("iPod 5th generation (video)", "30 GB", "black"),
-    "A003": ("iPod 5th generation (video)", "60 GB", "white"),
-    "A147": ("iPod 5th generation (video)", "60 GB", "black"),
-    "A444": ("iPod 5.5th generation (video)", "30 GB", "white"),
-    "A446": ("iPod 5.5th generation (video)", "30 GB", "black"),
-    "A448": ("iPod 5.5th generation (video)", "80 GB", "white"),
-    "A450": ("iPod 5.5th generation (video)", "80 GB", "black"),
-    "B029": ("iPod classic (6th generation)", "80 GB", "silver"),
-    "B147": ("iPod classic (6th generation)", "80 GB", "black"),
-    "B145": ("iPod classic (6th generation)", "160 GB", "silver"),
-    "B150": ("iPod classic (6th generation)", "160 GB", "black"),
-    "B562": ("iPod classic (6.5th generation)", "120 GB", "silver"),
-    "B565": ("iPod classic (6.5th generation)", "120 GB", "black"),
-    "C293": ("iPod classic (7th generation)", "160 GB", "silver"),
-    "C297": ("iPod classic (7th generation)", "160 GB", "black"),
-}
-
 
 @dataclass
 class IPod:
@@ -58,6 +38,25 @@ class IPod:
     usb_product: str = ""            # 1261 = iPod classic, 1209 = iPod 5G/5.5G
     song_count: int | None = None
     sysinfo: dict = field(default_factory=dict)
+    identity: models.Identity = field(default_factory=lambda: models.identify())
+
+    # What this model can do (see models.py).
+    @property
+    def supports_video(self) -> bool:
+        return self.identity.family.video
+
+    @property
+    def supports_photos(self) -> bool:
+        return self.identity.family.photos
+
+    @property
+    def supports_artwork(self) -> bool:
+        return self.identity.family.artwork
+
+    @property
+    def unsupported(self) -> str:
+        """Why LuxTunes can't sync this iPod ("" if it can)."""
+        return self.identity.family.unsupported
 
     @property
     def key(self) -> str:
@@ -78,9 +77,8 @@ class IPod:
 
     @property
     def needs_hash(self) -> bool:
-        """6G and later check a signature on their database (hash58)."""
-        return self.usb_product == "1261" or self.model_number[-4:] in {
-            "B029", "B147", "B145", "B150", "B562", "B565", "C293", "C297"}
+        """Classics, nano 3rd–5th generation check a signature on their song list."""
+        return self.identity.family.signature in (models.HASH58, models.HASH72)
 
 
 # ---- Finding iPods ----------------------------------------------------------------
@@ -150,11 +148,19 @@ def read_ipod(mountpoint: str, device: str = "", filesystem: str = "") -> IPod:
     ipod.sysinfo = info
     ipod.usb_product, usb_serial = usb_details(device)
     ipod.model_number = info.get("ModelNumStr", "")
-    model = MODELS.get(ipod.model_number[-4:].upper())
-    if model:
-        ipod.model_name, _, ipod.colour = model
-    elif ipod.usb_product == "1261":
-        ipod.model_name = "iPod classic"          # exact model unknown until SysInfo has it
+    ipod.identity = models.identify(ipod.model_number, ipod.usb_product)
+    if ipod.identity.capacity_gb is None:
+        # It doesn't say which model it is: name its size from its disk.
+        try:
+            disk = shutil.disk_usage(mountpoint).total
+        except OSError:
+            disk = 0
+        size = models.size_from_disk(ipod.identity.family_key, disk)
+        if size:
+            import dataclasses
+            ipod.identity = dataclasses.replace(ipod.identity, capacity_gb=size)
+    ipod.model_name = ipod.identity.name
+    ipod.colour = ipod.identity.colour
     ipod.serial = info.get("pszSerialNumber") or info.get("SerialNumber", "")
     guid = info.get("FirewireGuid") or info.get("FireWireGUID", "")
     if not guid and usb_serial:

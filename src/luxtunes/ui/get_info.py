@@ -147,7 +147,10 @@ def _combo_text(combo: QComboBox) -> str:
 
 
 class VolumeSlider(QWidget):
-    """Volume Adjustment: -100% ... None ... +100%."""
+    """Volume Adjustment: -100% ... None ... +100%. Dragging near the
+    middle snaps to None, so it's easy to put back."""
+
+    SNAP = 6                     # percent either side of None
 
     changed = Signal()
 
@@ -158,6 +161,7 @@ class VolumeSlider(QWidget):
         self.slider.setTickPosition(QSlider.TickPosition.TicksBelow)
         self.slider.setTickInterval(25)
         self.slider.valueChanged.connect(lambda _: self.changed.emit())
+        self.slider.sliderMoved.connect(self._snap)
         labels = QHBoxLayout()
         for text, align in (("-100%", Qt.AlignmentFlag.AlignLeft), ("None", Qt.AlignmentFlag.AlignCenter),
                             ("+100%", Qt.AlignmentFlag.AlignRight)):
@@ -168,6 +172,10 @@ class VolumeSlider(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.slider)
         layout.addLayout(labels)
+
+    def _snap(self, value: int):
+        if value and abs(value) <= self.SNAP:
+            self.slider.setSliderPosition(0)
 
     def value(self) -> int:
         return self.slider.value()
@@ -335,9 +343,23 @@ class ArtworkBox(QLabel):
             self.changed.emit()
 
     def mouseDoubleClickEvent(self, event):
+        self._choose()
+
+    def _choose(self):
         path, _ = QFileDialog.getOpenFileName(self, "Choose artwork", "", IMAGE_FILTER)
         if path and not QImage(path).isNull():
             self._take([image_bytes(QImage(path))])
+
+    def paste(self):
+        self._take(images_from_mime(QApplication.clipboard().mimeData()))
+
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        mime = QApplication.clipboard().mimeData()
+        menu.addAction("Paste", self.paste).setEnabled(
+            bool(mime) and (mime.hasImage() or mime.hasUrls()))
+        menu.addAction("Choose Picture…", self._choose)
+        menu.exec(event.globalPos())
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasImage() or event.mimeData().hasUrls():
@@ -358,10 +380,34 @@ def _heading(text: str) -> QLabel:
 
 # ---- One song -----------------------------------------------------------------------
 
+def _equalizer_combo(presets: list[str]) -> QComboBox:
+    """Equalizer Preset: None, or one of the equalizer's presets."""
+    combo = QComboBox()
+    combo.addItem("None", None)
+    for name in presets:
+        combo.addItem(name, name)
+    return combo
+
+
+def _show_equalizer(combo: QComboBox, name: str | None) -> None:
+    """Select a song's preset (one that's no longer in the list is shown anyway)."""
+    if not name:
+        combo.setCurrentIndex(0)
+        return
+    index = next((i for i in range(combo.count())
+                  if (combo.itemData(i) or "").casefold() == name.casefold()), -1)
+    if index < 0:
+        combo.addItem(name, name)
+        index = combo.count() - 1
+    combo.setCurrentIndex(index)
+
+
 class InfoDialog(QDialog):
-    def __init__(self, conn, tracks: list[dict], index: int, apply, parent=None):
+    def __init__(self, conn, tracks: list[dict], index: int, apply, parent=None,
+                 presets: list[str] = ()):
         super().__init__(parent)
         self.conn = conn
+        self.presets = list(presets)
         self.tracks = tracks          # the list Previous/Next walk through
         self.index = index
         self.apply = apply
@@ -515,6 +561,7 @@ class InfoDialog(QDialog):
     def _options_tab(self) -> QWidget:
         page = QWidget()
         self.volume = VolumeSlider()
+        self.equalizer = _equalizer_combo(self.presets)
         self.media_kind = QComboBox()
         for label, kind in MEDIA_KIND_CHOICES:
             self.media_kind.addItem(label, kind)
@@ -535,17 +582,19 @@ class InfoDialog(QDialog):
         grid = QGridLayout(page)
         grid.addWidget(QLabel("Volume Adjustment:"), 0, 0, Qt.AlignmentFlag.AlignRight)
         grid.addWidget(self.volume, 0, 1)
-        grid.addWidget(QLabel("Media Kind:"), 1, 0, Qt.AlignmentFlag.AlignRight)
-        grid.addWidget(self.media_kind, 1, 1, Qt.AlignmentFlag.AlignLeft)
-        grid.addWidget(QLabel("Rating:"), 2, 0, Qt.AlignmentFlag.AlignRight)
-        grid.addWidget(self.rating, 2, 1, Qt.AlignmentFlag.AlignLeft)
-        grid.addWidget(self.start_on, 3, 0, Qt.AlignmentFlag.AlignRight)
-        grid.addWidget(self.start_time, 3, 1, Qt.AlignmentFlag.AlignLeft)
-        grid.addWidget(self.stop_on, 4, 0, Qt.AlignmentFlag.AlignRight)
-        grid.addWidget(self.stop_time, 4, 1, Qt.AlignmentFlag.AlignLeft)
-        for row, box in enumerate((self.bookmarkable, self.skip_shuffle, self.gapless), start=5):
+        grid.addWidget(QLabel("Equalizer Preset:"), 1, 0, Qt.AlignmentFlag.AlignRight)
+        grid.addWidget(self.equalizer, 1, 1, Qt.AlignmentFlag.AlignLeft)
+        grid.addWidget(QLabel("Media Kind:"), 2, 0, Qt.AlignmentFlag.AlignRight)
+        grid.addWidget(self.media_kind, 2, 1, Qt.AlignmentFlag.AlignLeft)
+        grid.addWidget(QLabel("Rating:"), 3, 0, Qt.AlignmentFlag.AlignRight)
+        grid.addWidget(self.rating, 3, 1, Qt.AlignmentFlag.AlignLeft)
+        grid.addWidget(self.start_on, 4, 0, Qt.AlignmentFlag.AlignRight)
+        grid.addWidget(self.start_time, 4, 1, Qt.AlignmentFlag.AlignLeft)
+        grid.addWidget(self.stop_on, 5, 0, Qt.AlignmentFlag.AlignRight)
+        grid.addWidget(self.stop_time, 5, 1, Qt.AlignmentFlag.AlignLeft)
+        for row, box in enumerate((self.bookmarkable, self.skip_shuffle, self.gapless), start=6):
             grid.addWidget(box, row, 1)
-        grid.setRowStretch(8, 1)
+        grid.setRowStretch(9, 1)
         grid.setColumnStretch(1, 1)
         return page
 
@@ -575,6 +624,7 @@ class InfoDialog(QDialog):
         self.genre.setCurrentText(_text(track.get("genre")))
         self.compilation.setChecked(bool(track.get("compilation")))
         self.volume.setValue(track.get("volume_adjustment") or 0)
+        _show_equalizer(self.equalizer, track.get("equalizer"))
         self.media_kind.setCurrentIndex(max(0, self.media_kind.findData(track.get("media_kind") or "music")))
         self.rating.setValue(0 if track.get("rating_computed") else track.get("rating") or 0)
         self.start_on.setChecked(track.get("start_time") is not None)
@@ -637,6 +687,7 @@ class InfoDialog(QDialog):
         values["genre"] = _combo_text(self.genre)
         values["compilation"] = self.compilation.isChecked()
         values["volume_adjustment"] = self.volume.value()
+        values["equalizer"] = self.equalizer.currentData()
         values["media_kind"] = self.media_kind.currentData()
         values["start_time"] = self.start_time.text() if self.start_on.isChecked() else None
         values["stop_time"] = self.stop_time.text() if self.stop_on.isChecked() else None
@@ -689,9 +740,10 @@ class InfoDialog(QDialog):
 class MultiInfoDialog(QDialog):
     """Multiple Item Information. Only fields whose checkbox is ticked change."""
 
-    def __init__(self, conn, tracks: list[dict], apply, parent=None):
+    def __init__(self, conn, tracks: list[dict], apply, parent=None, presets: list[str] = ()):
         super().__init__(parent)
         self.conn = conn
+        self.presets = list(presets)
         self.tracks = [library.load_track(conn, t["id"]) or t for t in tracks]
         self.apply = apply
         self.setWindowTitle("Multiple Item Information")
@@ -829,24 +881,35 @@ class MultiInfoDialog(QDialog):
         volume.setValue(common or 0)
         grid.addWidget(QLabel("Volume Adjustment:"), 0, 0, Qt.AlignmentFlag.AlignRight)
         grid.addWidget(self._field("volume_adjustment", volume, volume.value, volume.changed), 0, 1)
+        preset = _equalizer_combo(self.presets)
+        common = self._common("equalizer")
+        if common is not None:
+            _show_equalizer(preset, common or None)
+        else:
+            preset.insertItem(0, "", "\x00mixed")         # the songs differ
+            preset.setCurrentIndex(0)
+        grid.addWidget(QLabel("Equalizer Preset:"), 1, 0, Qt.AlignmentFlag.AlignRight)
+        grid.addWidget(self._field("equalizer", preset, preset.currentData, preset.activated), 1, 1)
         kind = QComboBox()
         for label, value in MEDIA_KIND_CHOICES:
             kind.addItem(label, value)
         kind.setCurrentIndex(max(0, kind.findData(self._common("media_kind") or "music")))
-        grid.addWidget(QLabel("Media Kind:"), 1, 0, Qt.AlignmentFlag.AlignRight)
-        grid.addWidget(self._field("media_kind", kind, kind.currentData, kind.activated), 1, 1)
+        grid.addWidget(QLabel("Media Kind:"), 2, 0, Qt.AlignmentFlag.AlignRight)
+        grid.addWidget(self._field("media_kind", kind, kind.currentData, kind.activated), 2, 1)
         for row, (key, title) in enumerate((("bookmarkable", "Remember playback position:"),
                                             ("skip_when_shuffling", "Skip when shuffling:"),
                                             ("part_of_gapless_album", "Part of a gapless album:")),
-                                           start=2):
+                                           start=3):
             grid.addWidget(QLabel(title), row, 0, Qt.AlignmentFlag.AlignRight)
             grid.addWidget(self._yes_no(key), row, 1)
-        grid.setRowStretch(5, 1)
+        grid.setRowStretch(6, 1)
         grid.setColumnStretch(1, 1)
         return page
 
     def _ok(self):
         chosen = {key: self.getters[key]() for key, box in self.checks.items() if box.isChecked()}
+        if chosen.get("equalizer") == "\x00mixed":       # ticked, but left blank
+            del chosen["equalizer"]
         rating = chosen.pop("rating", None)
         artwork = chosen.pop("artwork", UNCHANGED)
         artworks = UNCHANGED if artwork is UNCHANGED else ([artwork] if artwork else [])

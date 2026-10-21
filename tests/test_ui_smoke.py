@@ -1449,3 +1449,188 @@ def test_closing_during_a_sync_asks_then_stops_safely_first(window, monkeypatch)
     QApplication.processEvents()
     assert closes == [True] and window._sync_worker is None
     window._closing_after_sync = False
+
+
+def test_paste_artwork_into_several_songs(window, monkeypatch):
+    from PySide6.QtGui import QColor, QImage
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    image = QImage(8, 8, QImage.Format.Format_RGB32)
+    image.fill(QColor("red"))
+    QApplication.clipboard().setImage(image)
+    window.show_source(("library", "music"))
+    tracks = [window.model.track_at(r) for r in range(min(2, window.model.rowCount()))]
+    calls = []
+    monkeypatch.setattr(window, "_apply_info",
+                        lambda tid, fields, rating, artworks: calls.append((tid, artworks)))
+    monkeypatch.setattr(QMessageBox, "question",
+                        staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
+    menu = window._song_menu(tracks, tracks[0], "x", lambda: None)
+    paste = next(a for a in menu.actions() if a.text() == "Paste Artwork")
+    assert paste.isEnabled()
+    window._paste_artwork(tracks)
+    assert [c[0] for c in calls] == [t["id"] for t in tracks]
+    assert len(calls[0][1]) == 1 and calls[0][1] == calls[-1][1]       # the same picture
+
+
+def test_the_ipod_page_shows_only_what_the_model_can_do(window, tmp_path):
+    from PySide6.QtWidgets import QApplication
+
+    from luxtunes.core.ipod import device, models
+    from test_ipod_core import make_ipod
+
+    mount, mounts = make_ipod(tmp_path)
+    [ipod] = device.find_ipods(mounts)
+    ipod.identity = models.identify("", "120a")                  # iPod nano (1st generation)
+    ipod.model_name = ipod.identity.name
+    window._ipods[ipod.key] = ipod
+    window.reload_library()
+    assert window.sidebar.select_source(("device", ipod.key))
+    QApplication.processEvents()
+    page = window.device_page
+    assert page.hidden_tabs() == {"Movies", "TV Shows"}
+    assert page.picture.family == "nano_1" and page.picture.shape["body"][2] < 60   # a slim nano
+    page.picture.grab()                                                            # draws
+    assert page.model_note.text().startswith("This iPod doesn't play videos")
+    assert page.sync_button.isEnabled()
+    ipod.identity = models.identify("", "1267")                  # nano 7th: can't be synced
+    page.set_device(window.conn, ipod, page.record)
+    assert not page.sync_button.isEnabled() and "can't sync" in page.model_note.text()
+    del window._ipods[ipod.key]
+
+
+def test_equalizer_window_and_song_presets(window, monkeypatch):
+    from PySide6.QtWidgets import QApplication, QInputDialog, QMessageBox
+
+    from luxtunes.core import equalizer, library
+    from luxtunes.ui import equalizer_window, get_info
+
+    app = QApplication.instance()
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    window._toggle_equalizer()                            # View > Show Equalizer
+    eq = window._eq_window
+    assert eq.isVisible() and window.equalizer_action.shortcut().toString() == "Ctrl+T"
+    app.processEvents()
+    eq.grab()
+    eq.on.setChecked(True)
+    assert window.eq_settings.on
+    eq._picked(eq.presets.findData("Rock"))
+    assert eq.bands[0].value() == 5.0 and window.eq_settings.preset == "Rock"
+    eq.bands[9].slider.setValue(-30)                      # -3 dB: now Manual
+    assert window.eq_settings.preset == equalizer.MANUAL
+    assert eq.presets.currentText() == equalizer.MANUAL
+    assert window.eq_settings.current.bands[9] == -3.0
+
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("My Rock", True))
+    eq._picked(eq.presets.findData(eq.MAKE))
+    assert window.eq_settings.preset == "My Rock" and eq.presets.currentText() == "My Rock"
+
+    # A song with its own preset; renaming and deleting the preset follow through.
+    track_id = window.model.visible_tracks()[0]["id"]
+    window._apply_info(track_id, {"equalizer": "My Rock"}, None, get_info.UNCHANGED)
+    assert library.load_track(window.conn, track_id)["equalizer"] == "My Rock"
+    edit = equalizer_window.EditPresetsDialog(eq)
+    edit.list.setCurrentRow(window.eq_settings.names().index("My Rock"))
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("Loud Rock", True))
+    edit._rename()
+    assert library.load_track(window.conn, track_id)["equalizer"] == "Loud Rock"
+    edit._delete()
+    assert library.load_track(window.conn, track_id)["equalizer"] is None
+    assert "Loud Rock" not in window.eq_settings.names()
+    edit.accept()
+
+    # Get Info offers the presets, for one song and for several.
+    tracks = window.model.visible_tracks()
+    dialog = get_info.InfoDialog(window.conn, tracks, 0, window._apply_info, window,
+                                 presets=window.eq_settings.names())
+    dialog.equalizer.setCurrentIndex(dialog.equalizer.findData("Jazz"))
+    dialog._ok()
+    assert library.load_track(window.conn, tracks[0]["id"])["equalizer"] == "Jazz"
+    multi = get_info.MultiInfoDialog(window.conn, tracks[:2], window._apply_info, window,
+                                     presets=window.eq_settings.names())
+    multi.checks["equalizer"].setChecked(True)
+    multi.getters["equalizer"] = lambda: "Pop"
+    multi.checks["volume_adjustment"].setChecked(True)
+    multi.getters["volume_adjustment"] = lambda: 40
+    multi._ok()
+    for t in tracks[:2]:
+        saved = library.load_track(window.conn, t["id"])
+        assert saved["equalizer"] == "Pop" and saved["volume_adjustment"] == 40
+
+    window._toggle_equalizer()                            # Ctrl+T again hides it
+    assert not eq.isVisible()
+
+    # Volume Adjustment snaps to None when dragged near the middle.
+    slider = get_info.VolumeSlider()
+    slider.slider.setValue(4)
+    slider.slider.sliderMoved.emit(4)
+    assert slider.value() == 0
+    slider.slider.setValue(30)
+    slider.slider.sliderMoved.emit(30)
+    assert slider.value() == 30
+
+    window._eq_save_timer.timeout.emit()                  # saves the settings
+    assert equalizer.load(window.conn).on
+
+
+def test_equalizer_reads_audio_buffers():
+    from PySide6.QtCore import QByteArray
+    from PySide6.QtMultimedia import QAudioBuffer, QAudioFormat
+
+    import numpy as np
+
+    from luxtunes.ui import eq_output
+
+    fmt = QAudioFormat()
+    fmt.setSampleRate(44100)
+    fmt.setChannelCount(1)
+    fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+    raw = np.array([0, 16384, -32768, 32767], dtype=np.int16).tobytes()
+    buffer = QAudioBuffer(QByteArray(raw), fmt)
+    block = eq_output.samples(buffer)
+    assert block.shape == (4, 2) and block.dtype == np.float32
+    assert block[1, 0] == 0.5 and block[2, 1] == -1.0
+
+
+def test_now_playing_bar_and_mini_player(window):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+
+    from luxtunes.ui import theme
+
+    app = QApplication.instance()
+    model = window.model
+    first = model.visible_tracks()[0]
+    model.set_now_playing(first["id"])
+    row = model.row_of(first["id"])
+    for column in (1, 3):                                 # the whole row, not just the name
+        assert model.index(row, column).data(Qt.ItemDataRole.BackgroundRole) == \
+            theme.now_playing_color()
+    assert model.index(row + 1, 1).data(Qt.ItemDataRole.BackgroundRole) is None
+    window.grab()
+    model.set_now_playing(None)
+
+    from PySide6.QtGui import QAction
+    texts = [a.text() for a in window.findChildren(QAction)]    # the menu items
+    assert "Pop-Out Player" in texts and "Mini Player" in texts
+    window._open_mini_player()
+    mini = window._mini_player
+    app.processEvents()
+    assert mini.isVisible()
+    mini.grab()
+    window._on_volume(40)
+    assert mini.volume.value() == 40
+    # A long artist/album line scrolls; a short one stays still.
+    mini.subtitle.setText("An Artist With A Long Name — An Album Title Far Too Long To Fit " * 3)
+    app.processEvents()
+    assert mini.subtitle._overflows() and mini.subtitle._timer.isActive()
+    mini.subtitle._step()
+    mini.subtitle._step()
+    assert mini.subtitle._offset == 2
+    mini.grab()
+    mini.subtitle.setText("Short")
+    assert not mini.subtitle._timer.isActive()
+    mini.restore_button.click()                            # back to the full window
+    app.processEvents()
+    assert window._mini_player is None and window.isVisible()
+    assert window.isMaximized()                            # the whole screen, not its old size
