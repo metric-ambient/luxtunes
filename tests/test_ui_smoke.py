@@ -1386,3 +1386,30 @@ def test_playlist_deletions_from_a_phone_are_asked_about(window, monkeypatch):
     window._confirm_phone_deletions(["Road Trip"])
     window._sync_worker = None
     assert answers == [False] and "Road Trip" in shown[0]
+
+
+def test_a_phone_remembers_where_it_syncs_to(window, tmp_path):
+    from PySide6.QtWidgets import QApplication
+
+    from luxtunes.core.android import sync as android_sync
+    from luxtunes.core.android.device import Phone
+
+    for name in ("Internal shared storage", "SD card"):
+        (tmp_path / "p" / name).mkdir(parents=True)
+    phone = Phone(str(tmp_path / "p"), "Moto", "One", "SER2",
+                  {n: str(tmp_path / "p" / n) for n in ("Internal shared storage", "SD card")})
+    window._phones[phone.key] = phone
+    window.reload_library()
+    assert window.sidebar.select_source(("device", phone.key))
+    QApplication.processEvents()
+    page = window.device_page
+    assert page.storage.currentData() == "Internal shared storage"     # new phone: its own
+    assert not (page.sync_movies.isChecked() or page.sync_books.isChecked())   # music only
+    page.storage.setCurrentIndex(page.storage.findData("SD card"))
+    record = android_sync.load_record(window.conn, phone)
+    assert (record.settings.android_storage, record.settings.android_storage_kind) == \
+        ("SD card", "removable")                                        # saved, no Apply
+    assert not page.dirty
+    page.set_device(window.conn, phone, record)                         # seen again later
+    assert page.storage.currentData() == "SD card"
+    del window._phones[phone.key]

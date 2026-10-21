@@ -157,3 +157,20 @@ def test_one_odd_file_doesnt_stop_the_rest(tmp_path, monkeypatch):
                                  progress=lambda done, total, path: seen.append(path) or True)
     assert len(result.added) == 2 and len(result.failed) == 1 and len(seen) == 3
     assert "RuntimeError" in result.failed[0] and not result.stopped
+
+
+def test_empty_tag_frames_dont_stop_a_file(tmp_path):
+    from mutagen.id3 import COMM, ID3, TCOM, TPE2
+
+    conn, root = setup(tmp_path)
+    path = mp3(tmp_path / "In" / "1-06 Song.mp3", name="Song", artist="Band")
+    id3 = ID3(path)
+    # Frames with no text at all (some taggers write these): read as empty.
+    id3.add(COMM(encoding=3, lang="eng", desc="", text=[]))
+    id3.add(TCOM(encoding=3, text=[]))
+    id3.add(TPE2(encoding=3, text=[]))
+    id3.save(path, v2_version=3)
+    fields = tags.read_fields(path)
+    assert fields["name"] == "Song" and fields.get("comments") is None
+    result = add_files.add_paths(conn, [str(tmp_path / "In")])
+    assert len(result.added) == 1 and not result.failed

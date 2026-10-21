@@ -369,10 +369,16 @@ class DevicePage(QWidget):
         self._refresh_timer.start()
 
     def _storage_changed(self, *_):
-        """Another storage chosen: its free space is what counts now."""
-        if self._loading or not self.is_android:
+        """Another storage chosen: remembered for this phone straight away (no
+        Apply needed), and its free space is what counts now."""
+        if self._loading or not self.is_android or not self.storage.currentData():
             return
-        self._read_controls()
+        from luxtunes.core.android.device import storage_kind
+        from luxtunes.core.ipod.settings import save_settings
+        name = self.storage.currentData()
+        for s in (self.settings, self.record.settings):
+            s.android_storage, s.android_storage_kind = name, storage_kind(name)
+        save_settings(self.conn, self.record.id, self.record.settings)
         self._measure_phone()
         capacity = self._space.capacity
         self.summary_values["Capacity"].setText(ipod_device.format_gb(capacity) if capacity
@@ -382,7 +388,8 @@ class DevicePage(QWidget):
     def _measure_phone(self):
         from luxtunes.core.android import device as android_device
         from luxtunes.core.android import sync as android_sync
-        storage = self.ipod.storage(self.settings.android_storage)
+        storage = self.ipod.storage(self.settings.android_storage,
+                                    self.settings.android_storage_kind)
         self._space = android_device.space(storage, android_sync.media_bytes(storage))
 
     def set_syncing(self, key: str | None):
@@ -548,9 +555,10 @@ class DevicePage(QWidget):
         self.storage.clear()
         for name in sorted(phone.storages, key=lambda n: (0 if "internal" in n.lower() else 1, n)):
             self.storage.addItem(name, name)
-        chosen = self.settings.android_storage
-        index = self.storage.findData(chosen) if chosen else 0
-        self.storage.setCurrentIndex(max(0, index))
+        # The storage last chosen for this phone (or one of the same kind).
+        chosen = phone.storage_name(self.settings.android_storage,
+                                    self.settings.android_storage_kind)
+        self.storage.setCurrentIndex(max(0, self.storage.findData(chosen)))
         self.storage.blockSignals(False)
 
     # ---- Music -------------------------------------------------------------------------------
@@ -1023,8 +1031,6 @@ class DevicePage(QWidget):
     def _read_controls(self):
         s = self.settings
         s.only_checked = self.only_checked.isChecked()
-        if self.is_android and self.storage.currentData():
-            s.android_storage = self.storage.currentData()
         s.convert = self.convert.isChecked()
         s.convert_kbps = self.convert_kbps.currentData() or s.convert_kbps
         s.manual = self.manual.isChecked()

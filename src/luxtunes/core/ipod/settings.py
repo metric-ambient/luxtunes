@@ -44,25 +44,27 @@ class SyncSettings:
     artists: list = field(default_factory=list)
     albums: list = field(default_factory=list)      # "Album Artist\x1fAlbum"
     genres: list = field(default_factory=list)
+    # Movies, TV Shows, Podcasts and Books are opt-in on a new device: only
+    # music syncs until you tick them (saved devices keep their own choices).
     # Movies tab
-    sync_movies: bool = True
+    sync_movies: bool = False
     movies_auto: bool = True
     movies_rule: str = "all"
     movies: list = field(default_factory=list)      # persistent ids, picked by hand
     # TV Shows tab
-    sync_tv: bool = True
+    sync_tv: bool = False
     tv_auto: bool = True
     tv_rule: str = "all unwatched"
     # Podcasts tab: "Automatically include <rule> episodes of <scope>", plus
     # shows and single episodes ticked by hand
-    sync_podcasts: bool = True
+    sync_podcasts: bool = False
     podcasts_auto: bool = True
     podcasts_rule: str = "all unplayed"
     podcasts_scope: str = "all podcasts"           # or "selected podcasts"
     podcast_shows: list = field(default_factory=list)       # show names
     podcast_episodes: list = field(default_factory=list)    # persistent ids
     # Books tab
-    sync_books: bool = True
+    sync_books: bool = False
     books_mode: str = "all"                        # "all" or "selected"
     books: list = field(default_factory=list)      # book keys ("Author\x1fBook")
     # Games tab (none yet)
@@ -74,8 +76,11 @@ class SyncSettings:
     photo_folders: list = field(default_factory=list)
     full_resolution: bool = False
     # Android devices: which storage the LuxTunes folder goes on (its name, e.g.
-    # "Internal shared storage" or the SD card's; empty = the phone's own)
+    # "Internal shared storage" or the SD card's; empty = the phone's own), and
+    # whether that's the phone's own ("internal") or a removable card, so the
+    # choice holds even if the card shows up under another name
     android_storage: str = ""
+    android_storage_kind: str = ""
     # Android devices: take off media that's no longer chosen (only ever from
     # the LuxTunes folder). Off: it stays until this is turned on.
     android_delete_unselected: bool = True
