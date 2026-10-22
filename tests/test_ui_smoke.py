@@ -1396,6 +1396,34 @@ def test_playlist_deletions_from_a_phone_are_asked_about(window, monkeypatch):
     assert answers == [False] and "Road Trip" in shown[0]
 
 
+def test_playlists_a_sync_deleted_leave_the_sidebar(window):
+    """A phone sync deletes playlists from its own connection: the sidebar
+    drops them however the sync ends, and a leftover row is never a dead end."""
+    from luxtunes.core import db, library
+    from luxtunes.core.ipod.sync import SyncReport
+    names = lambda: {window.sidebar.topLevelItem(i).child(j).text(0)
+                     for i in range(window.sidebar.topLevelItemCount())
+                     for j in range(window.sidebar.topLevelItem(i).childCount())}
+    first = library.create_playlist(window.conn, "On-The-Go 1")
+    second = library.create_playlist(window.conn, "On-The-Go 2")
+    window.reload_library()
+    window.sidebar.select_source(("playlist", first))
+    db_path = window.conn.execute("PRAGMA database_list").fetchone()[2]
+    other = db.connect(db_path)                         # as the sync's own connection
+    library.delete_playlist(other, first)
+    other.close()
+    window._sync_ipod, window._sync_name = None, "Pixel 7"
+    window._sync_finished(SyncReport(cancelled=True))   # e.g. "Don't Sync" after the question
+    assert "On-The-Go 1" not in names() and window._current_source != ("playlist", first)
+    # A row left from before still goes away when it's clicked or right-clicked.
+    other = db.connect(db_path)
+    library.delete_playlist(other, second)
+    other.close()
+    assert "On-The-Go 2" in names()
+    window._show_sidebar_menu(("playlist", second), window.mapToGlobal(window.rect().center()))
+    assert "On-The-Go 2" not in names()
+
+
 def test_a_phone_remembers_where_it_syncs_to(window, tmp_path):
     from PySide6.QtWidgets import QApplication
 

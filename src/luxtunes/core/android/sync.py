@@ -11,8 +11,9 @@ On the phone's chosen storage (its own, or an SD card):
         library.db            SQLite: every song's details, ratings, plays,
                               lyrics, playlists (see docs/android-library-format.md)
         changes.json          written by a player on the phone: plays, skips and
-                              ratings since the last sync; added to the library
-                              here, then emptied
+                              ratings since the last sync, playlist changes and
+                              songs added there; added to the library here, then
+                              emptied
         .luxtunes-sync.json   what LuxTunes put there
 
 Nothing outside the LuxTunes folder is ever written or deleted (see
@@ -215,6 +216,142 @@ def _log_phone_changes(conn, root: Path, merged) -> None:
     log.info("%s on the phone: %d song entries (%d found in this library), %d playlist "
              "changes, library_id %s", CHANGES, entries, known, len(merged.playlists),
              "matches" if same else f"{merged.library_id!r} doesn't match {library_id(conn)!r}")
+
+
+def _import_phone_songs(conn, root: Path, merged, manifest: dict, record, report,
+                        tell) -> None:
+    """Songs added on the phone (format v2 "added_tracks"): each file is copied
+    into the library as Add to Library would, under the phone's id, and
+    recorded as if this sync had put it there, so it isn't copied again or
+    offered for removal. Runs before the plays and playlists, which may use
+    these ids."""
+    if not merged.added:
+        return
+    if merged.library_id != library_id(conn):
+        report.problems.append("Songs added on the phone were added for a different LuxTunes "
+                               "library, so they weren't brought in.")
+        return
+    from luxtunes.core import add_files
+    from luxtunes.core.tags import TagError
+    files = manifest["files"]
+    media_root = organize.media_folder(conn)
+    known = None
+    for i, added in enumerate(merged.added):
+        label = added.details.get("name") or Path(added.path).stem
+        tell("Adding songs from the phone…", i, len(merged.added), can_stop=False)
+        try:
+            source = contained(root, added.path)
+        except OutsideFolder:
+            report.problems.append(f"“{label}” added on the phone: not inside the LuxTunes "
+                                   "folder, so it wasn't brought in.")
+            continue
+        if not source.is_file():
+            continue                                  # deleted on the phone before this sync
+        row = conn.execute("SELECT id, name, location FROM tracks WHERE upper(persistent_id) = ?",
+                           (added.id,)).fetchone()
+        if row is not None:
+            if (files.get(added.id) or {}).get("path") == added.path:
+                continue                              # brought in by an earlier sync
+            if not _same_size(row[2], source):
+                report.problems.append(f"“{label}” added on the phone wasn't brought in: its id "
+                                       f"is already used by “{row[1]}” in your library.")
+                continue
+            track_id = row[0]                         # brought in by a sync that was cut off
+        else:
+            if known is None:
+                known = add_files._known_locations(conn)
+            try:
+                track_id = add_files.add_file(
+                    conn, str(source), True, media_root, known, details={"media_kind": "music"},
+                    persistent_id=added.id, fallback=added.details, date_added=added.date_added)
+            except add_files.AlreadyAdded:
+                report.problems.append(f"“{label}” added on the phone is already in your "
+                                       "library, so it wasn't added again.")
+                continue
+            except (TagError, OSError, ValueError) as error:
+                log.warning("couldn't bring in %s from the phone: %s", added.path, error)
+                report.problems.append(f"“{label}” added on the phone couldn't be brought in: "
+                                       f"{getattr(error, 'strerror', None) or error}")
+                continue
+            report.imported.append(track_id)
+        track = conn.execute("SELECT name, artist, album, location FROM tracks WHERE id = ?",
+                             (track_id,)).fetchone()
+        try:
+            st = os.stat(track[3])
+            on_phone = source.stat().st_size
+        except (OSError, TypeError):
+            continue
+        files[added.id] = {"path": added.path, "size": on_phone, "source_size": st.st_size,
+                           "source_mtime": st.st_mtime_ns, "name": track[0],
+                           "artist": track[1], "album": track[2]}
+    in_library = {r[0] for r in conn.execute("SELECT persistent_id FROM tracks")}
+    brought = [pid for pid in files if pid in {a.id for a in merged.added}]
+    settings = record.settings
+    if brought and settings.sync_music and settings.music_mode == "selected":
+        settings.phone_songs = [p for p in dict.fromkeys(settings.phone_songs + brought)
+                                if p in in_library]
+        ipod_settings.save_settings(conn, record.id, settings)
+    elif brought and not settings.sync_music:
+        report.problems.append("Songs added on the phone were added to your library, but Sync "
+                               "Music is off for this phone, so they won't stay on it.")
+    _save_manifest(root, manifest, conn)
+    log.info("songs added on the phone: %d brought in", len(report.imported))
+
+
+def _phone_value(key: str, value):
+    """A value from the phone's Get Info as Get Info here would take it
+    (ValueError if it can't be used)."""
+    if key in phone_changes.EDITED_TEXT:
+        if not isinstance(value, str):
+            raise ValueError("not text")
+        if key == "name" and not value.strip():
+            raise ValueError("a song needs a name")
+        return value
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("not a whole number")
+    if key == "compilation":
+        if value not in (0, 1):
+            raise ValueError("not 0 or 1")
+        return value
+    return "" if value == 0 else value            # 0: none
+
+
+def _apply_phone_edits(conn, merged, report) -> None:
+    """Song details changed in the phone's Get Info (format v2 "edited_tracks"),
+    saved exactly as Get Info here saves them: sort names follow, the tags are
+    marked to be written into the file, date_modified is set. The phone's value
+    wins. Runs after songs added on the phone, which may have been edited too."""
+    if not merged.edited:
+        return
+    if merged.library_id != library_id(conn):
+        report.problems.append("Song details edited on the phone were for a different "
+                               "LuxTunes library, so they weren't applied.")
+        return
+    for edit in merged.edited:
+        row = conn.execute("SELECT id, name FROM tracks WHERE upper(persistent_id) = ?",
+                           (edit.id,)).fetchone()
+        if row is None:
+            report.problems.append(f"Details edited on the phone for a song that isn't in "
+                                   f"your library ({edit.id}) were skipped.")
+            continue
+        fields = {}
+        for key, value in edit.fields.items():
+            try:
+                fields[key] = library.clean_field_value(key, _phone_value(key, value))
+            except (ValueError, KeyError) as error:
+                report.problems.append(f"“{row[1]}”: the {key.replace('_', ' ')} edited on the "
+                                       f"phone wasn't used ({error}).")
+        # update_track_fields cleans again; values already clean stay the same.
+        if fields and library.update_track_fields(conn, row[0], fields):
+            report.edited.append(row[0])
+    log.info("song details edited on the phone: %d songs updated", len(report.edited))
+
+
+def _same_size(location: str | None, source: Path) -> bool:
+    try:
+        return bool(location) and os.path.getsize(location) == source.stat().st_size
+    except OSError:
+        return False
 
 
 def _apply_phone_equalizer(conn, merged, report) -> None:
@@ -424,7 +561,10 @@ def build_database(path: str, conn: sqlite3.Connection, placed: dict, covers: di
                                         eq_columns=", ".join(f"{c} REAL" for c in EQ_COLUMNS)))
         info = {"format_version": str(FORMAT_VERSION), "library_id": library_id(conn),
                 "library_name": library.library_name(conn), "luxtunes_version": __version__,
-                "synced_at": library.now_utc()}
+                "synced_at": library.now_utc(),
+                # This LuxTunes takes songs added on the phone (changes.json
+                # "added_tracks") and details edited there ("edited_tracks").
+                "phone_imports": "1", "phone_edits": "1"}
         out.executemany("INSERT INTO info VALUES (?, ?)", info.items())
         by_pid = {t["persistent_id"]: t for t in library.load_tracks(conn)}
         rows = []
@@ -499,11 +639,14 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
     manifest = read_manifest(root)
     files: dict = manifest["files"]
 
-    # 1. What a player on the phone sends back: plays, skips and ratings, then
-    # its playlist changes; then changes.json is emptied straight away.
+    # 1. What a player on the phone sends back: songs added there, details
+    # edited there, plays, skips and ratings, then its playlist changes; then
+    # changes.json is emptied straight away.
     merged = phone_changes.read(root)
     report.problems += merged.problems
     _log_phone_changes(conn, root, merged)
+    _import_phone_songs(conn, root, merged, manifest, record, report, tell)
+    _apply_phone_edits(conn, merged, report)
     report.stats = stats.merge(conn, merged.tracks)
     log.info("from the phone: %d plays, %d skips, %d ratings added to the library",
              report.stats.plays, report.stats.skips, report.stats.ratings)

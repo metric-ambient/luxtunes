@@ -73,8 +73,8 @@ Made for Linux Mint, and it runs on most recent Linux systems.
   iPod touch can't be supported.)
 - **Android phones,** over a USB cable: songs, videos, podcasts, audiobooks, artwork,
   playlists and your equalizer go into one `LuxTunes` folder on the phone. With the
-  companion LuxTunes app, plays, ratings, playlist changes and equalizer presets come back
-  at the next sync ([how the folder is laid out](docs/android-library-format.md)).
+  companion LuxTunes app, plays, ratings, playlist changes, equalizer presets and songs
+  added on the phone come back at the next sync ([how the folder is laid out](docs/android-library-format.md)).
 - Choose to sync everything, everything with only some playlists, or just chosen
   playlists, artists, albums and genres.
 

@@ -201,18 +201,24 @@ class AlreadyAdded(Exception):
 
 def add_file(conn: sqlite3.Connection, path: str, copy: bool, root: Path,
              known: dict[str, int] | None = None, stop=None, details: dict | None = None,
-             file_it: bool = True) -> int:
+             file_it: bool = True, persistent_id: str | None = None,
+             fallback: dict | None = None, date_added: str | None = None) -> int:
     """Add one file and return its new track id. Raises TagError / OSError,
     or AlreadyAdded if an earlier copy of this file is already in the library.
     details: song details that win over the file's own (e.g. a converted
     copy's media kind and show). file_it=False leaves the file where it is
-    instead of filing it in the media folder now."""
+    instead of filing it in the media folder now. persistent_id: use this one
+    (a song added on a phone keeps the phone's). fallback: details used only
+    where the file's own tags have none. date_added: when it was really added."""
     try:
         fields = read_fields(path)
     except TagError:
         if Path(path).suffix.lower() not in VIDEO_EXTENSIONS:
             raise
         fields = video_fields(path)           # e.g. .mkv / .avi: no tags mutagen can read
+    for key, value in (fallback or {}).items():
+        if value not in (None, "") and fields.get(key) in (None, ""):
+            fields[key] = value
     if not fields.get("name"):
         fields["name"] = Path(path).stem
     if Path(path).suffix.lower() in VIDEO_EXTENSIONS:
@@ -222,7 +228,7 @@ def add_file(conn: sqlite3.Connection, path: str, copy: bool, root: Path,
         fields["media_kind"] = media_kind_hint(path) or "music"
         fields.update(library.kind_defaults(fields["media_kind"]))
     fields.update({k: v for k, v in (details or {}).items() if v is not None})
-    fields["date_added"] = library.now_utc()
+    fields["date_added"] = date_added or library.now_utc()
     fields["date_modified"] = _utc(os.path.getmtime(path))
 
     location = path
@@ -239,7 +245,7 @@ def add_file(conn: sqlite3.Connection, path: str, copy: bool, root: Path,
         log.info("copied %s -> %s", path, target)
         location = str(target)
     fields["location"] = location
-    fields["persistent_id"] = new_persistent_id()
+    fields["persistent_id"] = persistent_id or new_persistent_id()
 
     columns = {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}
     row = {k: v for k, v in fields.items() if k in columns}

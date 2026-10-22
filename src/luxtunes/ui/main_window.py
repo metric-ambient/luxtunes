@@ -732,6 +732,9 @@ class MainWindow(QMainWindow):
             self.search.setPlaceholderText("Search Up Next")
             self.grid.set_section("music")
         else:
+            if not self.conn.execute("SELECT 1 FROM playlists WHERE id = ?", (value,)).fetchone():
+                self.reload_library()                  # deleted meanwhile (e.g. by a sync)
+                return
             smart.refresh(self.conn, value)            # a live smart playlist: up to date now
             tracks = library.load_tracks(self.conn, playlist_id=value)
             sort_column = -1  # playlist order
@@ -1915,7 +1918,10 @@ class MainWindow(QMainWindow):
             eject.setEnabled(not (syncing and self._sync_ipod.key == source[1]))
         elif source[0] == "playlist":
             playlist = self._playlist_by_id(source[1])
-            if playlist is None or playlist["is_folder"]:
+            if playlist is None:
+                self.reload_library()                  # deleted meanwhile (e.g. by a sync)
+                return
+            if playlist["is_folder"]:
                 return
             menu.addAction("Open in New Window", lambda: self._open_playlist_window(playlist))
             if playlist["is_smart"]:
@@ -3135,8 +3141,15 @@ class MainWindow(QMainWindow):
 
     def _sync_finished(self, report):
         ipod = self._sync_ipod
-        if report.cancelled and not (report.added or report.removed):
+        edited = getattr(report, "edited", None) or []
+        if edited:
+            # Details edited on the phone: into the files now, in the background.
+            self._tag_jobs.extend((track_id, UNCHANGED) for track_id in edited)
+            self._start_tag_writes()
+        if report.cancelled and not (report.added or report.removed or report.imported):
             self._lcd_finished("sync", "Sync cancelled.", 3)
+            # The phone's playlist changes and plays may be in the library already.
+            self.reload_library()
             return
         # Plays and ratings from the iPod show up in the song list right away.
         if report.stats:
@@ -3176,12 +3189,18 @@ class MainWindow(QMainWindow):
         if report.stats and report.stats.plays:
             self.statusBar().showMessage(
                 f"{report.stats.plays:,} plays were read from “{self._sync_name}”.", 8000)
+        imported = len(getattr(report, "imported", None) or [])
+        if imported:
+            self.statusBar().showMessage(
+                f"{imported:,} song{'s' if imported != 1 else ''} added on “{self._sync_name}” "
+                f"{'were' if imported != 1 else 'was'} added to your library.", 8000)
         if report.problems and not self._closing_after_sync:
             QMessageBox.warning(self, "Sync", "Some items couldn't be synced:\n\n"
                                 + "\n".join(report.problems[:20]))
 
     def _sync_failed(self, message: str):
         self._lcd_finished("sync", "The sync didn't finish.", 4)
+        self.reload_library()             # what the phone sent before it stopped is in
         if self._closing_after_sync:
             log.warning("sync didn't finish while closing: %s", message)
             return
