@@ -191,7 +191,8 @@ Everything goes in one <i>LuxTunes</i> folder that any music player can use.</li
 <li><b>Delete media not in this selection</b> keeps the phone tidy. LuxTunes only ever
 touches its own folder.</li>
 <li>With the LuxTunes app on the phone, plays, ratings, playlists and the equalizer
-come back at the next sync.</li>
+come back at the next sync. Songs you add on the phone are copied into your
+library, and details you edit there (names, albums, years…) are saved here too.</li>
 </ul>"""),
 
     ("Deleting songs", "Remove from a playlist or the library", """

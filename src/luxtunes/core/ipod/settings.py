@@ -47,6 +47,9 @@ class SyncSettings:
     artists: list = field(default_factory=list)
     albums: list = field(default_factory=list)      # "Album Artist\x1fAlbum"
     genres: list = field(default_factory=list)
+    # Phones: songs added on the phone (persistent ids). With "selected" they
+    # always sync, so a sync never takes them off the phone that added them.
+    phone_songs: list = field(default_factory=list)
     # Movies, TV Shows, Podcasts and Books are opt-in on a new device: only
     # music syncs until you tick them (saved devices keep their own choices).
     # Movies tab

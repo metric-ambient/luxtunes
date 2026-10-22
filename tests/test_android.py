@@ -221,10 +221,14 @@ def _db(root):
     return sqlite3.connect(root / "library.db")
 
 
-def _changes(root, conn, playlists=(), tracks=(), library=None):
+def _changes(root, conn, playlists=(), tracks=(), library=None, added=None, edited=None):
     lid = library if library is not None else sync.library_id(conn)
-    (root / "changes.json").write_text(json.dumps(
-        {"version": 2, "library_id": lid, "tracks": list(tracks), "playlists": list(playlists)}))
+    data = {"version": 2, "library_id": lid, "tracks": list(tracks), "playlists": list(playlists)}
+    if added is not None:
+        data["added_tracks"] = list(added)
+    if edited is not None:
+        data["edited_tracks"] = list(edited)
+    (root / "changes.json").write_text(json.dumps(data))
 
 
 def _pid(conn, name):
@@ -698,3 +702,194 @@ def test_the_phones_equalizer_comes_back(tmp_path):
     problems = []
     assert phone_changes._equalizer({"presets": [{"name": "Manual", "bands": [0] * 10}]},
                                     problems) is None and problems
+
+
+# ---- Songs added on the phone ---------------------------------------------------------------
+
+NEW_ID = "1A2B3C4D5E6F7081"
+NEW_PATH = "LuxTunes Media/Music/Phone Band/Pocket Album/07 Found It.mp3"
+
+
+def _song_on_phone(root, path=NEW_PATH, title="Found It"):
+    """A song file a player on the phone copied into the LuxTunes folder."""
+    target = root / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(FRAME * 80)
+    tags.write_tags(str(target), {"name": title, "artist": "Phone Band",
+                                  "album": "Pocket Album", "track_number": 7})
+    return target
+
+
+def _added(**change):
+    return {"id": NEW_ID, "path": NEW_PATH, "media_kind": "music", "name": "Found It (phone)",
+            "artist": "Phone Band", "album": "Pocket Album", "genre": "Indie",
+            "date_added": "2026-10-22T18:04:11Z", **change}
+
+
+def test_songs_added_on_the_phone_come_into_the_library(tmp_path):
+    from luxtunes.core import organize
+    conn = small_library(tmp_path)
+    organize.set_media_folder(conn, tmp_path / "Media")
+    phone = fake_phone(tmp_path)
+    root = _phone_root(tmp_path)
+    run(conn, phone)
+    on_phone = _song_on_phone(root)
+    _changes(root, conn, added=[_added()], tracks=[{"id": NEW_ID, "plays": 2}],
+             playlists=[{"id": "9F8E7D6C5B4A3921", "action": "create", "name": "New Finds",
+                         "is_smart": 0, "items": [NEW_ID]}])
+    asked = []
+    record = settings.load_device(conn, phone.key, phone.name)
+    report = sync.sync(conn, phone, record,
+                       confirm=lambda adding, removing, removals: asked.append(removals) or True)
+    assert not report.problems, report.problems
+    song = conn.execute("SELECT * FROM tracks WHERE persistent_id = ?", (NEW_ID,)).fetchone()
+    # LuxTunes' own reading of the file wins; the phone's details fill the gaps.
+    assert (song["name"], song["artist"], song["genre"]) == ("Found It", "Phone Band", "Indie")
+    assert song["date_added"] == "2026-10-22T18:04:11Z" and song["play_count"] == 2
+    assert str(tmp_path / "Media") in song["location"] and on_phone.exists()
+    assert report.imported == [song["id"]] and _list(conn, "New Finds") == ["Found It"]
+    # Not offered for removal, not copied again, and in the phone's database.
+    assert asked == [[]] and (report.added, report.removed) == (0, 0)
+    assert sync.read_manifest(root)["files"][NEW_ID]["path"] == NEW_PATH
+    with _db(root) as out:
+        assert out.execute("SELECT path FROM tracks WHERE id = ?", (NEW_ID,)).fetchone() == \
+            (NEW_PATH,)
+        assert out.execute("SELECT value FROM info WHERE key = 'phone_imports'").fetchone() == \
+            ("1",)
+    assert "added_tracks" not in json.loads((root / "changes.json").read_text())
+    again = run(conn, phone)
+    assert (again.added, again.removed, again.imported) == (0, 0, [])
+    assert conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0] == 4
+
+
+def test_songs_added_on_the_phone_stay_on_it_with_selected_items(tmp_path):
+    from luxtunes.core import organize
+    conn = small_library(tmp_path)
+    organize.set_media_folder(conn, tmp_path / "Media")
+    phone = fake_phone(tmp_path)
+    root = _phone_root(tmp_path)
+    nothing = dict(music_mode="selected", playlists=[], artists=["The 1975"], albums=[],
+                   genres=[])
+    run(conn, phone, **nothing)
+    _song_on_phone(root)
+    _changes(root, conn, added=[_added()])
+    report = run(conn, phone, **nothing)
+    assert report.removed == 0 and (root / NEW_PATH).exists()
+    assert settings.load_device(conn, phone.key).settings.phone_songs == [NEW_ID]
+    record = settings.load_device(conn, phone.key)
+    report = sync.sync(conn, phone, record)
+    assert report.removed == 0 and (root / NEW_PATH).exists()
+
+
+def test_songs_added_on_the_phone_that_cant_be_used(tmp_path):
+    from luxtunes.core import organize
+    conn = small_library(tmp_path)
+    organize.set_media_folder(conn, tmp_path / "Media")
+    phone = fake_phone(tmp_path)
+    root = _phone_root(tmp_path)
+    run(conn, phone)
+    _song_on_phone(root)
+    taken = _pid(conn, "Robbers")
+    _changes(root, conn, added=[
+        _added(id=taken),                                         # id already used here
+        _added(id="00000000000000AA", path="LuxTunes Media/../../escape.mp3"),
+        _added(id="00000000000000BB", path="LuxTunes Media/Music/Gone/Gone/1 Gone.mp3"),
+    ])
+    report = run(conn, phone)
+    assert report.imported == []
+    assert any("already used by “Robbers”" in p for p in report.problems)
+    assert any("not understood" in p for p in report.problems)
+    assert len(report.problems) == 2                              # a deleted file: just skipped
+    assert conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0] == 3
+
+
+def test_songs_added_on_the_phone_for_another_library_are_left(tmp_path):
+    conn = small_library(tmp_path)
+    phone = fake_phone(tmp_path)
+    root = _phone_root(tmp_path)
+    run(conn, phone)
+    _song_on_phone(root)
+    _changes(root, conn, added=[_added()], library="FFFFFFFFFFFFFFFF")
+    report = run(conn, phone)
+    assert report.imported == [] and any("different LuxTunes library" in p
+                                         for p in report.problems)
+
+
+def test_songs_the_phone_adds_while_syncing_wait_for_the_next_sync():
+    from luxtunes.core.android import changes
+    first = _added()
+    merged = changes.PhoneChanges(text="old", added=[changes._added(first, [])])
+    later = json.dumps({"version": 2, "added_tracks": [first, _added(id="00000000000000CC")]})
+    left = changes.emptied(merged, later)
+    assert [a["id"] for a in left["added_tracks"]] == ["00000000000000CC"]
+    problems = []
+    assert changes._added({"id": NEW_ID, "path": "Music/x.mp3"}, problems) is None
+    assert changes._added({"id": NEW_ID, "path": None}, problems) is None
+    assert changes._added(_added(year="1999", track_number=-1), problems).details.get("year") \
+        is None
+    assert len(problems) == 2
+
+
+# ---- Song details edited on the phone --------------------------------------------------------
+
+def test_details_edited_on_the_phone_are_saved_like_get_info(tmp_path):
+    from luxtunes.core import organize
+    conn = small_library(tmp_path)
+    organize.set_media_folder(conn, tmp_path / "Media")
+    conn.execute("UPDATE tracks SET sort_album = 'Old Sort', year = 2013, track_number = 4 "
+                 "WHERE name = 'Robbers'")
+    conn.commit()
+    phone = fake_phone(tmp_path)
+    root = _phone_root(tmp_path)
+    run(conn, phone)
+    _song_on_phone(root)
+    robbers = _pid(conn, "Robbers")
+    _changes(root, conn, added=[_added()], edited=[
+        {"id": robbers, "album": "Blue (Remastered)", "year": 1971, "track_number": 0,
+         "comments": "", "compilation": 1},
+        {"id": NEW_ID, "genre": "Folk"},                          # added, then edited
+        {"id": _pid(conn, "Chocolate"), "year": "soon", "name": "", "artist": "Someone"},
+        {"id": "00000000000000DD", "album": "Nowhere"}])
+    report = run(conn, phone)
+    song = conn.execute("SELECT * FROM tracks WHERE name = 'Robbers'").fetchone()
+    assert (song["album"], song["year"], song["track_number"], song["compilation"]) == \
+        ("Blue (Remastered)", 1971, None, 1)
+    assert song["sort_album"] is None and song["tags_dirty"] == 1
+    assert {"album", "year"} <= set(json.loads(song["dirty_fields"]))
+    assert conn.execute("SELECT genre FROM tracks WHERE persistent_id = ?",
+                        (NEW_ID,)).fetchone()[0] == "Folk"
+    chocolate = conn.execute("SELECT name, artist, year FROM tracks WHERE persistent_id = ?",
+                             (_pid(conn, "Chocolate"),)).fetchone()
+    assert tuple(chocolate) == ("Chocolate", "Someone", None)    # the bad values were skipped
+    assert len(report.edited) == 3 and len(report.problems) == 3, report.problems
+    assert any("isn't in your library" in p for p in report.problems)
+    with _db(root) as out:
+        assert out.execute("SELECT album FROM tracks WHERE id = ?", (robbers,)).fetchone() == \
+            ("Blue (Remastered)",)
+        assert out.execute("SELECT value FROM info WHERE key = 'phone_edits'").fetchone() == ("1",)
+    assert "edited_tracks" not in json.loads((root / "changes.json").read_text())
+
+
+def test_details_edited_on_the_phone_for_another_library_are_left(tmp_path):
+    conn = small_library(tmp_path)
+    phone = fake_phone(tmp_path)
+    root = _phone_root(tmp_path)
+    run(conn, phone)
+    _changes(root, conn, edited=[{"id": _pid(conn, "Robbers"), "album": "Elsewhere"}],
+             library="FFFFFFFFFFFFFFFF")
+    report = run(conn, phone)
+    assert report.edited == [] and any("different LuxTunes library" in p for p in report.problems)
+    assert conn.execute("SELECT album FROM tracks WHERE name = 'Robbers'").fetchone()[0] == \
+        "The 1975"
+
+
+def test_edits_the_phone_makes_while_syncing_wait_for_the_next_sync():
+    from luxtunes.core.android import changes
+    first = {"id": NEW_ID, "album": "A"}
+    merged = changes.PhoneChanges(text="old", edited=[changes._edited(first, [])])
+    later = json.dumps({"version": 2, "edited_tracks": [
+        first, {"id": "00000000000000CC", "year": 1999}]})
+    assert changes.emptied(merged, later)["edited_tracks"] == [{"id": "00000000000000CC",
+                                                                "year": 1999}]
+    changed = json.dumps({"version": 2, "edited_tracks": [{"id": NEW_ID, "album": "B"}]})
+    assert changes.emptied(merged, changed)["edited_tracks"] == [{"id": NEW_ID, "album": "B"}]

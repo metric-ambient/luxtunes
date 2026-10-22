@@ -261,6 +261,10 @@ def build_plan(conn: sqlite3.Connection, settings: SyncSettings,
             for t in music:
                 if artist_of(t) in artists or album_key(t) in albums or t.get("genre") in genres:
                     wanted[t["id"]] = t
+            added_there = set(settings.phone_songs)
+            for t in allowed.values():
+                if t.get("persistent_id") in added_there:
+                    wanted[t["id"]] = t
     else:
         chosen_lists = []
 

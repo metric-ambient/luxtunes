@@ -7,7 +7,14 @@ Format version 2 (version 1 files are still read the same way):
      "playlists": [{"id", "action": "create"|"update"|"delete", "name", "is_smart",
                     "items": [track ids]  or  "smart_info"/"smart_criteria" (base64)}],
      "equalizer": {"on", "preset", "manual": {"preamp", "bands"},
-                   "presets": [{"name", "preamp", "bands"}]}}   (optional)
+                   "presets": [{"name", "preamp", "bands"}]},   (optional)
+     "added_tracks": [{"id", "path", "name", "artist", ..., "date_added"}],  (optional)
+     "edited_tracks": [{"id", "album": "...", "year": 1971, ...}]}  (optional)
+
+added_tracks are songs added on the phone: copied into the library at the
+next sync under the phone's id (see sync._import_phone_songs). edited_tracks
+are details changed in the phone's Get Info, saved as if typed into Get Info
+here (see sync._apply_phone_edits).
 
 Tracks merge with the same rules as an iPod's play counts. Playlists are only
 applied when the file was made against this library, only to playlists
@@ -36,6 +43,16 @@ VERSION = 2
 ID = re.compile(r"^[0-9A-Fa-f]{16}$")
 ACTIONS = ("create", "update", "delete")
 NAME_MAX = 255
+MEDIA_PREFIX = "LuxTunes Media/"
+# Details from the phone's own tag reader, used only where LuxTunes' reader finds none.
+ADDED_TEXT = ("name", "artist", "album_artist", "album", "genre", "composer")
+ADDED_NUMBERS = ("year", "track_number", "track_count", "disc_number", "disc_count",
+                 "total_time", "bit_rate", "compilation")
+# What the phone's Get Info can change. Text "" clears it; a number 0 means none.
+EDITED_TEXT = ("name", "artist", "album_artist", "album", "genre", "composer", "grouping",
+               "comments")
+EDITED_NUMBERS = ("year", "track_number", "track_count", "disc_number", "disc_count",
+                  "compilation")
 
 
 @dataclass
@@ -51,6 +68,22 @@ class PlaylistChange:
 
 
 @dataclass
+class AddedTrack:
+    id: str
+    path: str                                     # relative to the LuxTunes folder
+    details: dict = field(default_factory=dict)   # fallback details
+    date_added: str | None = None
+    raw: dict = field(default_factory=dict)
+
+
+@dataclass
+class EditedTrack:
+    id: str
+    fields: dict                                  # as the phone wrote them
+    raw: dict = field(default_factory=dict)
+
+
+@dataclass
 class PhoneChanges:
     text: str | None = None                       # the file as read (None: no file)
     library_id: str | None = None
@@ -59,6 +92,8 @@ class PhoneChanges:
     playlists: list[PlaylistChange] = field(default_factory=list)
     equalizer: object = None                      # equalizer.Settings made on the phone
     raw_equalizer: object = None                  # as the phone wrote it
+    added: list[AddedTrack] = field(default_factory=list)
+    edited: list[EditedTrack] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
 
 
@@ -144,6 +179,47 @@ def _playlist(entry, problems: list[str]) -> PlaylistChange | None:
     return change
 
 
+def _added(entry, problems: list[str]) -> AddedTrack | None:
+    """A song added on the phone, or None (reported) if it can't be used.
+    Its path must be a plain path inside LuxTunes Media."""
+    if not isinstance(entry, dict):
+        return None
+    pid = str(entry.get("id") or "")
+    path = entry.get("path")
+    label = entry.get("name") if isinstance(entry.get("name"), str) else pid or "a song"
+    path = path if isinstance(path, str) else ""
+    if not ID.match(pid) or not path.startswith(MEDIA_PREFIX) or "\\" in path or \
+            any(p in ("", ".", "..") for p in path.split("/")):
+        problems.append(f"Song added on the phone skipped ({label}): not understood.")
+        return None
+    details = {}
+    for key in ADDED_TEXT:
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            details[key] = value.strip()[:NAME_MAX]
+    for key in ADDED_NUMBERS:
+        value = entry.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            details[key] = value
+    added = entry.get("date_added")
+    added = str(added) if added and _unix(added) else None
+    return AddedTrack(pid.upper(), path, details, added, raw=entry)
+
+
+def _edited(entry, problems: list[str]) -> EditedTrack | None:
+    """One song's details changed on the phone (only the known fields; their
+    values are checked when they're applied)."""
+    if not isinstance(entry, dict):
+        return None
+    pid = str(entry.get("id") or "")
+    if not ID.match(pid):
+        problems.append(f"Song details edited on the phone skipped ({pid or 'no id'}): "
+                        "not understood.")
+        return None
+    fields = {k: entry[k] for k in (*EDITED_TEXT, *EDITED_NUMBERS) if k in entry}
+    return EditedTrack(pid.upper(), fields, raw=entry)
+
+
 def _equalizer(entry, problems: list[str]):
     """The phone's whole equalizer (on, chosen preset, Manual values, preset
     list), or None if it can't be read (reported, and nothing changes)."""
@@ -213,6 +289,20 @@ def read(root: Path) -> PhoneChanges:
         result.equalizer = _equalizer(data["equalizer"], result.problems)
         if result.equalizer is not None:
             result.raw_equalizer = data["equalizer"]
+    added = data.get("added_tracks") or []
+    seen = set()
+    for entry in added if isinstance(added, list) else []:
+        item = _added(entry, result.problems)
+        if item is not None and item.id not in seen:            # one entry per song
+            seen.add(item.id)
+            result.added.append(item)
+    edited = data.get("edited_tracks") or []
+    seen = set()
+    for entry in edited if isinstance(edited, list) else []:
+        item = _edited(entry, result.problems)
+        if item is not None and item.id not in seen:            # one entry per song
+            seen.add(item.id)
+            result.edited.append(item)
     seen = set()
     for entry in data.get("playlists") or []:
         change = _playlist(entry, result.problems)
@@ -370,6 +460,20 @@ def emptied(merged: PhoneChanges, now_text: str | None) -> dict:
     for entry in data.get("playlists") or []:
         if json.dumps(entry, sort_keys=True) not in applied:
             empty["playlists"].append(entry)
+    # Songs the phone added after the file was read stay for next time.
+    read_ids = {a.id for a in merged.added}
+    added = data.get("added_tracks")
+    later = [e for e in added if isinstance(e, dict)
+             and str(e.get("id") or "").upper() not in read_ids] if isinstance(added, list) else []
+    if later:
+        empty["added_tracks"] = later
+    # Edits the phone made after the file was read stay for next time.
+    taken = {json.dumps(e.raw, sort_keys=True) for e in merged.edited}
+    edited = data.get("edited_tracks")
+    newer = [e for e in edited if isinstance(e, dict)
+             and json.dumps(e, sort_keys=True) not in taken] if isinstance(edited, list) else []
+    if newer:
+        empty["edited_tracks"] = newer
     # An equalizer the phone wrote after the one taken stays for next time.
     if "equalizer" in data and json.dumps(data["equalizer"], sort_keys=True) != \
             json.dumps(merged.raw_equalizer, sort_keys=True):

@@ -54,6 +54,8 @@ class SyncReport:
     photos: int = 0
     phone_playlists: object = None     # Android: changes.PlaylistResult from the phone
     equalizer_from_phone: bool = False  # Android: the phone's equalizer was taken
+    imported: list = field(default_factory=list)   # Android: track ids of songs added on the phone
+    edited: list = field(default_factory=list)     # Android: track ids edited on the phone
 
 
 @dataclass

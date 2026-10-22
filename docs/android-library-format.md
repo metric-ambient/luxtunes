@@ -91,6 +91,12 @@ Added in LuxTunes 0.7.0, within format version 2 (only new columns, a new table 
 - `info.equalizer_from_phone` is `1` from LuxTunes 0.8.0 on: this LuxTunes takes the
   phone's equalizer changes (below), so a player can drop its own copy once this file
   arrives.
+- `info.phone_imports` is `1` from LuxTunes 0.8.2 on: this LuxTunes takes songs added on
+  the phone (`added_tracks`, below). Without it, a sync may offer to remove such songs as
+  "Not synced by LuxTunes".
+- `info.phone_edits` is `1` from LuxTunes 0.8.2 on: this LuxTunes takes song details
+  edited on the phone (`edited_tracks`, below). A player can drop its own copy of the
+  edits once a `library.db` arrives after they were sent: it already has the new values.
 
 ### Song details
 
@@ -141,6 +147,63 @@ over one made on the computer since the last sync. An `"equalizer"` that can't b
 is reported in the sync's problems and changes nothing. It's removed from the file once
 taken, unless the phone wrote a newer one meanwhile.
 
+Optional `"added_tracks"` and `"edited_tracks"` keys (LuxTunes 0.8.2 and newer) list songs
+added on the phone and song details edited there; see below.
+
+### added_tracks
+
+```json
+"added_tracks": [
+  {"id": "1A2B3C4D5E6F7081", "path": "LuxTunes Media/Music/Artist/Album/07 Name.mp3",
+   "media_kind": "music", "name": "Name", "artist": "…", "album_artist": "…",
+   "album": "…", "genre": "…", "composer": "…", "year": 2024, "track_number": 7,
+   "track_count": 12, "disc_number": 1, "disc_count": 1, "total_time": 215000,
+   "bit_rate": 320, "compilation": 0, "size": 8612345, "kind": "MPEG audio file",
+   "date_added": "2026-10-22T18:04:11Z"}
+]
+```
+
+- The player copies the file into `LuxTunes Media/` itself (filed like LuxTunes files
+  songs) and gives it a new random `id` (16 hex digits). `path` is relative to the
+  LuxTunes folder and must start with `LuxTunes Media/`, with no `.` or `..` parts.
+- For the same `library_id`, at the start of the sync (before plays, ratings and
+  playlists, which may use the new IDs), LuxTunes copies each file into the computer's
+  library as Add to Library would, with `persistent_id` = `id`. It reads the file's tags
+  itself; the other fields only fill in what the tags don't have. `date_added` is kept.
+- The phone's file is recorded as one LuxTunes put there, so it isn't copied again or
+  offered for removal, and the song is in the new `library.db` under the same ID. When
+  this phone syncs selected items, the song always stays on it (until it's deleted from
+  the library).
+- An entry whose file is gone is skipped quietly. One whose `id` is already used by
+  another song, that's already in the library, or that can't be read is listed in the
+  sync's problems. A different `library_id` skips the whole section (and the sync says so).
+
+### edited_tracks
+
+```json
+"edited_tracks": [
+  {"id": "1A2B3C4D5E6F7081", "album": "Blue (Remastered)", "year": 1971},
+  {"id": "00FF00FF00FF00FF", "artist": "Someone", "track_number": 3, "track_count": 10,
+   "compilation": 0}
+]
+```
+
+- One entry per song (its `id`, also one from `added_tracks` in the same file), holding
+  only the details that changed, merged if it was edited more than once; the latest
+  value wins.
+- Text: `name`, `artist`, `album_artist`, `album`, `genre`, `composer`, `grouping`,
+  `comments`; `""` clears it (not allowed for `name`). Whole numbers: `year`,
+  `track_number`, `track_count`, `disc_number`, `disc_count` (`0` means none) and
+  `compilation` (`0` or `1`). Other keys are ignored.
+- For the same `library_id`, LuxTunes saves them after `added_tracks` and before plays,
+  ratings and playlists, exactly as Get Info on the computer would: a sort name is
+  cleared when its field changes, the details are written into the song's file, and
+  `date_modified` is set. The phone's value wins over one changed on the computer since
+  the last sync. Because the file changes, the next sync replaces the phone's copy.
+- An unknown `id`, or a value that isn't text / a whole number as above, is skipped and
+  listed in the sync's problems (the entry's other details are still saved). A
+  different `library_id` skips the whole section (and the sync says so).
+
 ### tracks
 
 - `plays` and `skips` are counts **since the last sync**, not totals. They're added to
@@ -178,7 +241,7 @@ taken, unless the phone wrote a newer one meanwhile.
 
 Right after merging (at the start of the sync), LuxTunes writes
 `{"version": 2, "tracks": [], "playlists": []}`. If the player wrote to the file in
-between, what it added is kept: plays and skips above what was merged, other ratings and
-other playlist entries. An empty file means everything was delivered. A player should
+between, what it added is kept: plays and skips above what was merged, other ratings,
+other playlist entries, songs added since and edits that are new or different. An empty file means everything was delivered. A player should
 keep adding to the file between syncs, avoid writing while the phone is connected for
 file transfer, and start from the new `library.db` afterwards.
