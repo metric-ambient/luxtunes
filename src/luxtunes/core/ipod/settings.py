@@ -155,8 +155,3 @@ def mark_synced(conn: sqlite3.Connection, device_id: int, name: str | None = Non
     with conn:
         conn.execute("UPDATE devices SET last_sync = ?, pending_name = NULL, "
                      "name = COALESCE(?, name) WHERE id = ?", (now_utc(), name, device_id))
-
-
-def set_stats_marker(conn: sqlite3.Connection, device_id: int, marker: str | None) -> None:
-    with conn:
-        conn.execute("UPDATE devices SET stats_imported = ? WHERE id = ?", (marker, device_id))

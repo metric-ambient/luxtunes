@@ -12,6 +12,8 @@ import json
 import sqlite3
 from dataclasses import asdict, dataclass, fields
 
+from luxtunes.core.db import get_setting, set_setting
+
 KEY = "cd_import_settings"
 
 AAC, AIFF, ALAC, MP3, WAV = ("AAC Encoder", "AIFF Encoder", "Apple Lossless Encoder",
@@ -109,14 +111,11 @@ class ImportSettings:
 
 
 def load(conn: sqlite3.Connection) -> ImportSettings:
-    row = conn.execute("SELECT value FROM library_info WHERE key = ?", (KEY,)).fetchone()
-    return ImportSettings.from_json(row[0] if row else None)
+    return ImportSettings.from_json(get_setting(conn, KEY))
 
 
 def save(conn: sqlite3.Connection, settings: ImportSettings) -> None:
-    with conn:
-        conn.execute("INSERT INTO library_info (key, value) VALUES (?, ?) "
-                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (KEY, settings.to_json()))
+    set_setting(conn, KEY, settings.to_json())
 
 
 def extension(settings: ImportSettings) -> str:

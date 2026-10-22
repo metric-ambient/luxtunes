@@ -2,6 +2,7 @@
 answers (made up here, nothing goes online), downloads and swapping in a new
 AppImage, all inside a temporary folder."""
 
+import hashlib
 import io
 import json
 import os
@@ -47,19 +48,20 @@ def fake_github(monkeypatch, answers, seen=None):
     monkeypatch.setattr(updater, "_open", fake_open)
 
 
+WHL_URL = "https://github.com/dl/whl"
+APP_URL = "https://github.com/dl/app"
+
+
 def wheel_bytes(name="luxtunes"):
     buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as z:
-        z.writestr(f"{name}/__init__.py", "__version__ = '9.9.9'\n")
+    with zipfile.ZipFile(buffer, "w") as z:          # a fixed date: the same bytes every time
+        z.writestr(zipfile.ZipInfo(f"{name}/__init__.py", (2020, 1, 1, 0, 0, 0)),
+                   "__version__ = '9.9.9'\n")
     return buffer.getvalue()
 
 
-RELEASE = {"tag_name": "v9.9.9", "body": "Smart playlists.", "html_url": "https://github.com/x",
-           "assets": [{"name": "luxtunes-9.9.9.tar.gz", "url": "https://api/tar", "size": 5},
-                      {"name": "luxtunes-9.9.9-py3-none-any.whl", "url": "https://api/whl",
-                       "browser_download_url": "https://dl/whl", "size": 99},
-                      {"name": "LuxTunes-x86_64.AppImage", "url": "https://api/app",
-                       "browser_download_url": "https://dl/app", "size": 64}]}
+def sha256(data: bytes) -> str:
+    return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
 def appimage_bytes(size=64):
@@ -67,12 +69,30 @@ def appimage_bytes(size=64):
     return head + b"\x00" * (size - len(head))
 
 
+RELEASE = {"tag_name": "v9.9.9", "body": "Smart playlists.", "html_url": "https://github.com/x",
+           "assets": [{"name": "luxtunes-9.9.9.tar.gz", "url": "https://api/tar", "size": 5},
+                      {"name": "luxtunes-9.9.9-py3-none-any.whl", "url": "https://api/whl",
+                       "browser_download_url": WHL_URL, "size": len(wheel_bytes()),
+                       "digest": sha256(wheel_bytes())},
+                      {"name": "LuxTunes-x86_64.AppImage", "url": "https://api/app",
+                       "browser_download_url": APP_URL, "size": 64,
+                       "digest": sha256(appimage_bytes())}]}
+
+
 def release(**changes):
     data = {**RELEASE, **changes}
     return updater.Release(data["tag_name"].lstrip("v"), data["tag_name"], data["body"],
                            data["html_url"], [updater.Asset(a["name"], a.get("browser_download_url")
-                                                            or a["url"], a["size"])
+                                                            or a["url"], a["size"],
+                                                            a.get("digest", ""))
                                               for a in data["assets"]])
+
+
+def published(name_suffix, data, **changes):
+    """release(), with the asset ending in `name_suffix` published as `data`."""
+    assets = [{**a, "size": len(data), "digest": sha256(data), **changes}
+              if a["name"].endswith(name_suffix) else a for a in RELEASE["assets"]]
+    return release(assets=assets)
 
 
 def test_nothing_goes_online_without_your_ok(monkeypatch, tmp_path):
@@ -88,7 +108,7 @@ def test_nothing_goes_online_without_your_ok(monkeypatch, tmp_path):
 def test_latest_release_and_download(monkeypatch, tmp_path):
     monkeypatch.delenv("LUXTUNES_GITHUB_TOKEN", raising=False)
     seen = []
-    fake_github(monkeypatch, {updater.LATEST: RELEASE, "https://dl/whl": wheel_bytes()}, seen)
+    fake_github(monkeypatch, {updater.LATEST: RELEASE, WHL_URL: wheel_bytes()}, seen)
     found = updater.latest_release(approved=True)
     assert (found.version, found.notes) == ("9.9.9", "Smart playlists.")
     assert found.asset("installed").name == "luxtunes-9.9.9-py3-none-any.whl"
@@ -96,7 +116,7 @@ def test_latest_release_and_download(monkeypatch, tmp_path):
     assert updater.is_newer(found.version)
     done = []
     path = updater.download(found, tmp_path, approved=True, progress=lambda *a: done.append(a))
-    assert path.exists() and done[-1] == (len(wheel_bytes()), 99)
+    assert path.exists() and done[-1] == (len(wheel_bytes()), len(wheel_bytes()))
     # The repository is public: no key is sent.
     assert seen[0] == (updater.LATEST, "application/vnd.github+json", None)
     assert seen[1][1] == "application/octet-stream"
@@ -112,9 +132,31 @@ def test_problems_say_what_to_do(monkeypatch, tmp_path):
     fake_github(monkeypatch, {updater.LATEST: {**RELEASE, "assets": RELEASE["assets"][:1]}})
     with pytest.raises(updater.UpdateError, match="nothing to install"):
         updater.latest_release(approved=True)
-    fake_github(monkeypatch, {"https://dl/whl": wheel_bytes("something_else")})
+    fake_github(monkeypatch, {WHL_URL: wheel_bytes("something_else")})
     with pytest.raises(updater.UpdateError, match="isn't a LuxTunes package"):
-        updater.download(release(), tmp_path, approved=True)
+        updater.download(published(".whl", wheel_bytes("something_else")), tmp_path,
+                         approved=True)
+
+
+def test_downloads_must_match_githubs_checksum(monkeypatch, tmp_path):
+    tampered = wheel_bytes()[:-1] + b"!"
+    fake_github(monkeypatch, {WHL_URL: tampered})
+    with pytest.raises(updater.UpdateError, match="doesn't match the checksum"):
+        updater.download(published(".whl", wheel_bytes(), size=len(tampered)), tmp_path,
+                         approved=True)
+    fake_github(monkeypatch, {WHL_URL: wheel_bytes()})
+    with pytest.raises(updater.UpdateError, match="didn't give a checksum"):
+        updater.download(published(".whl", wheel_bytes(), digest=None), tmp_path, approved=True)
+    fake_github(monkeypatch, {WHL_URL: wheel_bytes() + b"extra"})
+    with pytest.raises(updater.UpdateError, match="bigger than GitHub said"):
+        updater.download(published(".whl", wheel_bytes()), tmp_path, approved=True)
+
+
+def test_downloads_only_come_from_github(monkeypatch, tmp_path):
+    fake_github(monkeypatch, {"https://example.com/luxtunes.whl": wheel_bytes()})
+    elsewhere = published(".whl", wheel_bytes(), browser_download_url="https://example.com/luxtunes.whl")
+    with pytest.raises(updater.UpdateError, match="Unexpected download address"):
+        updater.download(elsewhere, tmp_path, approved=True)
 
 
 def running_as_appimage(monkeypatch, path):
@@ -128,7 +170,7 @@ def test_appimage_replaces_itself(monkeypatch, tmp_path):
     current.write_bytes(b"old version")
     running_as_appimage(monkeypatch, current)
     assert updater.kind() == "appimage" and updater.launcher() == [str(current)]
-    fake_github(monkeypatch, {"https://dl/app": appimage_bytes()})
+    fake_github(monkeypatch, {APP_URL: appimage_bytes()})
     updater.download_and_install(release(), approved=True)
     assert current.read_bytes() == appimage_bytes()
     assert os.access(current, os.X_OK)
@@ -139,9 +181,10 @@ def test_a_bad_appimage_download_changes_nothing(monkeypatch, tmp_path):
     current = tmp_path / "LuxTunes.AppImage"
     current.write_bytes(b"old version")
     running_as_appimage(monkeypatch, current)
-    fake_github(monkeypatch, {"https://dl/app": b"<html>not a program</html>"})
+    page = b"<html>not a program</html>"
+    fake_github(monkeypatch, {APP_URL: page})
     with pytest.raises(updater.UpdateError, match="isn't a LuxTunes AppImage"):
-        updater.download_and_install(release(), approved=True)
+        updater.download_and_install(published(".AppImage", page), approved=True)
     assert current.read_bytes() == b"old version"
     assert [p.name for p in tmp_path.iterdir()] == ["LuxTunes.AppImage"]
 

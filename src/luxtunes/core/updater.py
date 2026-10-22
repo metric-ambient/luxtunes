@@ -11,11 +11,15 @@ pushed) carries two downloads:
 A copy running from a source checkout is updated with `git pull` instead.
 
 Nothing here goes online unless the caller passes approved=True, which the
-window only does after the user says yes. No Qt in here.
+window only does after the user says yes. Every download is checked against
+the SHA-256 digest GitHub publishes for it before anything is installed, and
+only comes from GitHub (see net.py). No Qt in here.
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import subprocess
@@ -28,28 +32,27 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from luxtunes import __version__
+from luxtunes.core import net
+from luxtunes.core.net import NotApproved
+from luxtunes.core.paths import data_home
 
 REPO = "metric-ambient/luxtunes"
 LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases"
 APPIMAGE_NAME = "LuxTunes-x86_64.AppImage"
 DOWNLOAD_PAGE = f"{RELEASES_PAGE}/latest/download/{APPIMAGE_NAME}"
+MAX_DOWNLOAD = 1024 * 1024 * 1024      # no LuxTunes download is anywhere near 1 GB
 
 
 class UpdateError(Exception):
     """Checking or installing didn't work; the message says why, in plain words."""
 
 
-class NotApproved(Exception):
-    """Something needed the internet before the user said it could."""
-
-
 # ---- Which copy is running ---------------------------------------------------------
 
 def app_dir() -> Path:
     """Where install.sh puts its copy (its own Python environment)."""
-    base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
-    return Path(base) / "luxtunes" / "app"
+    return data_home() / "luxtunes" / "app"
 
 
 def running_appimage() -> Path | None:
@@ -114,9 +117,7 @@ def is_newer(version: str, than: str = __version__) -> bool:
 # ---- Talking to GitHub -------------------------------------------------------------
 
 def _request(url: str, accept: str) -> urllib.request.Request:
-    request = urllib.request.Request(url, headers={"Accept": accept,
-                                                   "User-Agent": f"LuxTunes/{__version__}",
-                                                   "X-GitHub-Api-Version": "2022-11-28"})
+    request = net.request(url, accept, {"X-GitHub-Api-Version": "2022-11-28"})
     # Optional, only to raise GitHub's limit on how often it can be asked.
     key = os.environ.get("LUXTUNES_GITHUB_TOKEN", "").strip()
     if key:
@@ -126,7 +127,7 @@ def _request(url: str, accept: str) -> urllib.request.Request:
 
 
 def _open(request: urllib.request.Request, timeout: float = 30):
-    return urllib.request.urlopen(request, timeout=timeout)
+    return net.open_url(request, timeout=timeout)
 
 
 @dataclass
@@ -134,6 +135,7 @@ class Asset:
     name: str
     url: str
     size: int = 0
+    digest: str = ""           # "sha256:<hex>", as GitHub publishes it
 
 
 @dataclass
@@ -152,11 +154,10 @@ class Release:
 
 def latest_release(*, approved: bool) -> Release:
     """The newest published release. Raises UpdateError (with what to do)."""
-    if approved is not True:
-        raise NotApproved("Checking for updates needs your OK first.")
+    net.require(approved, "Checking for updates")
     try:
         with _open(_request(LATEST, "application/vnd.github+json")) as response:
-            data = json.loads(response.read())
+            data = json.loads(net.read_limited(response))
     except urllib.error.HTTPError as error:
         if error.code == 404:
             raise UpdateError("No LuxTunes release has been published yet.") from error
@@ -166,7 +167,8 @@ def latest_release(*, approved: bool) -> Release:
         raise UpdateError(f"GitHub answered {error.code}.") from error
     except (urllib.error.URLError, OSError, ValueError) as error:
         raise UpdateError(f"Couldn't reach GitHub ({getattr(error, 'reason', error)}).") from error
-    assets = [Asset(a["name"], a.get("browser_download_url") or a["url"], int(a.get("size") or 0))
+    assets = [Asset(a["name"], a.get("browser_download_url") or a["url"], int(a.get("size") or 0),
+                    str(a.get("digest") or ""))
               for a in data.get("assets") or [] if a.get("name")]
     tag = data.get("tag_name") or ""
     release = Release(version=tag.lstrip("vV"), tag=tag, notes=(data.get("body") or "").strip(),
@@ -178,18 +180,36 @@ def latest_release(*, approved: bool) -> Release:
     return release
 
 
+def _expected_sha256(asset: Asset) -> str:
+    algorithm, _, value = (asset.digest or "").partition(":")
+    if algorithm.lower() != "sha256" or len(value) != 64:
+        raise UpdateError("GitHub didn't give a checksum for this download, so LuxTunes can't "
+                          f"check it. Download the new version from {RELEASES_PAGE} instead.")
+    return value.lower()
+
+
 def _fetch(asset: Asset, target: Path, progress=None) -> None:
+    """Download `asset` into `target`, checking its size and SHA-256 digest."""
+    expected = _expected_sha256(asset)
+    limit = asset.size or MAX_DOWNLOAD
+    digest = hashlib.sha256()
     try:
         with _open(_request(asset.url, "application/octet-stream"), timeout=120) as response, \
                 open(target, "wb") as out:
             done = 0
             while chunk := response.read(256 * 1024):
-                out.write(chunk)
                 done += len(chunk)
+                if done > limit:
+                    raise UpdateError("The download was bigger than GitHub said it would be.")
+                out.write(chunk)
+                digest.update(chunk)
                 if progress is not None:
                     progress(done, asset.size)
     except (urllib.error.URLError, OSError) as error:
         raise UpdateError(f"The download didn't finish ({getattr(error, 'reason', error)}).") from error
+    if not hmac.compare_digest(digest.hexdigest(), expected):
+        raise UpdateError("The download doesn't match the checksum GitHub published for it, "
+                          "so it wasn't installed. Try again later.")
 
 
 def _checked_name(asset: Asset | None, prefix: str) -> Asset:
@@ -198,6 +218,8 @@ def _checked_name(asset: Asset | None, prefix: str) -> Asset:
                           "Try again in a few minutes.")
     if "/" in asset.name or not asset.name.startswith(prefix):
         raise UpdateError(f"Unexpected file in the release: {asset.name}")
+    if not net.allowed(asset.url):
+        raise UpdateError(f"Unexpected download address in the release: {asset.url}")
     return asset
 
 
@@ -205,8 +227,7 @@ def _checked_name(asset: Asset | None, prefix: str) -> Asset:
 
 def download(release: Release, folder: Path, *, approved: bool, progress=None) -> Path:
     """Download the release's .whl package into `folder`."""
-    if approved is not True:
-        raise NotApproved("Downloading an update needs your OK first.")
+    net.require(approved, "Downloading an update")
     asset = _checked_name(release.asset("installed"), "luxtunes-")
     target = Path(folder) / asset.name
     _fetch(asset, target, progress)
@@ -254,8 +275,7 @@ def replace_appimage(release: Release, current: Path, *, approved: bool, progres
     version starts on the next launch. If anything goes wrong the old file is
     left as it was.
     """
-    if approved is not True:
-        raise NotApproved("Downloading an update needs your OK first.")
+    net.require(approved, "Downloading an update")
     asset = _checked_name(release.asset("appimage"), "LuxTunes")
     folder = current.parent
     if not os.access(folder, os.W_OK):

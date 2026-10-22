@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from luxtunes.core import library
+from luxtunes.core.db import get_setting as _get, set_setting as _set
 from luxtunes.core.paths import find_file
 
 log = logging.getLogger(__name__)
@@ -55,17 +56,6 @@ KEY_FOLDER = "media_folder"
 
 
 # ---- Settings (kept in the library) ---------------------------------
-
-def _get(conn: sqlite3.Connection, key: str) -> str | None:
-    row = conn.execute("SELECT value FROM library_info WHERE key = ?", (key,)).fetchone()
-    return row[0] if row else None
-
-
-def _set(conn: sqlite3.Connection, key: str, value: str) -> None:
-    with conn:
-        conn.execute("INSERT INTO library_info (key, value) VALUES (?, ?) "
-                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
-
 
 def is_enabled(conn: sqlite3.Connection) -> bool:
     """"Keep LuxTunes Media folder organized" (on unless turned off)."""

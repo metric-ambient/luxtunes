@@ -11,6 +11,7 @@ from __future__ import annotations
 import sqlite3
 
 from luxtunes.core import smart
+from luxtunes.core.db import get_setting as _get, set_setting
 from luxtunes.core.smart import Group, Info, Rule, SmartPlaylist
 
 KEY = "starter_playlists"              # library_info: their persistent ids, once added
@@ -43,11 +44,6 @@ def playlists() -> list[tuple[str, SmartPlaylist]]:
     ]
 
 
-def _get(conn, key):
-    row = conn.execute("SELECT value FROM library_info WHERE key = ?", (key,)).fetchone()
-    return row[0] if row else None
-
-
 def add_if_new(conn: sqlite3.Connection) -> list[int]:
     """Add the starter playlists to a library that's brand new (no songs, no
     playlists of its own) and has never had them. Returns their ids."""
@@ -60,9 +56,7 @@ def add_if_new(conn: sqlite3.Connection) -> list[int]:
     ids = [smart.create(conn, name, playlist) for name, playlist in playlists()]
     pids = [conn.execute("SELECT persistent_id FROM playlists WHERE id = ?", (i,)).fetchone()[0]
             for i in ids]
-    with conn:
-        conn.execute("INSERT INTO library_info (key, value) VALUES (?, ?) "
-                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (KEY, " ".join(pids)))
+    set_setting(conn, KEY, " ".join(pids))
     return ids
 
 

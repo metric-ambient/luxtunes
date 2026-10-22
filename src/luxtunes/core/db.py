@@ -20,6 +20,8 @@ import secrets
 import sqlite3
 from pathlib import Path
 
+from luxtunes.core.paths import data_home
+
 # Bump this when the schema changes, and add a step to _migrate().
 SCHEMA_VERSION = 9
 
@@ -125,8 +127,19 @@ def default_db_path() -> Path:
 
     Follows the Linux convention (XDG): ~/.local/share/luxtunes/library.db
     """
-    base = os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share"
-    return Path(base) / "luxtunes" / "library.db"
+    return data_home() / "luxtunes" / "library.db"
+
+
+def get_setting(conn: sqlite3.Connection, key: str) -> str | None:
+    """A value kept in the library's library_info table, or None."""
+    row = conn.execute("SELECT value FROM library_info WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value: str | None) -> None:
+    with conn:
+        conn.execute("INSERT INTO library_info (key, value) VALUES (?, ?) "
+                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
 
 
 def new_persistent_id() -> str:

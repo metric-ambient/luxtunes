@@ -12,6 +12,8 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
+from luxtunes.core.db import get_setting, set_setting
+
 # Built-in playlists in an imported iTunes library, identified by "Distinguished Kind".
 KIND_MOVIES = 2
 KIND_TV_SHOWS = 3
@@ -533,11 +535,8 @@ def default_library_name() -> str:
 
 def library_name(conn: sqlite3.Connection) -> str:
     """Preferences → General → Library Name (shown in the window's title)."""
-    row = conn.execute("SELECT value FROM library_info WHERE key = 'library_name'").fetchone()
-    return row[0] if row and row[0] else default_library_name()
+    return get_setting(conn, "library_name") or default_library_name()
 
 
 def set_library_name(conn: sqlite3.Connection, name: str) -> None:
-    with conn:
-        conn.execute("INSERT INTO library_info (key, value) VALUES ('library_name', ?) "
-                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (name.strip(),))
+    set_setting(conn, "library_name", name.strip())

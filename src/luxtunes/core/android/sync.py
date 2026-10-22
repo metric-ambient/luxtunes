@@ -43,6 +43,7 @@ from luxtunes.core import library, organize
 from luxtunes.core.android import changes as phone_changes
 from luxtunes.core.android.changes import CHANGES
 from luxtunes.core.android.device import Phone, storage_kind
+from luxtunes.core.db import get_setting, set_setting
 from luxtunes.core.ipod import plan as ipod_plan
 from luxtunes.core.ipod import settings as ipod_settings
 from luxtunes.core.ipod import stats
@@ -72,12 +73,11 @@ def load_record(conn: sqlite3.Connection, phone: Phone) -> ipod_settings.DeviceR
 
 
 def library_id(conn: sqlite3.Connection) -> str:
-    row = conn.execute("SELECT value FROM library_info WHERE key = 'library_id'").fetchone()
-    if row:
-        return row[0]
+    known = get_setting(conn, "library_id")
+    if known:
+        return known
     new = secrets.token_hex(8).upper()
-    with conn:
-        conn.execute("INSERT INTO library_info (key, value) VALUES ('library_id', ?)", (new,))
+    set_setting(conn, "library_id", new)
     return new
 
 
