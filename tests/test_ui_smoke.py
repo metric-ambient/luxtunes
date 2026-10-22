@@ -1469,16 +1469,45 @@ def test_paste_artwork_into_several_songs(window, monkeypatch):
     window.show_source(("library", "music"))
     tracks = [window.model.track_at(r) for r in range(min(2, window.model.rowCount()))]
     calls = []
-    monkeypatch.setattr(window, "_apply_info",
-                        lambda tid, fields, rating, artworks: calls.append((tid, artworks)))
+    monkeypatch.setattr(window, "_start_tag_writes", lambda: None)   # files: not here
     monkeypatch.setattr(QMessageBox, "question",
                         staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
     menu = window._song_menu(tracks, tracks[0], "x", lambda: None)
     paste = next(a for a in menu.actions() if a.text() == "Paste Artwork")
     assert paste.isEnabled()
     window._paste_artwork(tracks)
+    calls = window._tag_jobs                     # queued for writing in the background
     assert [c[0] for c in calls] == [t["id"] for t in tracks]
     assert len(calls[0][1]) == 1 and calls[0][1] == calls[-1][1]       # the same picture
+    window._tag_jobs = []
+
+
+def test_get_info_writes_files_in_the_background(window, tmp_path, monkeypatch):
+    pytest.importorskip("mutagen")
+    from PySide6.QtWidgets import QApplication
+
+    from luxtunes.core import library
+    from luxtunes.core.tags import UNCHANGED
+
+    conn = window.conn
+    tracks = window.model.visible_tracks()[:2]
+    for n, t in enumerate(tracks):
+        song = tmp_path / f"s{n}.mp3"
+        song.write_bytes((b"\xff\xfb\x90\x64" + b"\x00" * 413) * 30)
+        library.set_location(conn, t["id"], str(song))
+    for t in tracks:                              # what Multiple Item Information's OK does
+        assert window._queue_info(t["id"], {"genre": "Ambient"}, None, UNCHANGED) is None
+    assert library.load_track(conn, tracks[0]["id"])["genre"] == "Ambient"   # saved at once
+    window._start_tag_writes()
+    worker = window._tag_worker
+    assert worker is not None
+    worker.wait(20_000)
+    for _ in range(50):
+        QApplication.instance().processEvents()
+        if window._tag_worker is None:
+            break
+    assert window._tag_worker is None
+    assert not library.load_track(conn, tracks[0]["id"])["tags_dirty"]      # written
 
 
 def test_the_ipod_page_shows_only_what_the_model_can_do(window, tmp_path):
