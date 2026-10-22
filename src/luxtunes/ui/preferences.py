@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -28,7 +29,9 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
+    QSlider,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -48,7 +51,12 @@ APPEARANCE = {
     "show_source_icons": True,
     "show_list_checkboxes": True,
     "import_done_sound": True,      # play the desktop's notification sound after a CD import
-    "sync_done_sound": True,        # ... and after an iPod sync
+    "sync_done_sound": True,        # ... and after a device sync
+    # Playback tab
+    "crossfade": False,
+    "crossfade_seconds": 6,         # 1-15
+    "gapless": False,
+    "sound_check": False,
 }
 
 
@@ -59,6 +67,11 @@ def appearance(settings: QSettings) -> dict:
         value = settings.value(f"prefs/{key}", default)
         if isinstance(default, bool):
             value = value if isinstance(value, bool) else str(value).lower() in ("true", "1")
+        elif isinstance(default, int):
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                value = default
         out[key] = value
     return out
 
@@ -83,6 +96,7 @@ class PreferencesDialog(QDialog):
 
         tabs = QTabWidget()
         tabs.addTab(self._general_tab(), "General")
+        tabs.addTab(self._playback_tab(), "Playback")
         tabs.addTab(self._advanced_tab(), "Advanced")
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
                                    | QDialogButtonBox.StandardButton.Cancel)
@@ -154,7 +168,14 @@ class PreferencesDialog(QDialog):
         row.addStretch(1)
         self.import_sound = QCheckBox("Play a sound when a CD finishes importing")
         self.import_sound.setChecked(look["import_done_sound"])
-        self.sync_sound = QCheckBox("Play a sound when an iPod finishes syncing")
+        self.sync_sound = QCheckBox("Play a sound when a device finishes syncing")
+        test_sound = QPushButton("Test Sound")
+        test_sound.setToolTip("Play the sound now, and say what happened if it can't")
+        test_sound.clicked.connect(self._test_sound)
+        sound_row = QHBoxLayout()
+        sound_row.addWidget(self.sync_sound)
+        sound_row.addStretch(1)
+        sound_row.addWidget(test_sound)
         self.sync_sound.setChecked(look["sync_done_sound"])
         self.ask_lookup = QCheckBox("Ask to look up track names online when a CD is inserted")
         self.ask_lookup.setChecked(cd.ask_lookup(self.conn))
@@ -170,17 +191,80 @@ class PreferencesDialog(QDialog):
         layout.addWidget(_line())
         layout.addLayout(row)
         layout.addWidget(self.import_sound)
-        layout.addWidget(self.sync_sound)
+        layout.addLayout(sound_row)
         layout.addWidget(self.ask_lookup)
         layout.addWidget(online)
         layout.addStretch(1)
         return page
+
+    def _test_sound(self):
+        """Play the "done" sound now; if it can't, show each step that failed."""
+        from luxtunes.core import sounds
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            played, steps = sounds.play_now()
+        finally:
+            QApplication.restoreOverrideCursor()
+        if not played:
+            QMessageBox.warning(self, "Test Sound", "The sound couldn't be played:\n\n"
+                                + "\n".join(steps[-8:]))
 
     def _edit_import_settings(self):
         from luxtunes.ui.import_settings import ImportSettingsDialog
         dialog = ImportSettingsDialog(self._import_settings, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._import_settings = dialog.result_settings()
+
+    def _playback_tab(self) -> QWidget:
+        page = QWidget()
+        look = appearance(self.settings)
+        self.crossfade = QCheckBox("Crossfade songs")
+        self.crossfade.setChecked(look["crossfade"])
+        self.crossfade_seconds = QSlider(Qt.Orientation.Horizontal)
+        self.crossfade_seconds.setRange(1, 15)
+        self.crossfade_seconds.setValue(max(1, min(15, look["crossfade_seconds"])))
+        self.crossfade_seconds.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.crossfade_seconds.setTickInterval(1)
+        seconds = QLabel()
+        update = lambda v: seconds.setText(f"{v} second{'s' if v != 1 else ''}")
+        self.crossfade_seconds.valueChanged.connect(update)
+        update(self.crossfade_seconds.value())
+        self.crossfade.toggled.connect(self.crossfade_seconds.setEnabled)
+        self.crossfade_seconds.setEnabled(self.crossfade.isChecked())
+        fade_row = QHBoxLayout()
+        fade_row.setContentsMargins(24, 0, 0, 0)
+        fade_row.addWidget(QLabel("1 s"))
+        fade_row.addWidget(self.crossfade_seconds, 1)
+        fade_row.addWidget(QLabel("15 s"))
+        fade_row.addSpacing(10)
+        fade_row.addWidget(seconds)
+        fade_note = QLabel("The next song fades in while the current one fades out.")
+
+        self.gapless = QCheckBox("Gapless playback")
+        self.gapless.setChecked(look["gapless"])
+        gapless_note = QLabel("The next song is made ready early and starts as soon as the "
+                              "current one ends, for live albums and continuous mixes. "
+                              "(With crossfade on, songs overlap instead.)")
+
+        self.sound_check = QCheckBox("Sound Check")
+        self.sound_check.setChecked(look["sound_check"])
+        check_note = QLabel("Plays songs at about the same volume. LuxTunes uses each song's "
+                            "volume tags, and measures songs without them in the background "
+                            "(this needs FFmpeg, and takes a while for a big library the "
+                            "first time). The levels also go to iPods and phones.")
+        layout = QVBoxLayout(page)
+        for widget, note in ((self.crossfade, fade_note), (self.gapless, gapless_note),
+                             (self.sound_check, check_note)):
+            note.setWordWrap(True)
+            note.setContentsMargins(24, 0, 0, 0)
+            note.setEnabled(False)
+            layout.addWidget(widget)
+            if widget is self.crossfade:
+                layout.addLayout(fade_row)
+            layout.addWidget(note)
+            layout.addSpacing(10)
+        layout.addStretch(1)
+        return page
 
     def _advanced_tab(self) -> QWidget:
         page = QWidget()
@@ -248,6 +332,10 @@ class PreferencesDialog(QDialog):
         s.setValue("prefs/show_audiobooks", self.show_audiobooks.isChecked())
         s.setValue("prefs/import_done_sound", self.import_sound.isChecked())
         s.setValue("prefs/sync_done_sound", self.sync_sound.isChecked())
+        s.setValue("prefs/crossfade", self.crossfade.isChecked())
+        s.setValue("prefs/crossfade_seconds", self.crossfade_seconds.value())
+        s.setValue("prefs/gapless", self.gapless.isChecked())
+        s.setValue("prefs/sound_check", self.sound_check.isChecked())
         s.setValue("prefs/source_text", self.source_text.currentData())
         s.setValue("prefs/list_text", self.list_text.currentData())
         s.setValue("prefs/grid_dark", bool(self.grid_view.currentData()))

@@ -202,6 +202,19 @@ def test_a_chosen_playlist_brings_its_songs_and_videos(tmp_path):
     assert "Film.mkv" in playlist and "Chocolate" not in playlist
 
 
+def test_entire_library_and_only_the_ticked_playlists(tmp_path):
+    conn = small_library(tmp_path)
+    other = library.create_playlist(conn, "Other")
+    library.add_to_playlist(conn, other, [1])
+    mix = conn.execute("SELECT persistent_id FROM playlists WHERE name = 'Mix'").fetchone()[0]
+    phone = fake_phone(tmp_path)
+    root = tmp_path / "phone" / "Internal shared storage" / "LuxTunes"
+    report = run(conn, phone, music_mode="library_playlists", playlists=[mix], artists=[],
+                 albums=[], genres=[])
+    assert report.added == 3                                  # every song
+    assert sorted(p.name for p in (root / "Playlists").glob("*.m3u8")) == ["Mix.m3u8"]
+
+
 # ---- Format v2: smart rules out, playlists back --------------------------------------------
 
 def _db(root):
@@ -648,3 +661,40 @@ def test_the_equalizer_goes_to_the_phone(tmp_path):
         assert names == settings.names()
         assert out.execute("SELECT COUNT(*) FROM equalizer_presets WHERE name = 'Manual' "
                            "AND position IS NULL").fetchone()[0] == 1
+
+
+def test_the_phones_equalizer_comes_back(tmp_path):
+    from luxtunes.core import equalizer
+    from luxtunes.core.android import changes as phone_changes
+
+    conn = small_library(tmp_path)
+    phone = fake_phone(tmp_path)
+    root = tmp_path / "phone" / "Internal shared storage" / "LuxTunes"
+    run(conn, phone)
+    with sqlite3.connect(root / "library.db") as out:
+        assert dict(out.execute("SELECT key, value FROM info"))["equalizer_from_phone"] == "1"
+    library.update_track_fields(conn, 1, {"equalizer": "Rock"})
+    lid = sync.library_id(conn)
+    car = {"name": "Car", "preamp": -2.0, "bands": [3.0] * 10}
+    jazz = {"name": "Jazz", "preamp": 0.0, "bands": [1.0] * 10}
+    (root / "changes.json").write_text(json.dumps({
+        "version": 2, "library_id": lid, "tracks": [], "playlists": [],
+        "equalizer": {"on": True, "preset": "Car", "presets": [jazz, car],
+                      "manual": {"preamp": 1.0, "bands": [0.5] * 10}}}))
+    report = run(conn, phone)
+    assert report.equalizer_from_phone and not report.problems, report.problems
+    settings = equalizer.load(conn)
+    assert settings.on and settings.preset == "Car" and settings.names() == ["Jazz", "Car"]
+    assert settings.manual.preamp == 1.0
+    assert library.load_track(conn, 1)["equalizer"] is None      # Rock is gone from the list
+    left = json.loads((root / "changes.json").read_text())
+    assert "equalizer" not in left                                 # delivered
+    with sqlite3.connect(root / "library.db") as out:
+        names = [r[0] for r in out.execute("SELECT name FROM equalizer_presets "
+                                           "WHERE position IS NOT NULL ORDER BY position")]
+        assert names == ["Jazz", "Car"]
+
+    # Something unreadable is reported and changes nothing.
+    problems = []
+    assert phone_changes._equalizer({"presets": [{"name": "Manual", "bands": [0] * 10}]},
+                                    problems) is None and problems

@@ -1,47 +1,91 @@
 # LuxTunes
 
+**A classic desktop music manager for Linux: your own music, your own library, on your
+own computer.** Play and organize your collection, rip CDs, and sync it to an iPod or an
+Android phone, all without accounts, subscriptions, or anything going online behind your
+back.
+
 > [!WARNING]
 > **About this software.** LuxTunes was written entirely by an AI, Claude Opus 5.5
 > ("vibe-coded"). For copyright purposes, **metric-ambient is the author** of this software.
 >
 > The code has not been reviewed line by line by a person. It reads and writes your music
-> files and their tags, organizes folders, writes to iPods and phones and talks to the internet when you
-> allow it. Bugs could lose or damage data: **keep backups of your music and your devices**
-> before using it.
+> files and their tags, organizes folders, writes to iPods and phones, and talks to the
+> internet when you allow it. Bugs could lose or damage data: **keep backups of your music
+> and your devices** before using it.
 >
 > LuxTunes is provided **"as is", without warranty of any kind**, express or implied,
 > including fitness for a particular purpose. You run it at your own risk; the author is not
 > liable for any damage or data loss. See the [GPL-3.0 license](LICENSE), sections 15 and 16.
 
-A native Linux music manager for your library, your CDs, your iPod and your Android phone, built for Linux Mint.
+## Why LuxTunes?
+
+Plenty of people still keep their music as files: ripped CDs, purchases, years of
+carefully rated songs and hand-made playlists. On Linux there was no single program that
+looks after a collection like that the way the classic desktop jukeboxes did, *and* keeps
+an iPod or a phone in step with it.
+
+LuxTunes is that program:
+
+- **Bring your library with you.** It imports a full iTunes library, so your ratings, play
+  counts, dates and playlists (smart ones too) come along, not just the files.
+- **Your music stays yours.** Everything lives on your computer. No account, no streaming,
+  no ads, no tracking. LuxTunes only goes online when you say so.
+- **Your devices keep working.** Classic iPods sync like they always did, and Android
+  phones get a tidy copy of your library that any music player can use.
+- **Familiar from the first minute.** Playback controls on top, sources on the left, your
+  songs on the right, and album art in the corner.
+
+Made for Linux Mint, and it runs on most recent Linux systems.
 
 ## What it does
 
-- A classic desktop music player: playback controls and display on top, Library/Playlists
-  sidebar on the left, album art in the bottom-left corner, song list on the right, with
-  List, Album List, Grid and Cover Flow views.
-- Imports a full iTunes library from `iTunes Music Library.xml`: every track, all
-  metadata (ratings, play counts, skips, dates, comments, …) and all playlists, smart
-  playlists included.
-- "Keep LuxTunes Media folder organized": files are named and filed by
-  Artist / Album / `Disc-Track Title.mp3`, and edits are written back into the tags.
-- A 10-band equalizer with presets (View → Show Equalizer); a song can have its own preset
-  and volume adjustment in Get Info.
-- Live smart playlists, Get Info, Display Duplicates/Missing, CD import (MP3, AAC, Apple
-  Lossless, AIFF, WAV), movies, TV shows, podcasts and audiobooks.
-- Syncs iPods on stock firmware (classic, mini, nano 1st–5th generation, shuffle): music,
-  podcasts, audiobooks, and videos and photos (one way, from a folder) on models that show
-  them, reading play counts back from the iPod. Not supported: iPod nano 6th/7th generation
-  (their song list needs a signature only Apple's software can make) and iPod touch.
-- Syncs Android phones over USB: songs, videos, podcasts, audiobooks, artwork and playlists
-  (smart playlists with their rules) go into one `LuxTunes` folder that any music player
-  can use. A player that supports it sends plays, skips, ratings and playlist changes back
-  at the next sync ([format](docs/android-library-format.md)).
-- Nothing goes online without asking you first (CD names, track info, updates).
+### Your library
 
-## Download (no terminal needed)
+- List, Album List, Grid and Cover Flow views, each Library section remembering its own.
+- Music, Movies, TV Shows, Podcasts and Audiobooks, kept apart.
+- Playlists and live **smart playlists**, plus an **Up Next** queue.
+- **Get Info** for editing details, artwork and lyrics, for one song or many at once.
+  Your edits are written into the files' tags.
+- **Keeps your files tidy** (optional): files are named and filed as
+  Artist / Album / *Track Name*, and follow your edits.
+- **Cut, copy, paste and Undo**, including moving songs between Library sections.
+- **Import CDs** as MP3, AAC, Apple Lossless, AIFF or WAV, with track names looked up
+  online if you agree.
+- Make MP3 copies of FLAC songs, and iPod-ready copies of videos.
+- **Find duplicates and missing files**, and point LuxTunes at moved files in one go.
+- **A weekly backup** of your library, with the last four weeks kept.
 
-For Linux Mint 22 / Ubuntu 24.04 or newer (64-bit PC):
+### Listening
+
+- A **10-band equalizer** with presets, and a preset of its own for any song.
+- **Crossfade**, **gapless playback** and **Sound Check** (every song at about the same
+  volume).
+- A **Mini Player**, a **Pop-Out Player** with big artwork and lyrics, and a
+  **sleep timer**.
+- Media keys and the desktop's sound menu work as you'd expect.
+
+### Devices
+
+- **iPods:** classic, mini, shuffle, nano 1st–5th generation and the original models. Sync
+  music, podcasts, audiobooks, and, on models that show them, videos and photos. Play
+  counts and ratings come back from the iPod. (The iPod nano 6th/7th generation and the
+  iPod touch can't be supported.)
+- **Android phones,** over a USB cable: songs, videos, podcasts, audiobooks, artwork,
+  playlists and your equalizer go into one `LuxTunes` folder on the phone. With the
+  companion LuxTunes app, plays, ratings, playlist changes and equalizer presets come back
+  at the next sync ([how the folder is laid out](docs/android-library-format.md)).
+- Choose to sync everything, everything with only some playlists, or just chosen
+  playlists, artists, albums and genres.
+
+### Privacy
+
+LuxTunes asks before it ever goes online, which only happens for CD names, Get Track Info
+Online…, and checking for updates. There's no account and nothing is collected.
+
+## Get LuxTunes
+
+For **Linux Mint 22 / Ubuntu 24.04 or newer** (64-bit PC). No terminal needed:
 
 1. Download **[LuxTunes-x86_64.AppImage](https://github.com/metric-ambient/luxtunes/releases/latest/download/LuxTunes-x86_64.AppImage)**.
 2. In your Downloads folder, right-click it → **Properties** → **Permissions** → tick
@@ -50,46 +94,46 @@ For Linux Mint 22 / Ubuntu 24.04 or newer (64-bit PC):
    Applications folder in your home folder and shows up in the menu under Sound & Video.
    You can delete the downloaded file afterwards.
 
-**Updates:** Help → Check for Updates… (LuxTunes asks before it goes online). It downloads
-the new version and replaces itself; the new version starts next time you open it.
+Then choose **File → Library → Import iTunes Library…** to bring in an existing library, or
+**File → Add Folder to Library…** to add your music. **Help → LuxTunes Help** (F1) has
+short guides to everything.
 
-**Removing it:** Help → Remove LuxTunes from This Computer…. Your library, settings and music
-are kept.
+**Optional extras** (install from Software Manager):
 
-**Optional extras** (install from Software Manager): `ffmpeg` for videos and MP3 versions,
-`cdparanoia` for importing CDs, `libgpod-common` for iPod sync.
+| Install | For |
+|---|---|
+| `ffmpeg` | movies and TV shows, MP3 and iPod copies, Sound Check |
+| `cdparanoia` | importing CDs |
+| `libgpod-common` | iPod sync |
 
-## Install from source (for developers)
+**Updating:** Help → Check for Updates…. LuxTunes asks before it goes online, downloads
+the new version, and uses it the next time you open LuxTunes.
 
-```bash
-cd luxtunes              # this source folder
-bash packaging/install.sh
-```
+**Removing it:** Help → Remove LuxTunes from This Computer…. Your library, settings and
+music are kept.
 
-No `sudo`, nothing outside your home folder: LuxTunes gets its own Python environment in
-`~/.local/share/luxtunes/app`, a `luxtunes` command in `~/.local/bin`, and an entry with
-its icon in the applications menu (Sound & Video). Your library
-(`~/.local/share/luxtunes/library.db`), settings and music are never inside the app's
-folder. `bash packaging/uninstall.sh` removes the app again and keeps all of those.
+**Other Linux systems:** the AppImage should run on most systems at least as new as
+Ubuntu 24.04, such as Fedora 40+, Debian 13 and Arch. Phone sync needs gvfs, the desktop's support for phones
+plugged in by USB. Most desktops have it; on KDE, install your distribution's `gvfs-mtp` or
+`gvfs-backends` package.
 
-This copy also updates itself from Help → Check for Updates…, using the release's `.whl`
-package. A copy running straight from the source folder (below) is updated with `git pull`.
+## Where your things are kept
 
-## Making a release
+| What | Where |
+|---|---|
+| Your library (songs' details, ratings, plays, playlists) | `~/.local/share/luxtunes/library.db` |
+| Weekly backups of it | `~/.local/share/luxtunes/Backups/` |
+| Window and preference settings | `~/.config/LuxTunes/LuxTunes.conf` |
+| Your music files (by default) | `~/Music/LuxTunes/LuxTunes Media` |
 
-1. Change `__version__` in `src/luxtunes/__init__.py` (e.g. to `0.3.0`) and commit.
-2. Tag and push the tag:
-   ```bash
-   git tag v0.3.0
-   git push origin main v0.3.0
-   ```
-GitHub then runs the tests, publishes the release with the `.whl` package, and a few
-minutes later adds `LuxTunes-x86_64.AppImage` (`.github/workflows/release.yml`). Every
-installed copy finds it with Check for Updates….
+To go back to a backup, choose **File → Library → Restore from Backup…**. Your library as
+it was is kept in the Backups folder first, so you can change your mind. The music
+folder can be moved anywhere in Preferences → Advanced; LuxTunes then looks for your songs
+there.
 
-To build the AppImage yourself, see the top of `packaging/appimage/build.sh`.
+## For developers
 
-## Running from source
+Run it from the source code:
 
 ```bash
 git clone https://github.com/metric-ambient/luxtunes.git
@@ -101,40 +145,38 @@ pytest
 luxtunes
 ```
 
-```bash
-luxtunes                       # open the window
-luxtunes import-itunes "iTunes Music Library.xml" --media-folder "~/Music/LuxTunes/LuxTunes Media"
-luxtunes stats
-```
+Other commands: `luxtunes import-itunes "iTunes Music Library.xml" --media-folder
+"~/Music/LuxTunes/LuxTunes Media"` imports from the terminal, `luxtunes stats` shows
+library totals, and `--db` picks another library file.
 
-The library is stored in `~/.local/share/luxtunes/library.db` (use `--db` to pick another
-file). `--media-folder` is the folder that holds your copied `Music/` folder.
+To install from the source folder as a normal app (its own Python environment, a
+`luxtunes` command and a menu entry, all inside your home folder, no `sudo`), run
+`bash packaging/install.sh`. That copy updates itself from Help → Check for Updates…
+once a new version is released; to get changes from your source folder before that, run
+the script again. `bash packaging/uninstall.sh` removes it and keeps your library and
+music.
 
-## Tech stack
-
-| Part | Library |
+| Part | Built with |
 |---|---|
 | Language | Python 3.12+ |
 | Interface and playback | Qt 6 via [PySide6](https://doc.qt.io/qtforpython-6/) (Qt Multimedia, FFmpeg) |
 | Tags | [mutagen](https://mutagen.readthedocs.io/) |
 | Equalizer | [NumPy](https://numpy.org/) |
 | iPod | [libgpod](https://sourceforge.net/projects/gtkpod/) |
-| CDs | cdparanoia + FFmpeg; names from [MusicBrainz](https://musicbrainz.org/) |
-
-## Project layout
+| CDs | cdparanoia and FFmpeg; names from [MusicBrainz](https://musicbrainz.org/) |
 
 ```
 src/luxtunes/
-    core/        library database, tags, organizing, smart playlists, CDs, updates
-    core/ipod/   iPod sync (libgpod); models.py says what each model can do
+    core/          library database, tags, organizing, smart playlists, CDs, sound, updates
+    core/ipod/     iPod sync (libgpod); models.py says what each model can do
     core/android/  Android sync (over USB file transfer)
-    importer/    iTunes library XML import
-    ui/          Qt interface
-    resources/   icon and licence
-packaging/       install.sh / uninstall.sh, appimage/ (the ready-to-run app)
-docs/            the LuxTunes folder format on Android devices
+    importer/      iTunes library import
+    ui/            the Qt interface
+    resources/     icon and licence
+packaging/         install.sh / uninstall.sh, appimage/ (the ready-to-run app)
+docs/              the LuxTunes folder format on Android devices
 tests/
-    fixtures/    small FAKE test data only. Never real music or real library files
+    fixtures/      small FAKE test data only, never real music or real library files
 ```
 
 ## License

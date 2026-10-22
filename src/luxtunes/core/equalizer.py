@@ -160,6 +160,11 @@ class Settings:
             self.preset = MANUAL
         self.presets.remove(preset)
 
+    def copy_from(self, other: "Settings") -> None:
+        """Become `other` (keeping this object, which windows hold on to)."""
+        self.on, self.preset = other.on, other.preset
+        self.manual, self.presets = other.manual, list(other.presets)
+
     # Stored form ----------------------------------------------------------------------------
 
     def to_json(self) -> str:

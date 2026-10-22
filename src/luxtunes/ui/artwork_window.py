@@ -1,7 +1,8 @@
 """The pop-out artwork player: opens when you click the album art.
 
 It shows the art large and puts playback
-controls over the bottom of it while the mouse is over the window. It opens
+controls over the bottom of it while the mouse is over the window. The Lyrics
+button (♪ in the controls) lays the song's lyrics over the art. It opens
 at the picture's own size (up to 90% of the screen) and can be stretched
 bigger or smaller with the grip in the bottom-right corner. Colours come
 from the app theme (light/dark) via the stylesheet in theme.py.
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QSizeGrip,
     QStyle,
+    QTextBrowser,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -37,6 +39,7 @@ class ArtworkWindow(QWidget):
     previous_clicked = Signal()
     seek_requested = Signal(int)
     volume_changed = Signal(int)
+    lyrics_toggled = Signal(bool)          # remembered by the main window
 
     def __init__(self, parent=None):
         super().__init__(parent, Qt.WindowType.Window)
@@ -55,6 +58,15 @@ class ArtworkWindow(QWidget):
         self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image.setMouseTracking(True)
 
+        # Lyrics over the art (the Lyrics button turns them on and off).
+        self.lyrics_view = QTextBrowser(self)
+        self.lyrics_view.setObjectName("artLyrics")
+        self.lyrics_view.setFrameShape(QFrame.Shape.NoFrame)
+        self.lyrics_view.viewport().setMouseTracking(True)
+        self.lyrics_view.viewport().installEventFilter(self)
+        self.lyrics_view.hide()
+        self._lyrics = ""
+
         # ---- Controls overlay ----------------------------------------------
         self.controls = QFrame(self)
         self.controls.setObjectName("artControls")
@@ -66,6 +78,10 @@ class ArtworkWindow(QWidget):
         self.play_button = self._button(icon(["media-playback-start"], QStyle.StandardPixmap.SP_MediaPlay), "Play")
         self.forward_button = self._button(icon(["media-seek-forward"], QStyle.StandardPixmap.SP_MediaSeekForward), "Forward 10 seconds")
         self.next_button = self._button(icon(["media-skip-forward"], QStyle.StandardPixmap.SP_MediaSkipForward), "Next")
+        self.lyrics_button = self._button(None, "Show lyrics over the artwork")
+        self.lyrics_button.setText("Lyrics")
+        self.lyrics_button.setCheckable(True)
+        self.lyrics_button.toggled.connect(self._lyrics_toggled)
         self._play_icon = self.play_button.icon()
         self._pause_icon = icon(["media-playback-pause"], QStyle.StandardPixmap.SP_MediaPause)
 
@@ -86,6 +102,7 @@ class ArtworkWindow(QWidget):
                        self.forward_button, self.next_button):
             top.addWidget(button)
         top.addStretch(1)
+        top.addWidget(self.lyrics_button)
 
         self.elapsed = QLabel("0:00")
         self.remaining = QLabel("-0:00")
@@ -125,7 +142,8 @@ class ArtworkWindow(QWidget):
     def _button(icon, tooltip) -> QToolButton:
         button = QToolButton()
         button.setObjectName("overlayButton")
-        button.setIcon(icon)
+        if icon is not None:
+            button.setIcon(icon)
         button.setToolTip(tooltip)
         button.setAutoRaise(True)
         return button
@@ -149,6 +167,34 @@ class ArtworkWindow(QWidget):
             side = max(self._pixmap.width(), self._pixmap.height())
         side = max(self.minimumWidth(), min(side, int(area.width() * 0.9), int(area.height() * 0.9)))
         self.resize(side, side)
+
+    def set_lyrics(self, text: str | None):
+        self._lyrics = (text or "").strip()
+        if self._lyrics:
+            self.lyrics_view.setPlainText(self._lyrics)
+        else:
+            self.lyrics_view.setHtml("<p><i>No lyrics for this song.</i></p>")
+        self.lyrics_view.document().setDefaultStyleSheet("")
+        self._center_lyrics()
+        self.lyrics_view.verticalScrollBar().setValue(0)
+
+    def set_lyrics_shown(self, shown: bool):
+        self.lyrics_button.setChecked(shown)
+        self.lyrics_view.setVisible(shown)
+
+    def _lyrics_toggled(self, shown: bool):
+        self.lyrics_view.setVisible(shown)
+        self._layout_children()
+        self.lyrics_toggled.emit(shown)
+
+    def _center_lyrics(self):
+        from PySide6.QtGui import QTextBlockFormat, QTextCursor
+        cursor = QTextCursor(self.lyrics_view.document())
+        cursor.select(QTextCursor.SelectionType.Document)
+        block = QTextBlockFormat()
+        block.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        block.setLineHeight(130, 1)                       # 1 = proportional
+        cursor.mergeBlockFormat(block)
 
     def update_position(self, position: int, duration: int):
         self._position, self._duration = position, duration
@@ -176,6 +222,9 @@ class ArtworkWindow(QWidget):
     def _layout_children(self):
         rect = self.rect()
         self.image.setGeometry(rect)
+        self.lyrics_view.setGeometry(rect)
+        if self.lyrics_view.isVisible():
+            self.lyrics_view.raise_()
         if self._pixmap is None:
             self.image.setPixmap(QPixmap())
             self.image.setText("No Artwork")
@@ -208,6 +257,9 @@ class ArtworkWindow(QWidget):
     def eventFilter(self, obj, event):
         if obj is self.controls and event.type() == QEvent.Type.Enter:
             self._hide_timer.stop()   # never hide while the mouse is on the controls
+        elif obj is self.lyrics_view.viewport() and event.type() in (
+                QEvent.Type.MouseMove, QEvent.Type.Enter):
+            self._show_controls()     # the lyrics cover the window: controls still appear
         return super().eventFilter(obj, event)
 
     def _show_controls(self):

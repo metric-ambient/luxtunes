@@ -5,7 +5,9 @@ Format version 2 (version 1 files are still read the same way):
     {"version": 2, "library_id": "...",
      "tracks": [{"id", "plays", "last_played", "skips", "last_skipped", "rating"}],
      "playlists": [{"id", "action": "create"|"update"|"delete", "name", "is_smart",
-                    "items": [track ids]  or  "smart_info"/"smart_criteria" (base64)}]}
+                    "items": [track ids]  or  "smart_info"/"smart_criteria" (base64)}],
+     "equalizer": {"on", "preset", "manual": {"preamp", "bands"},
+                   "presets": [{"name", "preamp", "bands"}]}}   (optional)
 
 Tracks merge with the same rules as an iPod's play counts. Playlists are only
 applied when the file was made against this library, only to playlists
@@ -55,6 +57,8 @@ class PhoneChanges:
     tracks: list = field(default_factory=list)    # stats.IPodTrackStats
     raw_tracks: list = field(default_factory=list)
     playlists: list[PlaylistChange] = field(default_factory=list)
+    equalizer: object = None                      # equalizer.Settings made on the phone
+    raw_equalizer: object = None                  # as the phone wrote it
     problems: list[str] = field(default_factory=list)
 
 
@@ -140,6 +144,50 @@ def _playlist(entry, problems: list[str]) -> PlaylistChange | None:
     return change
 
 
+def _equalizer(entry, problems: list[str]):
+    """The phone's whole equalizer (on, chosen preset, Manual values, preset
+    list), or None if it can't be read (reported, and nothing changes)."""
+    from luxtunes.core import equalizer
+    try:
+        if not isinstance(entry, dict) or not isinstance(entry.get("presets"), list):
+            raise ValueError("not understood")
+        presets, names = [], set()
+        for p in entry["presets"]:
+            name = equalizer.clean_name(p["name"])
+            if name.casefold() in names:
+                raise ValueError(f"two presets called “{name}”")
+            names.add(name.casefold())
+            presets.append(equalizer.Preset.from_dict({**p, "name": name}))
+        manual = entry.get("manual") or {}
+        settings = equalizer.Settings(
+            on=bool(entry.get("on")), presets=presets,
+            manual=equalizer.Preset.from_dict({"bands": [0] * 10, **manual,
+                                               "name": equalizer.MANUAL}))
+        chosen = str(entry.get("preset") or equalizer.MANUAL)
+        settings.preset = chosen if settings.find(chosen) else equalizer.MANUAL
+        return settings
+    except (TypeError, ValueError, KeyError) as error:
+        problems.append(f"The equalizer from the phone couldn't be read ({error}); "
+                        "LuxTunes' equalizer was left as it is.")
+        return None
+
+
+def apply_equalizer(conn: sqlite3.Connection, changes: PhoneChanges) -> bool:
+    """Make LuxTunes' equalizer the phone's. Songs whose own preset the phone
+    no longer has lose it. True if anything was applied."""
+    from luxtunes.core import equalizer
+    phone = changes.equalizer
+    if phone is None:
+        return False
+    before = equalizer.load(conn)
+    kept = {p.name.casefold() for p in phone.presets}
+    for preset in before.presets:
+        if preset.name.casefold() not in kept:
+            library.rename_equalizer_preset(conn, preset.name, None)
+    equalizer.save(conn, phone)
+    return True
+
+
 def read(root: Path) -> PhoneChanges:
     """changes.json from the phone's LuxTunes folder (empty if there's none)."""
     result = PhoneChanges()
@@ -161,6 +209,10 @@ def read(root: Path) -> PhoneChanges:
         if item is not None:
             result.tracks.append(item)
             result.raw_tracks.append(entry)
+    if "equalizer" in data:
+        result.equalizer = _equalizer(data["equalizer"], result.problems)
+        if result.equalizer is not None:
+            result.raw_equalizer = data["equalizer"]
     seen = set()
     for entry in data.get("playlists") or []:
         change = _playlist(entry, result.problems)
@@ -318,6 +370,10 @@ def emptied(merged: PhoneChanges, now_text: str | None) -> dict:
     for entry in data.get("playlists") or []:
         if json.dumps(entry, sort_keys=True) not in applied:
             empty["playlists"].append(entry)
+    # An equalizer the phone wrote after the one taken stays for next time.
+    if "equalizer" in data and json.dumps(data["equalizer"], sort_keys=True) != \
+            json.dumps(merged.raw_equalizer, sort_keys=True):
+        empty["equalizer"] = data["equalizer"]
     if data.get("library_id"):
         empty["library_id"] = data["library_id"]
     return empty

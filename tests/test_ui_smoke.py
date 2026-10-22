@@ -1689,3 +1689,251 @@ def test_trash_failures_say_why(window, monkeypatch, tmp_path):
     for t in tracks:
         assert library.load_track(window.conn, t["id"]) is None
 
+
+
+def test_edit_menu_cut_copy_paste_and_undo(window, monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QMessageBox
+
+    import os
+
+    from luxtunes.core import library, organize, trash
+    from luxtunes.ui.widgets import SOURCE_MUSIC, SOURCE_PODCASTS
+
+    conn = window.conn
+    warnings = []
+    # Undoing a pasted copy trashes the file LuxTunes made; here it's just removed.
+    monkeypatch.setattr(trash, "move_to_trash", lambda location: os.remove(location))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a[2]))
+    organize.set_media_folder(conn, tmp_path / "Media")
+    playlists = {p["name"]: p for p in library.load_playlists(conn)}
+    empty, smart_list = playlists["Empty Playlist"], playlists["My Top Rated"]
+
+    window.show_source(SOURCE_MUSIC)
+    song = window.model.visible_tracks()[0]
+    real = tmp_path / "song.mp3"
+    real.write_bytes(b"\xff\xfb\x90\x64" + b"\x00" * 413)
+    library.set_location(conn, song["id"], str(real))
+    window.reload_library()
+    window.show_source(SOURCE_MUSIC)
+    row = window.model.row_of(song["id"])
+    window.table.selectRow(row)
+
+    # Copy, then Paste into Music: nothing happens (no message either).
+    window._copy_songs()
+    count = library.count_tracks(conn, "music")
+    window._paste_songs()
+    assert library.count_tracks(conn, "music") == count and not warnings
+
+    # Paste into a playlist; Undo / Redo name it.
+    window.show_source(("playlist", empty["id"]))
+    window._paste_songs()
+    assert library.playlist_track_ids(conn, empty["id"]) == {song["id"]}
+    window._update_edit_menu()
+    assert window.undo_action.text() == f"Undo Copy “{song['name']}”"
+    window._undo()
+    assert library.playlist_track_ids(conn, empty["id"]) == set()
+    window._update_edit_menu()
+    assert window.redo_action.text() == f"Redo Copy “{song['name']}”"
+    window._redo()
+    assert library.playlist_track_ids(conn, empty["id"]) == {song["id"]}
+
+    # Smart playlists take nothing.
+    window.show_source(("playlist", smart_list["id"]))
+    before = library.playlist_track_ids(conn, smart_list["id"])
+    window._paste_songs()
+    assert library.playlist_track_ids(conn, smart_list["id"]) == before and not warnings
+
+    # Copy into Podcasts: a new podcast copy of the file; the original stays in Music.
+    window.show_source(SOURCE_PODCASTS)
+    window._paste_songs()
+    podcasts = library.load_tracks(conn, media_kind="podcast")
+    assert len(podcasts) == 1 and podcasts[0]["location"] != str(real)
+    assert library.load_track(conn, song["id"])["media_kind"] == "music"
+    window._undo()                                           # the copy goes again
+    assert library.load_tracks(conn, media_kind="podcast") == []
+
+    # Cut (or drag) into Podcasts: the song itself becomes a podcast.
+    window.show_source(SOURCE_MUSIC)
+    window.table.selectRow(window.model.row_of(song["id"]))
+    window._copy_songs(cut=True)
+    window.show_source(SOURCE_PODCASTS)
+    window._paste_songs()
+    assert library.load_track(conn, song["id"])["media_kind"] == "podcast"
+    window._undo()
+    assert library.load_track(conn, song["id"])["media_kind"] == "music"
+
+    # Dragged to Audiobooks and back onto Music.
+    window._on_tracks_dropped(("library", "audiobook"), [song["id"]])
+    assert library.load_track(conn, song["id"])["media_kind"] == "audiobook"
+    window._on_tracks_dropped(SOURCE_MUSIC, [song["id"]])
+    assert library.load_track(conn, song["id"])["media_kind"] == "music"
+    assert library.load_tracks(conn, media_kind="audiobook") == []
+
+    # A song can't go into TV Shows (not a video): it says why.
+    window._put_songs(("library", "tvshow"), [library.load_track(conn, song["id"])], move=True)
+    assert warnings and "isn't a video file" in warnings[-1]
+
+    # Deleting from the library (keeping the file) can be undone.
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+
+    def keep_files(box):
+        for button in box.buttons():
+            if button.text() == "Keep Files":
+                box.clickedButton = lambda b=button: b
+        return 0
+
+    monkeypatch.setattr(QMessageBox, "exec", keep_files)
+    window.show_source(SOURCE_MUSIC)
+    window._delete_tracks([library.load_track(conn, song["id"])])
+    assert library.load_track(conn, song["id"]) is None
+    window._undo()
+    assert library.load_track(conn, song["id"]) is not None
+    assert song["id"] in library.playlist_track_ids(conn, empty["id"])
+
+    # Select All / Select None.
+    window.table.setFocus()
+    window._select_all()
+    assert len(window._selected_rows()) == window.model.rowCount()
+    window.table_clear_selection()
+    assert window._selected_rows() == []
+
+
+def test_help_guides(window):
+    from PySide6.QtWidgets import QApplication
+
+    from luxtunes.ui.help_topics import GUIDES
+
+    window._show_help()
+    help_window = window._help_window
+    QApplication.instance().processEvents()
+    assert help_window.isVisible() and help_window.topics.count() == len(GUIDES)
+    help_window.show_topic("Equalizer")
+    assert "Show Equalizer" in help_window.page.toPlainText()
+    help_window.search.setText("trash")                   # narrows the list
+    shown = [help_window.topics.item(i).text() for i in range(help_window.topics.count())
+             if not help_window.topics.item(i).isHidden()]
+    assert "Deleting songs" in shown and "Equalizer" not in shown
+    help_window.search.setText("zzzz nothing")
+    assert "No help topics" in help_window.page.toPlainText()
+    help_window.close()
+
+
+def test_sleep_timer(window, monkeypatch):
+    from datetime import datetime, timedelta
+
+    from PySide6.QtWidgets import QApplication, QDialog
+
+    from luxtunes.ui import sleep_timer
+
+    dialog = sleep_timer.SleepTimerDialog(60, window)
+    assert dialog.minutes == 60 and "Music will stop at" in dialog.preview.text()
+    dialog.group.button(240).setChecked(True)
+    expected = sleep_timer.clock(datetime.now() + timedelta(minutes=240))
+    assert expected in dialog.preview.text()
+    dialog.deleteLater()
+
+    monkeypatch.setattr(sleep_timer.SleepTimerDialog, "exec",
+                        lambda self: QDialog.DialogCode.Accepted)
+    window._sleep_timer_dialog()                         # 30 minutes (offered first)
+    QApplication.instance().processEvents()
+    assert window.sleep_timer.active and not window.sleep_button.isHidden()
+    assert window.sleep_button.text() in ("☾ 30m", "☾ 29m")
+    assert window.sleep_off_action.isVisible()
+    window.sleep_button.click()                          # clicking it turns it off
+    assert not window.sleep_timer.active and window.sleep_button.isHidden()
+    assert sleep_timer.left_text(30) == "1m" and sleep_timer.left_text(3900) == "1:05"
+
+
+def test_each_library_section_remembers_its_view(window):
+    from luxtunes.ui.widgets import SOURCE_MOVIES, SOURCE_MUSIC
+
+    window.show_source(SOURCE_MUSIC)
+    assert window.view_mode == "list"                     # Music: List by default
+    window.show_source(SOURCE_MOVIES)
+    assert window.view_mode == "grid"                     # the others: Grid
+    window._set_view_mode("album")
+    window.show_source(SOURCE_MUSIC)
+    assert window.view_mode == "list"
+    window.show_source(SOURCE_MOVIES)
+    assert window.view_mode == "album"
+    window.show_source(SOURCE_MUSIC)
+
+
+def test_popout_lyrics_and_playback_preferences(window, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    from luxtunes.ui.preferences import PreferencesDialog, appearance
+
+    track = window.model.visible_tracks()[0]
+    window.table.selectRow(0)
+    monkeypatch.setattr(window, "_lyrics_for", lambda t: "First line\nSecond line")
+    window._open_art_window()
+    art = window._art_window
+    art.lyrics_button.click()                             # lyrics over the art
+    QApplication.instance().processEvents()
+    assert art.lyrics_view.isVisible() and "Second line" in art.lyrics_view.toPlainText()
+    assert window.settings.value("popout_lyrics", type=bool)
+    art.set_lyrics("")
+    assert "No lyrics" in art.lyrics_view.toPlainText()
+    art.close()
+    assert track
+
+    dialog = PreferencesDialog(window.conn, window, window.settings)
+    assert not dialog.crossfade.isChecked() and not dialog.sound_check.isChecked()   # off
+    dialog.crossfade.setChecked(True)
+    dialog.crossfade_seconds.setValue(15)
+    dialog.gapless.setChecked(True)
+    dialog._save()
+    look = appearance(window.settings)
+    assert look["crossfade"] and look["crossfade_seconds"] == 15 and look["gapless"]
+    window._apply_appearance()
+    assert window.player.crossfade_seconds == 15 and window.player.gapless
+
+
+def test_the_next_song_is_known_in_advance(window):
+    from luxtunes.ui.player import REPEAT_ALL, REPEAT_OFF
+
+    player = window.player
+    tracks = window.model.visible_tracks()
+    for t in tracks:
+        t.setdefault("location", "/nowhere")
+    import luxtunes.ui.player as player_module
+    real = player_module.find_file
+    player_module.find_file = lambda location: location
+    try:
+        player._context = list(tracks)
+        player._order = list(range(len(tracks)))
+        player._pos = len(tracks) - 1                       # the last song
+        player._shuffle = False
+        player._repeat = REPEAT_OFF
+        assert player._peek_next() is None                  # the end
+        player._repeat = REPEAT_ALL
+        assert player._peek_next() == ("order", 0, tracks[0])
+        player.up_next = [tracks[1]]
+        assert player._peek_next() == ("queue", 0, tracks[1])
+    finally:
+        player_module.find_file = real
+        player.up_next = []
+        player._repeat = REPEAT_OFF
+        player._context, player._order, player._pos = [], [], -1
+
+
+def test_restore_from_backup(window, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+    from luxtunes.core import backup, library
+
+    conn = window.conn
+    saved = backup.weekly(conn)
+    before = library.count_tracks(conn, "music")
+    first = window.model.visible_tracks()[0]
+    library.delete_tracks(conn, [first["id"]])
+    opened_in = []
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda parent, title, folder, kinds:
+                        (opened_in.append(folder) or str(saved), kinds))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    window._restore_backup()
+    assert opened_in == [str(backup.folder_for(conn))]       # starts in the Backups folder
+    assert library.count_tracks(conn, "music") == before     # the song is back
+    kept = [p.name for p in backup.folder_for(conn).iterdir() if "before restore" in p.name]
+    assert len(kept) == 1

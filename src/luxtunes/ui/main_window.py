@@ -58,6 +58,7 @@ from PySide6.QtWidgets import (
 from luxtunes import __version__
 from luxtunes.core import (add_files, artwork, cd, convert, encoders, equalizer, library, organize,
                            smart, tag_sync, trash)
+from luxtunes.core import edits
 from luxtunes.core.tags import UNCHANGED, TagError
 from luxtunes.core.paths import find_file, nearest_existing_folder
 from luxtunes.importer.itunes_xml import import_library
@@ -69,6 +70,7 @@ from luxtunes.ui.album_view import TrackTableView
 from luxtunes.ui.art_cache import ART_CACHE
 from luxtunes.ui.artwork_window import ArtworkWindow
 from luxtunes.ui.mini_player import MiniPlayer
+from luxtunes.ui.sleep_timer import SleepTimer, SleepTimerDialog, clock, left_text
 from luxtunes.ui.cover_flow import CoverFlow
 from luxtunes.ui.cd_page import CdPage
 from luxtunes.ui.device_page import DevicePage
@@ -132,6 +134,8 @@ class MainWindow(QMainWindow):
 
         self.model = TrackTableModel(self)
         self.player = Player(self)
+        self.sleep_timer = SleepTimer(self.player, self)
+        self.sleep_timer.changed.connect(self._show_sleep_timer)
         if equalizer.has_saved(conn):
             self.eq_settings = equalizer.load(conn)
         else:                           # kept in the app's settings by earlier test builds
@@ -159,6 +163,12 @@ class MainWindow(QMainWindow):
         self._art_mode = "selected"      # or "playing"
         self._art_window: ArtworkWindow | None = None
         self._mini_player: MiniPlayer | None = None
+        self._loudness_worker = None             # Sound Check measuring songs
+        # Edit → Cut / Copy / Paste: the songs on LuxTunes' own clipboard.
+        self._song_clipboard: dict | None = None
+        # Edit → Undo / Redo: (label, undo, redo), most recent last.
+        self._undo_stack: list[tuple[str, object, object]] = []
+        self._redo_stack: list[tuple[str, object, object]] = []
         self._playing_source = None      # the list the current song was started from
         self.view_mode = "list"
         self._table_layout = "list"      # which column layout the song table has now
@@ -251,6 +261,12 @@ class MainWindow(QMainWindow):
         loud = QLabel()
         loud.setPixmap(icon(QStyle.StandardPixmap.SP_MediaVolume).pixmap(14, 14))
         bar.addWidget(loud)
+        # The sleep timer, while it runs: the time left; click to turn it off.
+        self.sleep_button = self._tool_button("sleepButton", None, "", "☾")
+        self.sleep_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.sleep_button.clicked.connect(self._sleep_timer_off)
+        self.sleep_button.hide()
+        bar.addWidget(self.sleep_button)
         bar.addSpacing(20)
 
         self.lcd = NowPlayingDisplay()
@@ -475,6 +491,8 @@ class MainWindow(QMainWindow):
         library_menu = file_menu.addMenu("Library")
         self._action(library_menu, "Organize Library…", self._organize_library)
         self._action(library_menu, "Import iTunes Library…", self.import_itunes_library, "Ctrl+Shift+O")
+        library_menu.addSeparator()
+        self._action(library_menu, "Restore from Backup…", self._restore_backup)
         file_menu.addSeparator()
         self.info_action = self._action(file_menu, "Get Info", self._get_info, "Ctrl+I")
         self.file_rating_menu = file_menu.addMenu("Rating")
@@ -491,7 +509,19 @@ class MainWindow(QMainWindow):
         file_menu.aboutToHide.connect(self._file_menu_closed)
 
         edit_menu = menus.addMenu("&Edit")
+        self.undo_action = self._action(edit_menu, "Undo", self._undo, "Ctrl+Z")
+        self.redo_action = self._action(edit_menu, "Redo", self._redo, "Ctrl+Shift+Z")
+        edit_menu.addSeparator()
+        self.cut_action = self._action(edit_menu, "Cut", lambda: self._copy_songs(cut=True), "Ctrl+X")
+        self.copy_action = self._action(edit_menu, "Copy", self._copy_songs, "Ctrl+C")
+        self.paste_action = self._action(edit_menu, "Paste", self._paste_songs, "Ctrl+V")
+        self.delete_action = self._action(edit_menu, "Delete", self._delete_selection)
+        self._action(edit_menu, "Select All", self._select_all, "Ctrl+A")
+        self._action(edit_menu, "Select None", self.table_clear_selection, "Ctrl+Shift+A")
+        edit_menu.addSeparator()
         self._action(edit_menu, "Preferences…", self._show_preferences, "Ctrl+,")
+        edit_menu.aboutToShow.connect(self._update_edit_menu)
+        edit_menu.aboutToHide.connect(self._edit_menu_closed)
 
         view_menu = menus.addMenu("&View")
         group = QActionGroup(self)
@@ -513,6 +543,9 @@ class MainWindow(QMainWindow):
             "Hide Equalizer" if self._eq_window is not None and self._eq_window.isVisible()
             else "Show Equalizer"))
         view_menu.addSeparator()
+        self._action(view_menu, "Pop-Out Player", self._open_art_window)
+        self._action(view_menu, "Mini Player", self._open_mini_player, "Ctrl+Shift+M")
+        view_menu.addSeparator()
         self.dark_action = self._action(view_menu, "Dark Mode", self._toggle_dark_mode)
         self.dark_action.setCheckable(True)
 
@@ -522,9 +555,12 @@ class MainWindow(QMainWindow):
         self.previous_action = self._action(controls, "Previous", self.player.previous, "Ctrl+Left")
         self.current_song_action = self._action(controls, "Go to Current Song",
                                                 self._go_to_current_song, "Ctrl+L")
+        self.sleep_action = self._action(controls, "Sleep Timer…", self._sleep_timer_dialog,
+                                         "Ctrl+Shift+S")
+        self.sleep_off_action = self._action(controls, "Turn Off Sleep Timer",
+                                             self._sleep_timer_off)
+        self.sleep_off_action.setVisible(False)
         controls.aboutToShow.connect(self._update_controls_menu)
-        self._action(controls, "Pop-Out Player", self._open_art_window)
-        self._action(controls, "Mini Player", self._open_mini_player, "Ctrl+Shift+M")
         self.recent_menu = controls.addMenu("Play Recent")
         self.recent_menu.aboutToShow.connect(self._fill_recent_menu)
         controls.addSeparator()
@@ -543,6 +579,8 @@ class MainWindow(QMainWindow):
         self.repeat_actions[REPEAT_OFF].setChecked(True)
 
         help_menu = menus.addMenu("&Help")
+        self._action(help_menu, "LuxTunes Help", self._show_help, "F1")
+        help_menu.addSeparator()
         self._action(help_menu, "Check for Updates…", self._check_for_updates)
         from luxtunes.core import updater
         if updater.running_appimage():
@@ -697,6 +735,9 @@ class MainWindow(QMainWindow):
             self.search.setPlaceholderText("Search Playlist")
             self.grid.set_section("music")
         self.model.set_tracks(tracks, sort_column)
+        wanted = self._remembered_view(self._view_key(source))
+        if wanted != self.view_mode:
+            self._set_view_mode(wanted, remember=False)     # this section's own view
         header = self.table.horizontalHeader()
         header.blockSignals(True)   # don't make the view re-sort; the model already did
         header.setSortIndicator(sort_column, Qt.SortOrder.AscendingOrder)
@@ -1013,6 +1054,7 @@ class MainWindow(QMainWindow):
                                     QAbstractItemView.ScrollHint.PositionAtCenter)
         if self._art_window is not None:
             self._art_window.show_track(track, self._artwork_for(track))
+            self._art_window.set_lyrics(self._lyrics_for(track))
         if self._mini_player is not None:
             self._mini_player.show_track(track)
         # Movies and TV shows play in the video window; music closes it.
@@ -1156,9 +1198,22 @@ class MainWindow(QMainWindow):
         for button, icon in zip(self.view_buttons, view_icons(color)):
             button.setIcon(icon)
 
-    def _set_view_mode(self, mode: str):
+    # Each Library section remembers its own view (Music: List; Movies, TV
+    # Shows, Podcasts and Audiobooks: Grid); playlists and Up Next share one.
+    VIEW_DEFAULTS = {"music": "list", "playlists": "list"}
+
+    def _view_key(self, source=None) -> str:
+        source = source or self._current_source or SOURCE_MUSIC
+        return source[1] if source[0] == "library" else "playlists"
+
+    def _remembered_view(self, key: str) -> str:
+        mode = self.settings.value(f"view_mode/{key}", self.VIEW_DEFAULTS.get(key, "grid"))
+        return mode if mode in VIEW_MODES else self.VIEW_DEFAULTS.get(key, "grid")
+
+    def _set_view_mode(self, mode: str, remember: bool = True):
         self.view_mode = mode
-        self.settings.setValue("view_mode", mode)
+        if remember:
+            self.settings.setValue(f"view_mode/{self._view_key()}", mode)
         self.view_buttons[VIEW_MODES.index(mode)].setChecked(True)
         self.view_actions[mode].setChecked(True)
         if self._showing_device_page():
@@ -1578,7 +1633,121 @@ class MainWindow(QMainWindow):
             part.update()
         self._refresh_view_icons()
         self.setWindowTitle(f"LuxTunes — {library.library_name(self.conn)}")
+        self._apply_playback_prefs(look)
         self.reload_library()
+
+    def _apply_playback_prefs(self, look: dict):
+        """Preferences → Playback: crossfade, gapless, Sound Check."""
+        self.player.crossfade_seconds = look["crossfade_seconds"] if look["crossfade"] else 0
+        self.player.gapless = look["gapless"]
+        self.player.sound_check = look["sound_check"]
+        self.player.apply_volume()
+        if look["sound_check"]:
+            QTimer.singleShot(3000, self._measure_loudness)   # after the window is up
+
+    def _measure_loudness(self):
+        """Sound Check: give songs without a loudness correction one, in the background."""
+        if self._loudness_worker is not None or not appearance(self.settings)["sound_check"]:
+            return
+        missing = self.conn.execute(
+            "SELECT COUNT(*) FROM tracks WHERE loudness IS NULL AND "
+            "media_kind IN ('music', 'podcast', 'audiobook')").fetchone()[0]
+        if not missing:
+            return
+        from luxtunes.ui.loudness_worker import LoudnessWorker
+        db_path = self.conn.execute("PRAGMA database_list").fetchone()[2]
+        if not db_path:
+            return
+        worker = LoudnessWorker(db_path, self)
+        self._loudness_worker = worker
+        worker.progress.connect(lambda done, total, name: self.lcd.update_count(
+            "loudness", f"“{name}”", done, total))
+        worker.measured.connect(self._on_loudness_measured)
+        worker.done.connect(self._on_loudness_done)
+        worker.finished.connect(worker.deleteLater)
+        self.lcd.start_task("loudness", "Sound Check", "Checking song volumes…",
+                            "Stop (carries on next time)")
+        worker.start()
+
+    def _on_loudness_measured(self, track_id: int, gain: float):
+        self.model.update_track(track_id, {"loudness": gain})
+        self.player.refresh_track(track_id, {"loudness": gain})
+        current = self.player.current
+        if current is not None and current.get("id") == track_id:
+            self.player.apply_volume()
+
+    def _on_loudness_done(self, count: int, stopped: bool, no_ffmpeg: bool):
+        self._loudness_worker = None
+        if stopped:
+            message = f"Sound Check paused after {count:,} songs; it carries on next time."
+        else:
+            message = f"Sound Check is ready ({count:,} songs checked)."
+        self._lcd_finished("loudness", message)
+        if no_ffmpeg:
+            QMessageBox.information(
+                self, "Sound Check",
+                "Some songs have no volume information in their tags, and measuring them "
+                "needs FFmpeg, which isn't installed. Install it with:\n\n"
+                "    sudo apt install ffmpeg\n\nSound Check carries on with them next time.")
+
+    def _restore_backup(self):
+        """File → Library → Restore from Backup…: pick one of the weekly backups
+        (the chooser opens in the Backups folder) and put it back. The library as
+        it is now is kept beside the backups first."""
+        from luxtunes.core import backup
+        busy = [what for what, worker in (("a sync", self._sync_worker),
+                                          ("adding files", self._add_worker),
+                                          ("Sound Check", self._loudness_worker)) if worker]
+        if busy:
+            QMessageBox.information(self, "Restore from Backup",
+                                    f"Wait until {busy[0]} has finished, then try again.")
+            return
+        folder = backup.folder_for(self.conn)
+        if folder is None:
+            return
+        folder.mkdir(parents=True, exist_ok=True)
+        path, _ = QFileDialog.getOpenFileName(self, "Restore from Backup", str(folder),
+                                              "LuxTunes libraries (*.db)")
+        if not path:
+            return
+        try:
+            songs = backup.check(Path(path))
+        except backup.RestoreError as error:
+            QMessageBox.warning(self, "Restore from Backup", str(error))
+            return
+        if Path(path).resolve() == backup.library_path(self.conn).resolve():
+            return                                   # that's the library itself
+        answer = QMessageBox.warning(
+            self, "Restore from Backup",
+            f"Replace your library with “{Path(path).name}” ({songs:,} items)?\n\n"
+            "Ratings, play counts, playlists and edits made since that backup will be "
+            "replaced by the backup's. Your library as it is now is kept in the Backups "
+            "folder first, so you can go back to it the same way. Your music files aren't "
+            "touched.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.player.stop()
+        self.player.up_next = []
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+        self._song_clipboard = None
+        try:
+            kept = backup.restore(self.conn, Path(path))
+        except (backup.RestoreError, sqlite3.Error, OSError) as error:
+            QMessageBox.warning(self, "Restore from Backup", f"The backup couldn't be restored: "
+                                f"{error}. Your library wasn't changed.")
+            return
+        self.eq_settings.copy_from(equalizer.load(self.conn))
+        if self._eq_window is not None:
+            self._eq_window.refresh()
+        self._current_source = SOURCE_MUSIC
+        self.reload_library()
+        self.show_source(SOURCE_MUSIC)
+        self.statusBar().showMessage(
+            f"Restored from “{Path(path).name}”. Your library before the restore is kept as "
+            f"“{kept.name}”.", 12000)
 
     def _organize_library(self):
         """File → Library → Organize Library…: put every file in the LuxTunes
@@ -1783,6 +1952,21 @@ class MainWindow(QMainWindow):
         path = find_file(track.get("location")) if track else None
         return artwork.read_embedded_artwork(path) if path else None
 
+    def _lyrics_for(self, track: dict | None) -> str:
+        """The song's lyrics: from the library, or else from the file's tags."""
+        if not track:
+            return ""
+        if track.get("lyrics"):
+            return track["lyrics"]
+        path = find_file(track.get("location"))
+        if not path:
+            return ""
+        try:
+            from luxtunes.core.tags import read_details
+            return read_details(path).get("lyrics") or ""
+        except (TagError, OSError):
+            return ""
+
     def _open_art_window(self):
         """Clicking the album art opens (or brings back) the pop-out player.
         It shows the playing song; if nothing is playing, the selected one."""
@@ -1793,10 +1977,13 @@ class MainWindow(QMainWindow):
             w.previous_clicked.connect(self.player.previous)
             w.seek_requested.connect(self.player.seek)
             w.volume_changed.connect(self.volume.setValue)
+            w.set_lyrics_shown(self.settings.value("popout_lyrics", False, type=bool))
+            w.lyrics_toggled.connect(lambda shown: self.settings.setValue("popout_lyrics", shown))
             self._art_window = w
         w = self._art_window
         track = self.player.current or self.model.track_at(self.table.currentIndex().row())
         w.show_track(track, self._artwork_for(track))
+        w.set_lyrics(self._lyrics_for(track))
         w.set_volume(self.volume.value())
         w.set_playing(self.player.is_playing)
         if not w.isVisible():
@@ -2119,7 +2306,11 @@ class MainWindow(QMainWindow):
         menu.setEnabled(bool(playlists))
         return menu
 
-    def _add_to_playlist(self, playlist_id: int, name: str, tracks):
+    def _add_to_playlist(self, playlist_id: int, name: str, tracks, verb: str = "Copy",
+                         also=None, also_playlists=()) -> bool:
+        """Add songs to a playlist (asking about duplicates), undoably. also():
+        more changes made in the same step (e.g. removing the songs from the
+        playlist they were cut from), in also_playlists."""
         ids = [t["id"] for t in tracks]
         already = library.playlist_track_ids(self.conn, playlist_id)
         if any(i in already for i in ids):
@@ -2136,27 +2327,292 @@ class MainWindow(QMainWindow):
             if box.clickedButton() is skip:
                 tracks = [t for t in tracks if t["id"] not in already]
             elif box.clickedButton() is not add:
-                return
+                return False
         if not tracks:
-            return
-        library.add_to_playlist(self.conn, playlist_id, [t["id"] for t in tracks])
+            return False
+
+        def change():
+            library.add_to_playlist(self.conn, playlist_id, [t["id"] for t in tracks])
+            if also is not None:
+                also()
+
+        self._record_playlist_edit(self._edit_label(verb, tracks),
+                                   [playlist_id, *also_playlists], change)
         count = len(tracks)
         self.statusBar().showMessage(
             f"Added {count} song{'s' if count != 1 else ''} to “{name}”", 4000)
-        if self._current_source == ("playlist", playlist_id):
+        if self._current_source == ("playlist", playlist_id) or \
+                self._current_source in [("playlist", p) for p in also_playlists]:
             self.show_source(self._current_source)
+        return True
+
+    def _show_help(self):
+        """Help → LuxTunes Help (F1): the short guides."""
+        if getattr(self, "_help_window", None) is None:
+            from luxtunes.ui.help_window import HelpWindow
+            self._help_window = HelpWindow(self)
+        self._help_window.show()
+        self._help_window.raise_()
+        self._help_window.activateWindow()
+
+    # ---- Edit: Cut / Copy / Paste, Select All / None --------------------------------
+
+    def _song_list_has_focus(self) -> bool:
+        focus = QApplication.focusWidget()
+        return focus is None or focus is self.table or self.table.isAncestorOf(focus) \
+            or not isinstance(focus, QLineEdit)
+
+    def _copy_songs(self, cut: bool = False):
+        """Edit → Copy / Cut: the selected songs go on LuxTunes' clipboard (and
+        their names on the system clipboard, to paste as text elsewhere)."""
+        tracks = [t for t in self._selected_tracks() if t]
+        if not tracks or self._showing_device_page():
+            return
+        source = self._current_source
+        self._song_clipboard = {
+            "ids": [t["id"] for t in tracks], "cut": cut, "source": source,
+            "positions": [t.get("playlist_position") for t in tracks]}
+        QApplication.clipboard().setText("\n".join(
+            " - ".join(p for p in (t.get("name"), t.get("artist")) if p) for t in tracks))
+        count = len(tracks)
+        self.statusBar().showMessage(
+            f"{'Cut' if cut else 'Copied'} {count:,} item{'s' if count != 1 else ''}", 3000)
+
+    def _paste_songs(self):
+        """Edit → Paste into what's shown: a playlist, Up Next, or a Library
+        section (songs already in that section, smart playlists and folders:
+        nothing happens)."""
+        clip = self._song_clipboard
+        if not clip or self._current_source is None:
+            return
+        tracks = library.load_tracks_by_ids(self.conn, clip["ids"])
+        if not tracks:
+            return
+        done = self._put_songs(self._current_source, tracks, move=clip["cut"],
+                               from_source=clip["source"],
+                               cut_entries=list(zip(clip["positions"], clip["ids"])))
+        if done and clip["cut"]:
+            self._song_clipboard = None            # a cut is pasted once
+
+    def _put_songs(self, target, tracks: list[dict], move: bool, from_source=None,
+                   cut_entries=()) -> bool:
+        """Songs pasted or dropped on `target`. move: cut (or dragged).
+        cut_entries: (position, track id) in the playlist they were cut from."""
+        if target == SOURCE_UP_NEXT:
+            self.player.add_to_up_next(tracks)
+            return True
+        if target[0] == "library":
+            if target[1] not in edits.PASTE_SECTIONS:
+                return False
+            return self._put_in_section(target[1], tracks, move)
+        if target[0] != "playlist":
+            return False
+        playlist = next((p for p in library.load_playlists(self.conn) if p["id"] == target[1]), None)
+        if playlist is None or not library.is_user_playlist(playlist):
+            return False                          # smart playlists and folders: nothing
+        cut_from = from_source[1] if move and from_source and from_source[0] == "playlist" \
+            and from_source != target else None
+        if cut_from is None:
+            return self._add_to_playlist(playlist["id"], playlist["name"], tracks)
+        wanted = [(p, track_id) for p, track_id in cut_entries if p is not None]
+
+        def take_out():
+            # Only entries still holding the song that was cut (the playlist may
+            # have changed since).
+            order = edits.playlist_order(self.conn, cut_from)
+            library.remove_from_playlist(self.conn, cut_from, [
+                p for p, track_id in wanted if p < len(order) and order[p] == track_id])
+
+        return self._add_to_playlist(playlist["id"], playlist["name"], tracks, verb="Move",
+                                     also=take_out, also_playlists=[cut_from])
+
+    def _put_in_section(self, kind: str, tracks: list[dict], move: bool) -> bool:
+        """Into a Library section (Music, Podcasts, Audiobooks, Movies, TV Shows).
+        Cut (or drag): the song
+        itself changes media kind (its file moves to that folder). Copy: a copy
+        of the file with the new kind, beside the original in the library."""
+        problems, going = [], []
+        for t in tracks:
+            verdict = edits.can_go(t, kind)
+            if verdict == edits.OK:
+                going.append(t)
+            elif verdict != edits.SAME:
+                problems.append(verdict)
+        title = edits.SECTION_NAMES[kind]
+        if going:
+            if move:
+                self._move_to_section(kind, going, problems)
+            else:
+                self._copy_to_section(kind, going, problems)
+        if problems:
+            QMessageBox.warning(self, title, "\n\n".join(problems[:10]) + (
+                f"\n\n… and {len(problems) - 10:,} more." if len(problems) > 10 else ""))
+        return bool(going)
+
+    def _set_kinds(self, kinds: dict[int, str], problems: list[str]):
+        for track_id, kind in kinds.items():
+            try:
+                error = self._apply_info(track_id, {"media_kind": kind}, None)
+            except ValueError as error_value:
+                error = str(error_value)
+            if error:
+                name = (library.load_track(self.conn, track_id) or {}).get("name") or "A song"
+                problems.append(f"“{name}” moved to {edits.SECTION_NAMES[kind]}, but its file "
+                                f"couldn't be moved: {error}.")
+        self._refresh_after_edit()
+
+    def _move_to_section(self, kind: str, tracks: list[dict], problems: list[str]):
+        before = {t["id"]: t.get("media_kind") or "music" for t in tracks}
+        after = {t["id"]: kind for t in tracks}
+        self._set_kinds(after, problems)
+        self._push_undo(self._edit_label("Move", tracks),
+                        lambda: self._set_kinds(before, []), lambda: self._set_kinds(after, []))
+        self.statusBar().showMessage(
+            f"Moved {len(tracks):,} item{'s' if len(tracks) != 1 else ''} to "
+            f"{edits.SECTION_NAMES[kind]}", 4000)
+
+    def _make_copies(self, kind: str, originals: list[int], made: list[int], problems: list[str]):
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            for track_id in originals:
+                try:
+                    made.append(edits.duplicate_as(self.conn, track_id, kind))
+                except (OSError, KeyError) as error:
+                    problems.append(str(error) if isinstance(error, FileNotFoundError)
+                                    else f"A copy couldn't be made: {error}")
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._refresh_after_edit()
+
+    def _remove_copies(self, made: list[int]):
+        """Undo a pasted copy: its library entry, and the file LuxTunes made for it."""
+        copies = library.load_tracks_by_ids(self.conn, made)
+        self.player.forget_tracks(set(made))
+        failures = []
+        for t in copies:
+            failure = trash.move_to_trash(t.get("location"))
+            if failure is not None and failure[0] != trash.MISSING:
+                failures.append((t, *failure))
+        library.delete_tracks(self.conn, list(made))
+        made.clear()
+        self._refresh_after_edit()
+        if failures:
+            self._report_trash_failures(failures, "Undo",
+                                        "The copies were taken out of your library, but some "
+                                        "of their files couldn't be moved to the Trash.")
+
+    def _copy_to_section(self, kind: str, tracks: list[dict], problems: list[str]):
+        originals = [t["id"] for t in tracks]
+        made: list[int] = []
+        self._make_copies(kind, originals, made, problems)
+        if made:
+            self._push_undo(self._edit_label("Copy", tracks), lambda: self._remove_copies(made),
+                            lambda: self._make_copies(kind, originals, made, []))
+            self.statusBar().showMessage(
+                f"Copied {len(made):,} item{'s' if len(made) != 1 else ''} to "
+                f"{edits.SECTION_NAMES[kind]}", 4000)
+
+    def _select_all(self):
+        if self._song_list_has_focus():
+            self.table.selectAll()
+
+    def table_clear_selection(self):
+        self.table.clearSelection()
+
+    # ---- Edit: Undo / Redo -----------------------------------------------------------
+
+    UNDO_LIMIT = 50
+
+    @staticmethod
+    def _edit_label(verb: str, tracks: list[dict]) -> str:
+        """'Copy “Praise Him”' or 'Copy 3 Items'."""
+        if len(tracks) == 1:
+            return f"{verb} “{tracks[0].get('name') or 'Untitled'}”"
+        return f"{verb} {len(tracks):,} Items"
+
+    def _push_undo(self, label: str, undo, redo):
+        self._undo_stack.append((label, undo, redo))
+        del self._undo_stack[:-self.UNDO_LIMIT]
+        self._redo_stack.clear()
+
+    def _record_playlist_edit(self, label: str, playlist_ids: list[int], change):
+        """Make a change to playlists so Undo can put their songs back as they were."""
+        playlist_ids = list(dict.fromkeys(playlist_ids))
+        before = {p: edits.playlist_order(self.conn, p) for p in playlist_ids}
+        change()
+        after = {p: edits.playlist_order(self.conn, p) for p in playlist_ids}
+        self._push_undo(label, lambda: self._restore_playlists(before),
+                        lambda: self._restore_playlists(after))
+
+    def _restore_playlists(self, orders: dict[int, list[int]]):
+        for playlist_id, order in orders.items():
+            edits.set_playlist_order(self.conn, playlist_id, order)
+        self._schedule_smart_refresh()
+        if self._current_source and self._current_source[0] == "playlist" \
+                and self._current_source[1] in orders:
+            self.show_source(self._current_source)
+
+    def _refresh_after_edit(self):
+        """Songs changed sections or came and went: redraw the sidebar and list."""
+        self.reload_library()
+        if self._current_source and self._current_source[0] != "device":
+            self.show_source(self._current_source)
+
+    def _undo(self):
+        if not self._undo_stack:
+            return
+        label, undo, redo = self._undo_stack.pop()
+        undo()
+        self._redo_stack.append((label, undo, redo))
+        self._refresh_after_edit()
+        self.statusBar().showMessage(f"Undid {label}", 3000)
+
+    def _redo(self):
+        if not self._redo_stack:
+            return
+        label, undo, redo = self._redo_stack.pop()
+        redo()
+        self._undo_stack.append((label, undo, redo))
+        self._refresh_after_edit()
+        self.statusBar().showMessage(f"Redid {label}", 3000)
+
+    def _update_edit_menu(self):
+        """Undo/Redo say what they'd do; items that can't do anything are greyed."""
+        self.undo_action.setText(f"Undo {self._undo_stack[-1][0]}" if self._undo_stack else "Undo")
+        self.redo_action.setText(f"Redo {self._redo_stack[-1][0]}" if self._redo_stack else "Redo")
+        self.undo_action.setEnabled(bool(self._undo_stack))
+        self.redo_action.setEnabled(bool(self._redo_stack))
+        songs = bool(self._selected_rows()) and not self._showing_device_page()
+        for action in (self.cut_action, self.copy_action, self.delete_action):
+            action.setEnabled(songs)
+        self.paste_action.setEnabled(self._paste_possible())
+
+    def _edit_menu_closed(self):
+        # The shortcuts work whenever there's something to do; each one checks.
+        for action in (self.undo_action, self.redo_action, self.cut_action, self.copy_action,
+                       self.paste_action, self.delete_action):
+            action.setEnabled(True)
+
+    def _paste_possible(self) -> bool:
+        source = self._current_source
+        if not self._song_clipboard or source is None:
+            return False
+        if source == SOURCE_UP_NEXT:
+            return True
+        if source[0] == "library":
+            return source[1] in edits.PASTE_SECTIONS
+        if source[0] == "playlist":
+            playlist = self._current_playlist()
+            return playlist is not None and library.is_user_playlist(playlist)
+        return False
 
     def _on_tracks_dropped(self, target, track_ids: list[int]):
         """Songs were dragged from the song list onto a sidebar item."""
         tracks = library.load_tracks_by_ids(self.conn, track_ids)
         if not tracks:
             return
-        if target == SOURCE_UP_NEXT:
-            self.player.add_to_up_next(tracks)
-        elif target[0] == "playlist":
-            playlist = next((p for p in library.load_playlists(self.conn) if p["id"] == target[1]), None)
-            if playlist is not None and library.is_user_playlist(playlist):
-                self._add_to_playlist(playlist["id"], playlist["name"], tracks)
+        # Dragging onto a Library section moves the songs there, like Cut and Paste.
+        self._put_songs(target, tracks, move=True)
 
     def _show_in_playlist_menu(self, parent, track) -> QMenu:
         menu = QMenu("Show in Playlist", parent)
@@ -2239,8 +2695,10 @@ class MainWindow(QMainWindow):
                 self, "LuxTunes",
                 f"Are you sure you want to remove the selected {noun} from the list?")
             if answer == QMessageBox.StandardButton.Yes:
-                library.remove_from_playlist(
-                    self.conn, playlist["id"], [t["playlist_position"] for t in tracks])
+                self._record_playlist_edit(
+                    self._edit_label("Delete", tracks), [playlist["id"]],
+                    lambda: library.remove_from_playlist(
+                        self.conn, playlist["id"], [t["playlist_position"] for t in tracks]))
                 self.show_source(self._current_source)
             return
 
@@ -2265,6 +2723,7 @@ class MainWindow(QMainWindow):
 
         ids = {t["id"] for t in tracks}
         self.player.forget_tracks(ids)
+        snapshot = edits.snapshot_tracks(self.conn, list(ids))
         failures = []
         if box.clickedButton() is to_trash:
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -2276,6 +2735,16 @@ class MainWindow(QMainWindow):
             finally:
                 QApplication.restoreOverrideCursor()
         library.delete_tracks(self.conn, list(ids))
+        if box.clickedButton() is keep:
+            # Only the library entries went: Undo can bring them back.
+            self._push_undo(self._edit_label("Delete", tracks),
+                            lambda: edits.restore_tracks(self.conn, snapshot),
+                            lambda: library.delete_tracks(self.conn, list(ids)))
+        else:
+            # Files went to the Trash (or are gone): that can't be undone here,
+            # and earlier steps may refer to these songs.
+            self._undo_stack.clear()
+            self._redo_stack.clear()
         self.show_source(self._current_source)
         if failures:
             self._report_trash_failures(
@@ -2567,6 +3036,9 @@ class MainWindow(QMainWindow):
             self._stop_sync()
         elif key == "add":
             self._stop_adding()
+        elif key == "loudness" and self._loudness_worker is not None:
+            self.lcd.set_stopping("loudness", "Stopping…")
+            self._loudness_worker.stop()
 
     def _stop_sync(self):
         if self._sync_worker is not None:
@@ -2632,6 +3104,12 @@ class MainWindow(QMainWindow):
             if appearance(self.settings)["sync_done_sound"]:
                 from luxtunes.core import sounds
                 sounds.play_done_sound()            # the desktop's "done" sound
+        if getattr(report, "equalizer_from_phone", False):
+            # The phone's equalizer is LuxTunes' now: show and play it.
+            self.eq_settings.copy_from(equalizer.load(self.conn))
+            self.player.apply_equalizer()
+            if self._eq_window is not None:
+                self._eq_window.refresh()
         changes = getattr(report, "phone_playlists", None)
         if changes is not None and (changes.created or changes.updated or changes.deleted):
             parts = [f"{len(v)} {w}" for v, w in ((changes.created, "new"),
@@ -3091,6 +3569,33 @@ class MainWindow(QMainWindow):
             self.reveal_action.setEnabled(find_file(tracks[0].get("location")) is not None)
         self.edit_smart_action.setEnabled(self._current_smart_id() is not None)
         self._update_device_actions()
+
+    # ---- Sleep timer ---------------------------------------------------------------
+
+    def _sleep_timer_dialog(self):
+        """Controls → Sleep Timer…: choose how long; the window shows when it stops."""
+        dialog = SleepTimerDialog(self.sleep_timer.minutes, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.sleep_timer.start(dialog.minutes)
+            self.statusBar().showMessage(
+                f"Sleep timer: the music stops at {clock(self.sleep_timer.end)}.", 5000)
+
+    def _sleep_timer_off(self):
+        if self.sleep_timer.active:
+            self.sleep_timer.stop()
+            self.statusBar().showMessage("Sleep timer turned off.", 4000)
+
+    def _show_sleep_timer(self):
+        timer = self.sleep_timer
+        self.sleep_button.setVisible(timer.active)
+        self.sleep_off_action.setVisible(timer.active)
+        if timer.active:
+            self.sleep_button.setText(f"☾ {left_text(timer.seconds_left())}")
+            self.sleep_button.setToolTip(f"Sleep timer: the music stops at {clock(timer.end)}. "
+                                         "Click to turn it off.")
+            self.sleep_action.setText(f"Sleep Timer… (stops at {clock(timer.end)})")
+        else:
+            self.sleep_action.setText("Sleep Timer…")
 
     def _update_controls_menu(self):
         self.recent_menu.setEnabled(bool(self._recent))
@@ -3852,8 +4357,7 @@ class MainWindow(QMainWindow):
         self._set_repeat(repeat if repeat in (REPEAT_OFF, REPEAT_ALL, REPEAT_ONE) else REPEAT_OFF)
 
         self._refresh_view_icons()
-        mode = s.value("view_mode", "list")
-        self._set_view_mode(mode if mode in VIEW_MODES else "list")
+        self._set_view_mode(self._remembered_view("music"), remember=False)
 
     def closeEvent(self, event):
         if self._sync_worker is not None:
@@ -3902,6 +4406,9 @@ class MainWindow(QMainWindow):
             self._song_lookup.wait(20_000)
         if self._update_worker is not None:
             self._update_worker.wait()       # never stop an update half-installed
+        if self._loudness_worker is not None:
+            self._loudness_worker.stop()
+            self._loudness_worker.wait(15_000)   # finishes the song it's measuring
         for lookup in list(self._lookups.values()):
             lookup.wait(20_000)          # a MusicBrainz lookup gives up within ~15 s
         s = self.settings
@@ -3912,10 +4419,9 @@ class MainWindow(QMainWindow):
         s.setValue("header_album", self._header_states["album"])
         s.setValue("header_version", HEADER_LAYOUT_VERSION)
         s.setValue("songs_split", self.songs_split.saveState())
-        s.setValue("view_mode", self.view_mode)
         equalizer.save(self.conn, self.eq_settings)
         if self._mini_player is not None:
             self._mini_player.restore_requested.disconnect()
             self._mini_player.close()
-        self.player.stop()
+        self.player.shutdown()
         super().closeEvent(event)

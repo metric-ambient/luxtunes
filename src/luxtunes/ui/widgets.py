@@ -619,8 +619,9 @@ class Sidebar(QTreeWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("sidebar")
-        # Songs dragged from the song list can be dropped on normal playlists
-        # and on Up Next. Only those items carry the "drop enabled" flag.
+        # Songs dragged from the song list can be dropped on normal playlists,
+        # Up Next and the Library sections. Only those items carry the "drop
+        # enabled" flag.
         self.setAcceptDrops(True)
         self.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
         self.setDropIndicatorShown(True)
@@ -660,22 +661,27 @@ class Sidebar(QTreeWidget):
         self._section_color = section_color
 
         section = self._section("LIBRARY")
+        # Songs dropped on a section move there (those already in it stay as they are).
         self._item(section, "Music", SOURCE_MUSIC,
-                   themed_icon(["audio-x-generic"], QStyle.StandardPixmap.SP_MediaVolume))
+                   themed_icon(["audio-x-generic"], QStyle.StandardPixmap.SP_MediaVolume),
+                   droppable=True)
         if has_movies:
             self._item(section, "Movies", SOURCE_MOVIES,
-                       themed_icon(["video-x-generic"], QStyle.StandardPixmap.SP_MediaPlay))
+                       themed_icon(["video-x-generic"], QStyle.StandardPixmap.SP_MediaPlay),
+                       droppable=True)
         if has_tv_shows:
             self._item(section, "TV Shows", SOURCE_TV_SHOWS,
-                       themed_icon(["video-display", "computer"], QStyle.StandardPixmap.SP_DesktopIcon))
+                       themed_icon(["video-display", "computer"], QStyle.StandardPixmap.SP_DesktopIcon),
+                       droppable=True)
         if has_podcasts:
             self._item(section, "Podcasts", SOURCE_PODCASTS,
                        themed_icon(["podcast", "application-rss+xml", "network-wireless"],
-                                   QStyle.StandardPixmap.SP_MediaVolume))
+                                   QStyle.StandardPixmap.SP_MediaVolume), droppable=True)
         if has_audiobooks:
             self._item(section, "Audiobooks", SOURCE_AUDIOBOOKS,
                        themed_icon(["accessories-dictionary", "x-office-address-book",
-                                    "x-office-document"], QStyle.StandardPixmap.SP_FileIcon))
+                                    "x-office-document"], QStyle.StandardPixmap.SP_FileIcon),
+                       droppable=True)
 
         section = self._section("QUEUE")
         self._up_next_item = self._item(
