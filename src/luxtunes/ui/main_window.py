@@ -163,6 +163,9 @@ class MainWindow(QMainWindow):
         self._art_mode = "selected"      # or "playing"
         self._art_window: ArtworkWindow | None = None
         self._mini_player: MiniPlayer | None = None
+        self._tag_jobs: list = []                # Get Info edits waiting to go into files
+        self._quiet_tag_ids: set[int] = set()    # retried at startup: problems in the status bar
+        self._tag_worker = None
         self._loudness_worker = None             # Sound Check measuring songs
         # Edit → Cut / Copy / Paste: the songs on LuxTunes' own clipboard.
         self._song_clipboard: dict | None = None
@@ -1422,17 +1425,18 @@ class MainWindow(QMainWindow):
         self._info_changed = self._kind_changed = False
         if len(tracks) == 1:
             if row < 0:                 # e.g. a one-song album in Grid view
-                dialog = InfoDialog(self.conn, tracks, 0, self._apply_info, self,
+                dialog = InfoDialog(self.conn, tracks, 0, self._queue_info, self,
                                     presets=self.eq_settings.names())
             else:                       # Previous/Next walk through the list
-                dialog = InfoDialog(self.conn, self.model.visible_tracks(), row, self._apply_info,
+                dialog = InfoDialog(self.conn, self.model.visible_tracks(), row, self._queue_info,
                                     self, presets=self.eq_settings.names())
         else:
             if not self._confirm_multi_info():
                 return
-            dialog = MultiInfoDialog(self.conn, tracks, self._apply_info, self,
+            dialog = MultiInfoDialog(self.conn, tracks, self._queue_info, self,
                                      presets=self.eq_settings.names())
         dialog.exec()
+        self._start_tag_writes()                 # the files, in the background
         if self._kind_changed:
             self.reload_library()            # moved between Music and Movies
         elif self._info_changed:
@@ -1459,6 +1463,68 @@ class MainWindow(QMainWindow):
         if check.isChecked():
             self.settings.setValue("confirm_multi_info", False)
         return True
+
+    def _queue_info(self, track_id: int, fields: dict, rating, artworks=UNCHANGED) -> None:
+        """Get Info's OK: save the details in the library now; their files are
+        written in the background afterwards (_start_tag_writes), so big files
+        (videos on a USB drive) don't freeze the window. Raises ValueError for
+        a bad value."""
+        if fields:
+            library.update_track_fields(self.conn, track_id, fields)
+            self._kind_changed |= "media_kind" in fields
+        if rating is not None:
+            library.set_rating(self.conn, track_id, rating)
+        self._tag_jobs.append((track_id, artworks))
+        self._after_edit(track_id)
+        self._info_changed = True
+        return None
+
+    def _start_tag_writes(self):
+        if self._tag_worker is not None or not self._tag_jobs:
+            return
+        db_path = self.conn.execute("PRAGMA database_list").fetchone()[2]
+        jobs, self._tag_jobs = self._tag_jobs, []
+        self._tag_run_quiet = all(track_id in self._quiet_tag_ids for track_id, _ in jobs)
+        self._quiet_tag_ids.clear()
+        if not db_path:                          # (an in-memory library: write here)
+            for track_id, artworks in jobs:
+                self._update_file(track_id, artworks)
+                self._after_edit(track_id)
+            return
+        from luxtunes.ui.tag_worker import TagWriteWorker
+        worker = TagWriteWorker(db_path, jobs, self)
+        self._tag_worker = worker
+        worker.progress.connect(lambda done, total, name: self.lcd.update_count(
+            "tags", f"“{name}”", done, total))
+        worker.item_done.connect(self._on_tag_written)
+        worker.done.connect(self._on_tags_done)
+        worker.finished.connect(worker.deleteLater)
+        self.lcd.start_task("tags", "Saving changes", "Writing them into the files…",
+                            "Saving can't be stopped part-way")
+        worker.start()
+
+    def _on_tag_written(self, track_id: int, problem: str):
+        track = library.load_track(self.conn, track_id)
+        ART_CACHE.forget(track and track.get("location"))
+        self._after_edit(track_id)
+
+    def _on_tags_done(self, written: int, problems: list):
+        self._tag_worker = None
+        self._lcd_finished("tags", f"Saved changes into {written:,} file"
+                                   f"{'s' if written != 1 else ''}.")
+        self._refresh_artwork()
+        self._update_summary()
+        if problems and getattr(self, "_tag_run_quiet", False):
+            self.statusBar().showMessage(
+                f"{len(problems):,} file(s) still can't be updated with your earlier edits "
+                "(missing or read-only).", 8000)
+        elif problems:
+            QMessageBox.warning(
+                self, "LuxTunes",
+                "The changes were saved in your library, but some files couldn't be "
+                "updated (LuxTunes tries again next time it starts):\n\n"
+                + "\n".join(problems[:20]) + ("\n…" if len(problems) > 20 else ""))
+        self._start_tag_writes()                 # anything saved meanwhile
 
     def _apply_info(self, track_id: int, fields: dict, rating, artworks=UNCHANGED) -> str | None:
         """Save one song's Get Info changes, then write them into its file.
@@ -1804,12 +1870,13 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "Organize Library", message)
 
     def _write_pending_tags(self):
-        written, failed = tag_sync.write_all_pending(self.conn)
-        if written or failed:
-            message = f"Updated {written} file(s) with your earlier edits."
-            if failed:
-                message += f" {failed} file(s) still can't be updated (missing or read-only)."
-            self.statusBar().showMessage(message, 8000)
+        """Edits whose files couldn't be written last time (or were still being
+        written when LuxTunes closed): try again, in the background."""
+        pending = library.tracks_with_pending_tags(self.conn)
+        if pending:
+            self._quiet_tag_ids.update(pending)     # retries: a note, not a warning
+            self._tag_jobs.extend((track_id, UNCHANGED) for track_id in pending)
+            self._start_tag_writes()
 
     def _on_bookmark(self, track: dict, position: int):
         library.save_bookmark(self.conn, track["id"], position)
@@ -2261,22 +2328,11 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
             return
-        problems = []
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            for track in tracks:
-                error = self._apply_info(track["id"], {}, None, [images[0]])
-                if error:
-                    problems.append(f"{track.get('name') or track['id']}: {error}")
-        finally:
-            QApplication.restoreOverrideCursor()
-        self._refresh_artwork()         # (the list and Grid refresh after each edit)
+        for track in tracks:                     # written into the files in the background
+            self._queue_info(track["id"], {}, None, [images[0]])
+        self._start_tag_writes()
         self.statusBar().showMessage(
-            f"Artwork pasted into {len(tracks) - len(problems):,} "
-            f"song{'s' if len(tracks) - len(problems) != 1 else ''}.", 6000)
-        if problems:
-            QMessageBox.warning(self, "Paste Artwork", "Some songs couldn't be changed:\n\n"
-                                + "\n".join(problems[:20]))
+            f"Pasting artwork into {len(tracks):,} song{'s' if len(tracks) != 1 else ''}…", 6000)
 
     def _rating_menu(self, parent, tracks) -> QMenu:
         menu = QMenu("Rating", parent)
@@ -4409,6 +4465,10 @@ class MainWindow(QMainWindow):
             self._song_lookup.wait(20_000)
         if self._update_worker is not None:
             self._update_worker.wait()       # never stop an update half-installed
+        if self._tag_worker is not None:
+            self.statusBar().showMessage("Finishing writing your changes into the files…")
+            QApplication.processEvents()
+            self._tag_worker.wait()              # never stop half-way through a file
         if self._loudness_worker is not None:
             self._loudness_worker.stop()
             self._loudness_worker.wait(15_000)   # finishes the song it's measuring
