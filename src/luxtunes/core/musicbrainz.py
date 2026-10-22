@@ -17,17 +17,16 @@ No Qt in here.
 
 from __future__ import annotations
 
-import json
 import re
 import threading
 import time
 import unicodedata
-import urllib.error
 import urllib.parse
 from dataclasses import dataclass, field
 
-from luxtunes.core.cd import (CdError, NotApproved, VARIOUS_ARTISTS, _credit, _get,
-                              _top_genre, cover_art)
+from luxtunes.core import net
+from luxtunes.core.cd import (CdError, Offline, VARIOUS_ARTISTS, _credit, _get, _top_genre,
+                              cover_art, musicbrainz_json)
 
 API = "https://musicbrainz.org/ws/2/"
 REQUEST_GAP = 1.1                      # seconds between requests (MusicBrainz's limit)
@@ -85,14 +84,7 @@ class _Client:
             time.sleep(wait)
         self._last = time.monotonic()
         url = API + path + "?" + urllib.parse.urlencode({**params, "fmt": "json"})
-        try:
-            return json.loads(_get(url))
-        except urllib.error.HTTPError as error:
-            if error.code == 404:
-                return {}
-            raise CdError(f"MusicBrainz answered {error.code}.") from error
-        except (urllib.error.URLError, OSError, ValueError) as error:
-            raise CdError(f"Couldn't reach MusicBrainz ({getattr(error, 'reason', error)}).") from error
+        return musicbrainz_json(_get, url)
 
 
 # ---- Matching -----------------------------------------------------------------------
@@ -257,8 +249,7 @@ def propose_album(release: dict, songs: list[dict]) -> AlbumProposal:
 def lookup_songs(tracks: list[dict], *, approved: bool, artwork: bool = True, progress=None,
                  stop: threading.Event | None = None) -> LookupResult:
     """Proposals for these songs. progress(done, total, text) is called as it goes."""
-    if approved is not True:
-        raise NotApproved("Looking up track info online needs your OK first.")
+    net.require(approved, "Looking up track info online")
     client = _Client()
     albums, loose = group_by_album(tracks)
     result = LookupResult()
@@ -296,7 +287,7 @@ def lookup_songs(tracks: list[dict], *, approved: bool, artwork: bool = True, pr
                 result.not_found.extend(proposal.unmatched)
         except CdError as error:
             result.problems.append(f"{album}: {error}")
-            if "reach" in str(error):
+            if isinstance(error, Offline):
                 return result               # offline: no point trying the rest
         done += 1
 
@@ -313,7 +304,7 @@ def lookup_songs(tracks: list[dict], *, approved: bool, artwork: bool = True, pr
                 result.albums.append(proposal)
         except CdError as error:
             result.problems.append(f"{song.get('name')}: {error}")
-            if "reach" in str(error):
+            if isinstance(error, Offline):
                 return result
         done += 1
     report("Done")

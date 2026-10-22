@@ -377,13 +377,6 @@ class NowPlayingDisplay(QFrame):
         """The key of the task on show, or None while Now Playing shows."""
         return self._shown
 
-    @property
-    def task_active(self) -> bool:
-        return bool(self._tasks)
-
-    def task_keys(self) -> list[str]:
-        return list(self._tasks)
-
     def start_task(self, key: str, title: str, detail: str, stop_tip: str):
         """A background task starts (or starts again): show it."""
         timer = self._end_timers.pop(key, None)

@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from luxtunes.core.db import get_setting, set_setting
+
 BANDS = (32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000)      # Hz
 BAND_LABELS = ("32", "64", "125", "250", "500", "1K", "2K", "4K", "8K", "16K")
 LIMIT = 12.0               # dB, either way
@@ -192,14 +194,11 @@ class Settings:
 
 
 def load(conn) -> Settings:
-    row = conn.execute("SELECT value FROM library_info WHERE key = 'equalizer'").fetchone()
-    return Settings.from_json(row[0] if row else None)
+    return Settings.from_json(get_setting(conn, "equalizer"))
 
 
 def save(conn, settings: Settings) -> None:
-    with conn:
-        conn.execute("INSERT INTO library_info (key, value) VALUES ('equalizer', ?) "
-                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (settings.to_json(),))
+    set_setting(conn, "equalizer", settings.to_json())
 
 
 def has_saved(conn) -> bool:

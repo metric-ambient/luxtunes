@@ -198,8 +198,6 @@ def _load():
     fn("itdb_write", gboolean, PDB, PERR)
     fn("itdb_set_mountpoint", None, PDB, c_char_p)
     fn("itdb_init_ipod", gboolean, c_char_p, c_char_p, c_char_p, PERR)
-    fn("itdb_start_sync", gboolean, PDB)
-    fn("itdb_stop_sync", gboolean, PDB)
     fn("itdb_track_new", PTR)
     fn("itdb_track_add", None, PDB, PTR, c_int32)
     fn("itdb_track_remove", None, PTR)
@@ -416,12 +414,6 @@ class Database:
 
     def remove_from_playlist(self, playlist, track) -> None:
         _lib.itdb_playlist_remove_track(playlist, track)
-
-    def start_sync(self):
-        _lib.itdb_start_sync(self.db)
-
-    def stop_sync(self):
-        _lib.itdb_stop_sync(self.db)
 
     def write(self) -> None:
         error = POINTER(GError)()

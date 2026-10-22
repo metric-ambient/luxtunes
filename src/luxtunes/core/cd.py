@@ -34,12 +34,12 @@ import threading
 import time
 import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from luxtunes import __version__
-from luxtunes.core import add_files, encoders, organize
+from luxtunes.core import add_files, encoders, net, organize
+from luxtunes.core.db import get_setting, set_setting
+from luxtunes.core.net import NotApproved
 from luxtunes.core.tags import UNCHANGED, write_tags
 
 # ---- linux/cdrom.h -----------------------------------------------------------------
@@ -64,7 +64,6 @@ DATA_GAP = 11400                           # between the audio and a CD-Extra da
 BYTES_PER_SECOND = SECTOR_BYTES * SECTORS_PER_SECOND
 
 VARIOUS_ARTISTS = "89ad4ac3-39f7-470e-963a-56509c546377"     # MusicBrainz's "Various Artists"
-USER_AGENT = f"LuxTunes/{__version__} (Linux music player)"
 MUSICBRAINZ = "https://musicbrainz.org/ws/2/discid/"
 COVER_ART = "https://coverartarchive.org/"
 
@@ -78,6 +77,10 @@ class CdError(Exception):
     """The drive couldn't be read, ripping failed, ..."""
 
 
+class Offline(CdError):
+    """MusicBrainz couldn't be reached at all (no point asking it again now)."""
+
+
 class ImportStopped(Exception):
     """You pressed stop; the half-written file was removed."""
 
@@ -86,28 +89,22 @@ class ImportStopped(Exception):
 
 def insert_action(conn: sqlite3.Connection) -> str:
     """Preferences → General → "When you insert a CD" (default: ask)."""
-    row = conn.execute("SELECT value FROM library_info WHERE key = ?", (KEY_INSERT_ACTION,)).fetchone()
-    return row[0] if row and row[0] in dict(INSERT_ACTIONS) else "ask"
+    action = get_setting(conn, KEY_INSERT_ACTION)
+    return action if action in dict(INSERT_ACTIONS) else "ask"
 
 
 def set_insert_action(conn: sqlite3.Connection, action: str) -> None:
-    with conn:
-        conn.execute("INSERT INTO library_info (key, value) VALUES (?, ?) "
-                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (KEY_INSERT_ACTION, action))
+    set_setting(conn, KEY_INSERT_ACTION, action)
 
 
 def ask_lookup(conn: sqlite3.Connection) -> bool:
     """Ask to look up a newly found CD's names online? (Preferences → General;
     "Don't ask again" in the question turns it off.) Default: yes."""
-    row = conn.execute("SELECT value FROM library_info WHERE key = ?", (KEY_ASK_LOOKUP,)).fetchone()
-    return not (row and row[0] == "0")
+    return get_setting(conn, KEY_ASK_LOOKUP) != "0"
 
 
 def set_ask_lookup(conn: sqlite3.Connection, ask: bool) -> None:
-    with conn:
-        conn.execute("INSERT INTO library_info (key, value) VALUES (?, ?) "
-                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                     (KEY_ASK_LOOKUP, "1" if ask else "0"))
+    set_setting(conn, KEY_ASK_LOOKUP, "1" if ask else "0")
 
 
 def cdparanoia_path() -> str | None:
@@ -334,10 +331,20 @@ def eject(device: str) -> str | None:
 # ---- Looking up names --------------------------------------------------------------
 
 def _get(url: str, timeout: float = 15) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT,
-                                                   "Accept": "application/json"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read()
+    return net.get(url, timeout=timeout)
+
+
+def musicbrainz_json(get, url: str) -> dict:
+    """MusicBrainz's answer from get(url); {} if it doesn't know it. Raises
+    Offline if it can't be reached, CdError for any other problem."""
+    try:
+        return json.loads(get(url))
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return {}
+        raise CdError(f"MusicBrainz answered {error.code}.") from error
+    except (urllib.error.URLError, OSError, ValueError) as error:
+        raise Offline(f"Couldn't reach MusicBrainz ({getattr(error, 'reason', error)}).") from error
 
 
 def _credit(credits: list | None) -> str:
@@ -400,29 +407,17 @@ def apply_release(disc: Disc, data: dict) -> bool:
     return True
 
 
-class NotApproved(Exception):
-    """Something needed the internet before you said it could."""
-
-
 def lookup(disc: Disc, *, approved: bool, artwork: bool = True) -> Disc:
     """Fill in names from MusicBrainz (and the cover from the Cover Art
     Archive). Only with approved=True: the window asks you first, every time.
     Raises CdError if the internet or the database can't be reached; an
     unknown disc just keeps "Track 01"..."""
-    if approved is not True:
-        raise NotApproved("Looking up CD track names online needs your OK first.")
+    net.require(approved, "Looking up CD track names online")
     query = urllib.parse.urlencode({"toc": disc.toc.toc_param(), "cdstubs": "no",
                                     "inc": "recordings artist-credits genres release-groups",
                                     "fmt": "json"})
     url = MUSICBRAINZ + disc.toc.disc_id() + "?" + query
-    try:
-        data = json.loads(_get(url))
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return disc                       # not in the database
-        raise CdError(f"MusicBrainz answered {error.code}.") from error
-    except (urllib.error.URLError, OSError, ValueError) as error:
-        raise CdError(f"Couldn't reach MusicBrainz ({getattr(error, 'reason', error)}).") from error
+    data = musicbrainz_json(_get, url)       # {}: not in the database
     if apply_release(disc, data) and artwork:
         disc.artwork = cover_art(disc.release_id, disc.release_group_id, approved=True)
     return disc
@@ -430,14 +425,13 @@ def lookup(disc: Disc, *, approved: bool, artwork: bool = True) -> Disc:
 
 def cover_art(release_id: str, release_group_id: str = "", *, approved: bool) -> bytes | None:
     """The front cover (500 px), or None. Only with approved=True (it's online)."""
-    if approved is not True:
-        raise NotApproved("Downloading album artwork needs your OK first.")
+    net.require(approved, "Downloading album artwork")
     for kind, mbid in (("release", release_id), ("release-group", release_group_id)):
         if not mbid:
             continue
         try:
             data = _get(f"{COVER_ART}{kind}/{mbid}/front-500", timeout=20)
-        except (urllib.error.URLError, OSError):
+        except (urllib.error.URLError, OSError, ValueError):
             continue
         if data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n":
             return data

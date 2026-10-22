@@ -17,11 +17,17 @@ from luxtunes.core import db
 
 
 def server_name(db_path: str | None) -> str:
-    """One name per user and library file."""
+    """One name per user and library file. In the user's private runtime folder
+    ($XDG_RUNTIME_DIR, only they can open it) when there is one, rather than
+    the shared /tmp, where another account could take the name first."""
     from luxtunes.core import db as library_db
     import hashlib
     path = os.path.abspath(os.path.expanduser(str(db_path or library_db.default_db_path())))
-    return f"luxtunes-{os.getuid()}-{hashlib.sha1(path.encode()).hexdigest()[:10]}"
+    name = f"luxtunes-{os.getuid()}-{hashlib.sha1(path.encode()).hexdigest()[:10]}"
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime and os.path.isdir(runtime) and os.stat(runtime).st_uid == os.getuid():
+        return os.path.join(runtime, name)
+    return name
 
 
 def tell_running_copy(name: str) -> bool:
@@ -42,6 +48,7 @@ def listen_for_others(name: str, window):
     from PySide6.QtNetwork import QLocalServer
     QLocalServer.removeServer(name)          # left over if LuxTunes ever crashed
     server = QLocalServer(window)
+    server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)   # only this user
     server.listen(name)
 
     def on_connection():

@@ -6,6 +6,11 @@ import os
 from pathlib import Path
 
 
+def data_home() -> Path:
+    """~/.local/share, or $XDG_DATA_HOME: where LuxTunes keeps its own files."""
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+
+
 def resolve_case_insensitive(path: Path) -> Path:
     """Find `path` on disk even if folder/file capitalisation differs.
 

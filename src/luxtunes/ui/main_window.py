@@ -4183,8 +4183,11 @@ class MainWindow(QMainWindow):
                           f"LuxTunes {release.version} is available. You have {__version__}.",
                           parent=self)
         size = f"{asset.size / 1024 / 1024:.1f} MB" if asset.size else "the new version"
-        box.setInformativeText(f"Installing downloads {size} from GitHub. The new version "
-                               "starts the next time LuxTunes opens.")
+        box.setInformativeText(f"Installing downloads {size} from GitHub"
+                               + (" (and, if the new version needs them, newer libraries it "
+                                  "uses from PyPI, the Python package index)"
+                                  if updater.kind() == "installed" else "")
+                               + ". The new version starts the next time LuxTunes opens.")
         if notes:
             box.setDetailedText(notes)
         install = box.addButton("Install Update", QMessageBox.ButtonRole.AcceptRole)

@@ -12,13 +12,11 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from luxtunes.core.paths import data_home as _data_home
+
 RESOURCES = Path(__file__).resolve().parent.parent / "resources"
 ICON_SIZES = (16, 24, 32, 48, 64, 128, 256, 512)
 MARKER = "X-LuxTunes-AppImage=true"
-
-
-def _data_home() -> Path:
-    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
 
 
 def home_appimage() -> Path:

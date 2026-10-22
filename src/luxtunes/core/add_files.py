@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from luxtunes.core import library, organize
-from luxtunes.core.db import new_persistent_id
+from luxtunes.core.db import get_setting, new_persistent_id, set_setting
 from luxtunes.core.tags import TagError, read_fields
 
 log = logging.getLogger(__name__)
@@ -36,15 +36,11 @@ KEY_COPY = "copy_when_adding"
 
 
 def copy_when_adding(conn: sqlite3.Connection) -> bool:
-    row = conn.execute("SELECT value FROM library_info WHERE key = ?", (KEY_COPY,)).fetchone()
-    return not row or row[0] != "0"
+    return get_setting(conn, KEY_COPY) != "0"
 
 
 def set_copy_when_adding(conn: sqlite3.Connection, on: bool) -> None:
-    with conn:
-        conn.execute("INSERT INTO library_info (key, value) VALUES (?, ?) "
-                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                     (KEY_COPY, "1" if on else "0"))
+    set_setting(conn, KEY_COPY, "1" if on else "0")
 
 
 @dataclass

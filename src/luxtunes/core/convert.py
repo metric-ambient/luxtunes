@@ -29,6 +29,7 @@ import sqlite3
 from pathlib import Path
 
 from luxtunes.core import add_files, library, organize
+from luxtunes.core.db import get_setting, set_setting
 from luxtunes.core.tags import TAG_FIELDS, TagError, read_details, write_tags
 
 KEY_DELETE_ORIGINAL = "delete_original_after_conversion"
@@ -38,16 +39,11 @@ MP3_MAX_SAMPLE_RATE = 48000        # MP3 can't go higher; 88.2/96 kHz FLACs beco
 
 def delete_original(conn: sqlite3.Connection) -> bool:
     """Preferences → Advanced → Delete original after conversion (off unless turned on)."""
-    row = conn.execute("SELECT value FROM library_info WHERE key = ?",
-                       (KEY_DELETE_ORIGINAL,)).fetchone()
-    return bool(row) and row[0] == "1"
+    return get_setting(conn, KEY_DELETE_ORIGINAL) == "1"
 
 
 def set_delete_original(conn: sqlite3.Connection, on: bool) -> None:
-    with conn:
-        conn.execute("INSERT INTO library_info (key, value) VALUES (?, ?) "
-                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                     (KEY_DELETE_ORIGINAL, "1" if on else "0"))
+    set_setting(conn, KEY_DELETE_ORIGINAL, "1" if on else "0")
 
 
 # What the converted copy takes over from the original it replaces.
