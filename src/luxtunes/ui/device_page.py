@@ -715,11 +715,12 @@ class DevicePage(QWidget):
         column.addLayout(top)
 
         frame, inner = box()
-        self.music_all = QRadioButton("Entire music library")
+        self.music_all = QRadioButton("Entire music library and all playlists")
+        self.music_library_lists = QRadioButton("Entire music library and selected playlists")
         self.music_selected = QRadioButton("Selected playlists, artists, albums, and genres")
         self.music_videos = QCheckBox("Include music videos")
         self.autofill = QCheckBox("Automatically fill free space with songs")
-        for widget in (self.music_all, self.music_selected):
+        for widget in (self.music_all, self.music_library_lists, self.music_selected):
             inner.addWidget(widget)
         inner.addSpacing(8)
         inner.addWidget(self.music_videos)
@@ -731,17 +732,20 @@ class DevicePage(QWidget):
         grid.setContentsMargins(0, 10, 0, 0)
         self.playlist_list, self.artist_list = checklist(), checklist()
         self.genre_list, self.album_list = checklist(), checklist()
+        self._music_list_titles = {}
         for i, (title, widget) in enumerate((("Playlists", self.playlist_list),
                                              ("Artists", self.artist_list),
                                              ("Genres", self.genre_list),
                                              ("Albums", self.album_list))):
-            grid.addWidget(heading(title, 1.3), (i // 2) * 2, i % 2)
+            label = heading(title, 1.3)
+            self._music_list_titles[widget] = label
+            grid.addWidget(label, (i // 2) * 2, i % 2)
             grid.addWidget(widget, (i // 2) * 2 + 1, i % 2)
             widget.itemChanged.connect(self._changed)
         column.addWidget(self.music_lists)
         column.addStretch(1)
-        for widget in (self.sync_music, self.music_all, self.music_selected, self.music_videos,
-                       self.autofill):
+        for widget in (self.sync_music, self.music_all, self.music_library_lists,
+                       self.music_selected, self.music_videos, self.autofill):
             widget.toggled.connect(self._changed)
         return page
 
@@ -1144,7 +1148,8 @@ class DevicePage(QWidget):
         self.disk_use.setChecked(s.disk_use)
         self.delete_unselected.setChecked(s.android_delete_unselected)
         self.sync_music.setChecked(s.sync_music)
-        (self.music_all if s.music_mode == "all" else self.music_selected).setChecked(True)
+        {"library_playlists": self.music_library_lists,
+         "selected": self.music_selected}.get(s.music_mode, self.music_all).setChecked(True)
         self.music_videos.setChecked(s.include_music_videos)
         self.autofill.setChecked(s.autofill)
         self.sync_movies.setChecked(s.sync_movies)
@@ -1175,7 +1180,8 @@ class DevicePage(QWidget):
         if self.is_android:
             s.android_delete_unselected = self.delete_unselected.isChecked()
         s.sync_music = self.sync_music.isChecked()
-        s.music_mode = "all" if self.music_all.isChecked() else "selected"
+        s.music_mode = ("library_playlists" if self.music_library_lists.isChecked()
+                        else "selected" if self.music_selected.isChecked() else "all")
         s.include_music_videos = self.music_videos.isChecked()
         s.autofill = self.autofill.isChecked()
         s.playlists = checked_keys(self.playlist_list)
@@ -1209,10 +1215,15 @@ class DevicePage(QWidget):
         s = self.settings
         self.convert_kbps.setEnabled(s.convert)
         music_on = s.sync_music and not s.manual
-        for widget in (self.music_all, self.music_selected, self.music_videos, self.autofill):
+        for widget in (self.music_all, self.music_library_lists, self.music_selected,
+                       self.music_videos, self.autofill):
             widget.setEnabled(music_on)
         self.autofill.setVisible(s.music_mode == "selected")
-        self.music_lists.setVisible(s.music_mode == "selected")
+        # "…and selected playlists" shows just the playlists to tick.
+        self.music_lists.setVisible(s.music_mode != "all")
+        for widget in (self.artist_list, self.genre_list, self.album_list):
+            widget.setVisible(s.music_mode == "selected")
+            self._music_list_titles[widget].setVisible(s.music_mode == "selected")
         self.music_lists.setEnabled(music_on)
         movies_on = s.sync_movies and not s.manual
         self.movies_auto.setEnabled(movies_on)

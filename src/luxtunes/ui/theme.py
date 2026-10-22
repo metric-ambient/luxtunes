@@ -94,6 +94,14 @@ QToolButton#transport {
     min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px;
 }
 QToolButton#transport:pressed { background: $button_bottom; }
+QToolButton#sleepButton {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 $button_top, stop:1 $button_bottom);
+    border: 1px solid $button_border;
+    border-radius: 11px;
+    padding: 2px 8px;
+    color: $text;
+}
+QToolButton#sleepButton:hover { border-color: $highlight; }
 QToolButton#playButton {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 $button_top, stop:1 $button_bottom);
     border: 1px solid $button_border;
@@ -335,7 +343,15 @@ QFrame#artControls {
     border-radius: 9px;
 }
 QFrame#artControls QLabel { color: $text; background: transparent; }
-QToolButton#overlayButton { border: none; padding: 4px; }
+QToolButton#overlayButton { border: none; padding: 4px; color: $text; }
+QToolButton#overlayButton:checked { background: $highlight; color: $highlight_text; border-radius: 4px; }
+QTextBrowser#artLyrics {
+    background: rgba(0, 0, 0, 175);
+    color: #f2f2f2;
+    border: none;
+    padding: 28px 36px 110px 36px;
+    font-size: 15pt;
+}
 QToolButton#overlayButton:hover { background: $overlay_border; border-radius: 4px; }
 
 QStatusBar { background: $toolbar_bottom; color: $text; border-top: 1px solid $border; }

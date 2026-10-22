@@ -7,7 +7,7 @@ deleted presets are announced too, so songs using them can follow.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel,
     QListWidget, QMessageBox, QPushButton, QSlider, QVBoxLayout, QWidget,
@@ -45,7 +45,7 @@ class BandSlider(QWidget):
         self.slider.valueChanged.connect(self._changed)
         self.value_label = QLabel("0")
         self.value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.value_label.setMinimumWidth(34)
+        self.value_label.setFixedWidth(40)          # no re-layout as the number changes
         name_label = QLabel(name)
         name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout = QVBoxLayout(self)
@@ -86,6 +86,12 @@ class EqualizerWindow(QDialog):
         super().__init__(parent)
         self.settings = settings
         self.setWindowTitle("Equalizer")
+        # While a slider is dragged, the sound follows at most ~30 times a
+        # second instead of at every step.
+        self._change_timer = QTimer(self)
+        self._change_timer.setSingleShot(True)
+        self._change_timer.setInterval(33)
+        self._change_timer.timeout.connect(self.changed)
         self.setWindowFlag(Qt.WindowType.Tool)
 
         self.on = QCheckBox("On")
@@ -176,8 +182,10 @@ class EqualizerWindow(QDialog):
 
     def _moved(self) -> None:
         self.settings.set_manual([b.value() for b in self.bands], self.preamp.value())
-        self.presets.setCurrentIndex(self.presets.findData(equalizer.MANUAL))
-        self.changed.emit()
+        if self.presets.currentData() != equalizer.MANUAL:
+            self.presets.setCurrentIndex(self.presets.findData(equalizer.MANUAL))
+        if not self._change_timer.isActive():
+            self._change_timer.start()
 
     def _picked(self, index: int) -> None:
         choice = self.presets.itemData(index)

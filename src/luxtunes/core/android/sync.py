@@ -217,6 +217,20 @@ def _log_phone_changes(conn, root: Path, merged) -> None:
              "matches" if same else f"{merged.library_id!r} doesn't match {library_id(conn)!r}")
 
 
+def _apply_phone_equalizer(conn, merged, report) -> None:
+    """The equalizer as changed on the phone becomes LuxTunes' (the phone's
+    change wins: it's the newer one in practice)."""
+    if merged.equalizer is None:
+        return
+    if merged.library_id != library_id(conn):
+        report.problems.append("Equalizer changes on the phone were made for a different "
+                               "LuxTunes library, so they weren't applied.")
+        return
+    if phone_changes.apply_equalizer(conn, merged):
+        report.equalizer_from_phone = True
+        log.info("equalizer taken from the phone (%d presets)", len(merged.equalizer.presets))
+
+
 def _apply_phone_playlists(conn, root: Path, merged, manifest: dict, record, report,
                            confirm_playlists) -> None:
     """Playlists made, changed or deleted on the phone (format v2)."""
@@ -316,7 +330,9 @@ TRACK_COLUMNS = (
     # v2: everything else a smart playlist rule can test (smart.FIELDS)
     "bpm", "kind", "date_modified", "purchased",
     # LuxTunes 0.7.0: the song's own equalizer preset (a name in equalizer_presets)
-    "equalizer")
+    "equalizer",
+    # LuxTunes 0.8.0: Sound Check's loudness correction in dB (NULL: not known yet)
+    "loudness")
 
 # The equalizer's bands as equalizer_presets columns.
 EQ_COLUMNS = ("band_32", "band_64", "band_125", "band_250", "band_500", "band_1k", "band_2k",
@@ -342,9 +358,12 @@ def _write_equalizer(out, conn) -> None:
     the Manual values, position NULL) in equalizer_presets."""
     from luxtunes.core import equalizer
     settings = equalizer.load(conn)
+    # equalizer_from_phone: this LuxTunes takes the phone's equalizer changes
+    # (changes.json "equalizer"), so the phone can drop its own copy.
     out.executemany("INSERT INTO info VALUES (?, ?)",
                     [("equalizer_on", "1" if settings.on else "0"),
-                     ("equalizer_preset", settings.current.name)])
+                     ("equalizer_preset", settings.current.name),
+                     ("equalizer_from_phone", "1")])
     rows = [(p.name, i, p.preamp, *p.bands) for i, p in enumerate(settings.presets)]
     rows.append((equalizer.MANUAL, None, settings.manual.preamp, *settings.manual.bands))
     marks = ", ".join("?" for _ in range(3 + len(EQ_COLUMNS)))
@@ -489,6 +508,7 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
     log.info("from the phone: %d plays, %d skips, %d ratings added to the library",
              report.stats.plays, report.stats.skips, report.stats.ratings)
     _apply_phone_playlists(conn, root, merged, manifest, record, report, confirm_playlists)
+    _apply_phone_equalizer(conn, merged, report)
     _empty_changes(root, merged)
 
     # 2. What should be there.

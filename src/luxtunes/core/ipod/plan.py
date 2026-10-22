@@ -237,17 +237,18 @@ def build_plan(conn: sqlite3.Connection, settings: SyncSettings,
     wanted: dict[int, dict] = {}
     playlists = syncable_playlists(conn)
     if settings.sync_music:
-        if settings.music_mode == "all":
+        if settings.music_mode in ("all", "library_playlists"):
             for t in music:
                 wanted[t["id"]] = t
+        if settings.music_mode == "all":
             chosen_lists = playlists
-        else:
+        else:                       # only the ticked playlists (the others stay off)
             chosen = set(settings.playlists)
             chosen_lists = [p for p in playlists if p["persistent_id"] in chosen]
-        # Everything in a chosen playlist goes, whether or not its artist, album
+        # Everything in a ticked playlist goes, whether or not its artist, album
         # or genre is chosen, and whatever it is (videos, podcasts, books too),
-        # so choosing just the playlists you listen to is enough. ("All songs"
-        # already has every song; its playlists don't bring videos along.)
+        # so choosing just the playlists you listen to is enough. ("Entire music
+        # library and all playlists" doesn't bring videos along with playlists.)
         kinds = (music,) if settings.music_mode == "all" else \
             (music, movies, episodes, podcasts, books)
         allowed = {t["id"]: t for kind in kinds for t in kind}
@@ -255,7 +256,7 @@ def build_plan(conn: sqlite3.Connection, settings: SyncSettings,
             for track_id in library.playlist_track_ids(conn, p["id"]):
                 if track_id in allowed:
                     wanted[track_id] = allowed[track_id]
-        if settings.music_mode != "all":
+        if settings.music_mode == "selected":
             artists, albums, genres = set(settings.artists), set(settings.albums), set(settings.genres)
             for t in music:
                 if artist_of(t) in artists or album_key(t) in albums or t.get("genre") in genres:

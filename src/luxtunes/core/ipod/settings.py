@@ -37,7 +37,10 @@ class SyncSettings:
     disk_use: bool = False              # "Enable disk use"
     # Music tab
     sync_music: bool = True
-    music_mode: str = "all"             # "all" (entire library) or "selected"
+    # "all": entire library and all playlists; "library_playlists": entire
+    # library and the playlists ticked in `playlists`; "selected": the ticked
+    # playlists, artists, albums and genres.
+    music_mode: str = "all"
     include_music_videos: bool = True
     autofill: bool = False              # "Automatically fill free space with songs"
     playlists: list = field(default_factory=list)   # persistent ids

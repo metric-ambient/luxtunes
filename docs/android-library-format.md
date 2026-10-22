@@ -44,7 +44,7 @@ lacked the smart playlist rules, the extra song details and the reference tables
 
 | Table | Columns |
 |---|---|
-| `info` | `key`, `value`: `format_version` (now `2`), `library_id`, `library_name`, `luxtunes_version`, `synced_at`, `equalizer_on`, `equalizer_preset` |
+| `info` | `key`, `value`: `format_version` (now `2`), `library_id`, `library_name`, `luxtunes_version`, `synced_at`, `equalizer_on`, `equalizer_preset`, `equalizer_from_phone` |
 | `tracks` | `id`, `path`, `artwork`, then the song details below |
 | `playlists` | `id`, `name`, `is_smart`, `position` (sidebar order), `file` (its .m3u8, relative to `LuxTunes`), `smart_info`, `smart_criteria` |
 | `playlist_items` | `playlist_id`, `position`, `track_id` |
@@ -88,7 +88,9 @@ Added in LuxTunes 0.7.0, within format version 2 (only new columns, a new table 
 - `tracks.equalizer` is a song's own preset name (empty: none). While the equalizer is
   on, a song's own preset is used instead of the chosen one. A name with no row in
   `equalizer_presets` (the preset was deleted) counts as none.
-- The phone doesn't send equalizer changes back.
+- `info.equalizer_from_phone` is `1` from LuxTunes 0.8.0 on: this LuxTunes takes the
+  phone's equalizer changes (below), so a player can drop its own copy once this file
+  arrives.
 
 ### Song details
 
@@ -100,7 +102,8 @@ per star), `rating_computed` (1 if the rating is the album's, not set for this s
 `play_count`, `play_date`, `skip_count`, `skip_date`, `date_added`, `date_modified`,
 `compilation`, `comments`, `lyrics`, `bookmarkable`, `bookmark_time` (milliseconds),
 `skip_when_shuffling`, `start_time`, `stop_time`, `volume_adjustment` (−100 to +100, a
-percentage of the playing volume), `equalizer`, `show`, `season`,
+percentage of the playing volume), `equalizer`, `loudness` (Sound Check's correction in
+dB for a −18 LUFS target, at most +6; NULL when not known yet), `show`, `season`,
 `episode_number`, the `sort_*` names, `enabled`, `bpm`, `kind` (e.g. "MPEG audio file")
 and `purchased`. That's every detail a smart playlist rule can test. Dates are UTC,
 written as `YYYY-MM-DDTHH:MM:SSZ`.
@@ -128,6 +131,15 @@ A player on the device writes what happened since the last sync. Version 2:
 ```
 
 Version 1 files (just `version` and `tracks`) are still read the same way.
+
+An optional `"equalizer"` key (LuxTunes 0.8.0 and newer) carries the equalizer as changed
+on the phone: `{"on", "preset", "manual": {"preamp", "bands"}, "presets": [{"name",
+"preamp", "bands"}, ...]}`, with `presets` the phone's whole list in menu order. For the
+same `library_id`, LuxTunes makes its equalizer exactly that (presets the list no longer
+has are removed, and songs using them lose their own preset); the phone's change wins
+over one made on the computer since the last sync. An `"equalizer"` that can't be read
+is reported in the sync's problems and changes nothing. It's removed from the file once
+taken, unless the phone wrote a newer one meanwhile.
 
 ### tracks
 

@@ -137,6 +137,21 @@ def test_selected_and_checked_only(tmp_path):
     assert [label for _, label in choices.albums] == ["Band - Alpha", "Other - Beta"]
 
 
+def test_entire_library_with_only_the_ticked_playlists(tmp_path):
+    conn, ids = library_with_files(tmp_path)
+    other = library.create_playlist(conn, "Other List")
+    library.add_to_playlist(conn, other, [ids["A2"]])
+    lists = {p["name"]: p["persistent_id"] for p in plan.syncable_playlists(conn)}
+    s = settings.SyncSettings(music_mode="library_playlists", playlists=[lists["Mix"]],
+                              sync_movies=False)
+    p = plan.build_plan(conn, s)
+    assert p.track_ids == {ids["A1"], ids["A2"], ids["B1"]}          # every song
+    assert [x["name"] for x in p.playlists] == ["Mix"]               # but only Mix
+    s.playlists = []
+    assert plan.build_plan(conn, s).playlists == []
+    assert settings.SyncSettings().music_mode == "all"                # the default
+
+
 def test_autofill(tmp_path):
     conn, ids = library_with_files(tmp_path)
     s = settings.SyncSettings(music_mode="selected", genres=["Pop"], autofill=True, sync_movies=False)

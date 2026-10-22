@@ -25,12 +25,25 @@ pyinstaller --noconfirm --clean --name luxtunes \
     --collect-submodules luxtunes --collect-data luxtunes \
     "$HERE/launcher.py"
 
-# Qt 6 needs libxcb-cursor on X11; Mint doesn't always have it, so bring it along.
+# Qt 6 needs libxcb-cursor on X11 and many systems don't have it, so bring it
+# along: next to Qt's own libraries, where Qt's xcb plugin looks first. The
+# build stops if it can't be found, so a release never ships without it.
 BUNDLE="$WORK/dist/luxtunes"
 CURSOR="$(ldconfig -p | awk '/libxcb-cursor\.so\.0 / && /x86-64/ {print $NF; exit}')"
-if [ -n "$CURSOR" ] && [ ! -e "$BUNDLE/_internal/libxcb-cursor.so.0" ]; then
-    cp -L "$CURSOR" "$BUNDLE/_internal/"
+if [ -z "$CURSOR" ]; then
+    echo "libxcb-cursor.so.0 not found: install libxcb-cursor0 and build again." >&2
+    exit 1
 fi
+QT_CORE="$(find "$BUNDLE/_internal" -name 'libQt6Core.so.6' -print -quit)"
+if [ -z "$QT_CORE" ]; then
+    echo "Qt's libraries weren't found in the bundle." >&2
+    exit 1
+fi
+QT_LIB="$(dirname "$QT_CORE")"
+for dir in "$BUNDLE/_internal" "$QT_LIB"; do
+    cp -L "$CURSOR" "$dir/libxcb-cursor.so.0"
+done
+echo "Bundled $CURSOR into: _internal and ${QT_LIB#"$BUNDLE/"}"
 
 echo "2/3  Making the AppDir"
 mkdir -p "$APPDIR/usr/lib"

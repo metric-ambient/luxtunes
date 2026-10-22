@@ -53,6 +53,7 @@ class SyncReport:
     cancelled: bool = False
     photos: int = 0
     phone_playlists: object = None     # Android: changes.PlaylistResult from the phone
+    equalizer_from_phone: bool = False  # Android: the phone's equalizer was taken
 
 
 @dataclass
@@ -164,6 +165,9 @@ def fill_track(t: "gpod.Itdb_Track", song: dict) -> None:
     t.starttime = int(song.get("start_time") or 0)
     t.stoptime = int(song.get("stop_time") or 0)
     t.volume = max(-255, min(255, round((song.get("volume_adjustment") or 0) * 2.55)))
+    # Sound Check's level, used when the iPod's own Sound Check is on.
+    from luxtunes.core import loudness
+    t.soundcheck = loudness.ipod_soundcheck(song.get("loudness"))
     t.remember_playback_position = 1 if song.get("bookmarkable") else 0
     t.skip_when_shuffling = 1 if song.get("skip_when_shuffling") else 0
     t.bookmark_time = int(song.get("bookmark_time") or 0)
