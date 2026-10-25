@@ -30,7 +30,7 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from luxtunes.core import equalizer, loudness
 from luxtunes.core.library import AUDIO_KINDS
 from luxtunes.core.paths import find_file
-from luxtunes.core.shuffle import artist_key, spread_shuffle
+from luxtunes.core.shuffle import album_key, artist_key, played_recently, spread_shuffle
 from luxtunes.ui import eq_output
 
 # A skip counts when you jump to the next song within its first 20 seconds.
@@ -95,6 +95,7 @@ class Player(QObject):
         self._current: dict | None = None
         self.up_next: list[dict] = []
         self._shuffle = False
+        self._heard: set = set()        # songs started this session (a new shuffle puts them last)
         self._repeat = REPEAT_OFF
         self._repeat_retries = 0      # Repeat One: replays attempted after an error
         self._last_position = 0
@@ -171,7 +172,11 @@ class Player(QObject):
             self._pos = current_index
 
     def _shuffled(self, indexes: list[int]) -> list[int]:
-        return spread_shuffle(indexes, key=lambda i: artist_key(self._context[i]))
+        context = self._context
+        return spread_shuffle(indexes, key=lambda i: artist_key(context[i]),
+                              album=lambda i: album_key(context[i]),
+                              recent=lambda i: context[i].get("id") in self._heard
+                              or played_recently(context[i]))
 
     @property
     def is_playing(self) -> bool:
@@ -368,6 +373,7 @@ class Player(QObject):
         self._drop_transition()
         self._end_fade()
         self._current = track
+        self._heard.add(track.get("id"))
         self._last_position = 0
         self._ended = False
         self._looping_back = False
@@ -672,6 +678,7 @@ class Player(QObject):
         self._eq.attach(new_deck)
         self._set_loops(new_deck)
         self._current = track
+        self._heard.add(track.get("id"))
         self._last_position = 0
         self._ended = False
         self._looping_back = False

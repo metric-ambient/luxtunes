@@ -4,7 +4,9 @@ Reads each file's tags and adds it to the library. With "Copy files to
 LuxTunes Media folder when adding to library" on (the default), files
 from elsewhere are copied into the media folder, filed the same way "Keep
 LuxTunes Media folder organized" files them; the original is left alone.
-Files already in the library are skipped. No Qt in here.
+Files already in the library are skipped (the same file, or a copy of a song
+already there: same name, artist, album, file type and length), and adding
+carries on with the rest. No Qt in here.
 """
 
 from __future__ import annotations
@@ -109,6 +111,33 @@ def _known_locations(conn) -> dict[str, int]:
             if r[1] and os.path.exists(r[1])}
 
 
+SAME_LENGTH_MS = 2000           # a copy of a song: lengths within this much
+
+
+def song_key(fields: dict, extension: str) -> tuple:
+    return ((fields.get("name") or "").strip().casefold(),
+            (fields.get("album_artist") or fields.get("artist") or "").strip().casefold(),
+            (fields.get("album") or "").strip().casefold(), extension.lower())
+
+
+def _known_songs(conn) -> dict[tuple, list[tuple[int, int | None]]]:
+    """Songs in the library by song_key: [(track id, length in ms)]."""
+    songs: dict = {}
+    for row in conn.execute("SELECT id, name, artist, album_artist, album, total_time, location "
+                            "FROM tracks WHERE name IS NOT NULL"):
+        fields = {"name": row[1], "artist": row[2], "album_artist": row[3], "album": row[4]}
+        key = song_key(fields, Path(row[6] or "").suffix)
+        songs.setdefault(key, []).append((row[0], row[5]))
+    return songs
+
+
+def _same_song(songs: dict, key: tuple, length: int | None) -> int | None:
+    for track_id, known in songs.get(key, ()):
+        if not length or not known or abs(known - length) <= SAME_LENGTH_MS:
+            return track_id
+    return None
+
+
 def _utc(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -128,6 +157,7 @@ def add_paths(conn: sqlite3.Connection, paths: list[str], progress=None, stop=No
         result.stopped = True
         return result
     known = _known_locations(conn)
+    songs = _known_songs(conn)
     copy = copy_when_adding(conn)
     root = organize.media_folder(conn)
     log.info("adding %d files from %s", len(files), ", ".join(paths))
@@ -142,7 +172,7 @@ def add_paths(conn: sqlite3.Connection, paths: list[str], progress=None, stop=No
             continue
         started = time.monotonic()
         try:
-            track_id = add_file(conn, path, copy, root, known, stop)
+            track_id = add_file(conn, path, copy, root, known, stop, songs=songs)
         except AddStopped:
             result.stopped = True
             break
@@ -202,14 +232,17 @@ class AlreadyAdded(Exception):
 def add_file(conn: sqlite3.Connection, path: str, copy: bool, root: Path,
              known: dict[str, int] | None = None, stop=None, details: dict | None = None,
              file_it: bool = True, persistent_id: str | None = None,
-             fallback: dict | None = None, date_added: str | None = None) -> int:
+             fallback: dict | None = None, date_added: str | None = None,
+             songs: dict | None = None) -> int:
     """Add one file and return its new track id. Raises TagError / OSError,
     or AlreadyAdded if an earlier copy of this file is already in the library.
     details: song details that win over the file's own (e.g. a converted
     copy's media kind and show). file_it=False leaves the file where it is
     instead of filing it in the media folder now. persistent_id: use this one
     (a song added on a phone keeps the phone's). fallback: details used only
-    where the file's own tags have none. date_added: when it was really added."""
+    where the file's own tags have none. date_added: when it was really added.
+    songs: _known_songs(), to skip a copy of a song already in the library
+    (AlreadyAdded); new songs are added to it."""
     try:
         fields = read_fields(path)
     except TagError:
@@ -228,6 +261,11 @@ def add_file(conn: sqlite3.Connection, path: str, copy: bool, root: Path,
         fields["media_kind"] = media_kind_hint(path) or "music"
         fields.update(library.kind_defaults(fields["media_kind"]))
     fields.update({k: v for k, v in (details or {}).items() if v is not None})
+    key = song_key(fields, Path(path).suffix)
+    if songs is not None and (key[1] or key[2]):       # untagged files: only by location
+        same = _same_song(songs, key, fields.get("total_time"))
+        if same is not None:
+            raise AlreadyAdded(same)
     fields["date_added"] = date_added or library.now_utc()
     fields["date_modified"] = _utc(os.path.getmtime(path))
 
@@ -254,6 +292,8 @@ def add_file(conn: sqlite3.Connection, path: str, copy: bool, root: Path,
             f"INSERT INTO tracks ({', '.join(row)}) VALUES ({', '.join('?' for _ in row)})",
             list(row.values()))
     track_id = cursor.lastrowid
+    if songs is not None:
+        songs.setdefault(key, []).append((track_id, fields.get("total_time")))
     if file_it:
         organize.organize_track(conn, track_id)     # files already in the media folder get filed
     return track_id

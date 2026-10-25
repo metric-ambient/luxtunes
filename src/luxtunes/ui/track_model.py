@@ -294,6 +294,10 @@ class TrackTableModel(QAbstractTableModel):
     def visible_tracks(self) -> list[dict]:
         return list(self._rows)
 
+    def sort_state(self) -> tuple[int, Qt.SortOrder]:
+        """(column, order); column -1: the list's own order."""
+        return self._sort_column, self._sort_order
+
     @property
     def sorted_by_column(self) -> bool:
         """Sorted by a column (not the list's own order)."""

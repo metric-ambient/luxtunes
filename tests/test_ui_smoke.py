@@ -1364,9 +1364,14 @@ def test_adding_a_folder_runs_in_the_background_and_can_be_stopped(window, tmp_p
     _wait_for_adding(window)
     assert library.count_tracks(window.conn, "music") == before + 2      # the first two stay
     monkeypatch.setattr(add_files, "add_file", real_add_file)
+    from PySide6.QtWidgets import QMessageBox
+    told = []
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: told.append(a[2])))
     window._add_paths([str(folder)])                     # again: carries on from there
     _wait_for_adding(window)
     assert library.count_tracks(window.conn, "music") == before + 5
+    assert told == ["Added 3 items to your library. 2 files were skipped because they are "
+                    "already in your library."]
 
 
 def test_playlist_deletions_from_a_phone_are_asked_about(window, monkeypatch):
@@ -1422,6 +1427,50 @@ def test_playlists_a_sync_deleted_leave_the_sidebar(window):
     assert "On-The-Go 2" in names()
     window._show_sidebar_menu(("playlist", second), window.mapToGlobal(window.rect().center()))
     assert "On-The-Go 2" not in names()
+
+
+def test_each_screen_keeps_its_sort_and_scroll_position(window):
+    import time
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+
+    from luxtunes.core import library
+    from luxtunes.ui.track_model import NAME_COLUMN
+    from luxtunes.ui.widgets import SOURCE_MUSIC
+    with window.conn:
+        window.conn.executemany(
+            "INSERT INTO tracks (persistent_id, name, artist, album, media_kind) "
+            "VALUES (?, ?, 'Many', 'Songs', 'music')",
+            [(f"FEED{i:012X}", f"Song {i:03d}") for i in range(300)])
+    mix = library.create_playlist(window.conn, "Mix")
+    library.add_to_playlist(window.conn, mix, [1, 2])
+    window.reload_library()
+    window.sidebar.select_source(SOURCE_MUSIC)
+    window._set_view_mode("list")
+    header = window.table.horizontalHeader()
+    header.setSortIndicator(NAME_COLUMN, Qt.SortOrder.DescendingOrder)   # a click on Name
+    assert window.model.sort_state() == (NAME_COLUMN, Qt.SortOrder.DescendingOrder)
+
+    def settle():
+        end = time.time() + 1.2
+        while time.time() < end:
+            QApplication.processEvents()
+
+    settle()                                                   # the list is laid out
+    window.table.verticalScrollBar().setValue(120)
+    assert window.table.verticalScrollBar().value() == 120
+
+    window.sidebar.select_source(("playlist", mix))
+    settle()
+    assert window.model.sort_state()[0] == -1                 # the playlist keeps its own order
+    window.sidebar.select_source(SOURCE_MUSIC)
+    settle()
+    assert window.model.sort_state() == (NAME_COLUMN, Qt.SortOrder.DescendingOrder)
+    assert header.sortIndicatorSection() == NAME_COLUMN
+    assert window.table.verticalScrollBar().value() == 120
+    # The sort is kept for next time LuxTunes opens too.
+    assert window.settings.value("sort/list/library/music") == "name desc"
 
 
 def test_a_phone_remembers_where_it_syncs_to(window, tmp_path):

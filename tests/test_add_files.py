@@ -174,3 +174,22 @@ def test_empty_tag_frames_dont_stop_a_file(tmp_path):
     assert fields["name"] == "Song" and fields.get("comments") is None
     result = add_files.add_paths(conn, [str(tmp_path / "In")])
     assert len(result.added) == 1 and not result.failed
+
+
+def test_songs_already_in_the_library_are_skipped_and_the_rest_added(tmp_path):
+    conn, root = setup(tmp_path)
+    mp3(tmp_path / "Old" / "a.mp3", name="Robbers", artist="The 1975", album="The 1975")
+    first = add_files.add_paths(conn, [str(tmp_path / "Old")])
+    # Edited since (so its copy in the media folder no longer matches the original's size).
+    library.update_track_fields(conn, first.added[0], {"comments": "edited"})
+    from luxtunes.core import tag_sync
+    tag_sync.write_pending(conn, first.added[0])
+    # A bigger import later: the same song again (in two places), plus a new one.
+    mp3(tmp_path / "All" / "Old" / "a.mp3", name="Robbers", artist="The 1975", album="The 1975")
+    mp3(tmp_path / "All" / "Copy" / "a again.mp3", name="Robbers", artist="The 1975",
+        album="The 1975")
+    mp3(tmp_path / "All" / "New" / "b.mp3", name="Chocolate", artist="The 1975", album="The 1975")
+    result = add_files.add_paths(conn, [str(tmp_path / "All")])
+    assert len(result.already) == 2 and not result.failed and not result.stopped
+    assert [library.load_track(conn, t)["name"] for t in result.added] == ["Chocolate"]
+    assert library.count_tracks(conn, "music") == 2
