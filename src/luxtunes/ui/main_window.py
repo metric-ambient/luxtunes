@@ -176,6 +176,8 @@ class MainWindow(QMainWindow):
         self.view_mode = "list"
         self._table_layout = "list"      # which column layout the song table has now
         self._header_states: dict[str, object] = {"list": None, "album": None}
+        self._scroll_memory: dict[str, tuple[int, int]] = {}   # screen -> (list, grid) scroll
+        self._automatic_sort = False
         self._drilled = False            # a Grid tile is open
         self._syncing = False            # Cover Flow <-> song list update in progress
         self._views_refresh_pending = False
@@ -370,6 +372,7 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(ENABLED_COLUMN, QHeaderView.ResizeMode.Fixed)
         header.setSortIndicator(ARTIST_COLUMN, Qt.SortOrder.AscendingOrder)
         self.table.setSortingEnabled(True)
+        header.sortIndicatorChanged.connect(self._remember_sort)
 
         # ---- The other views --------------------------------------------------
         self.cover_flow = CoverFlow()
@@ -703,6 +706,7 @@ class MainWindow(QMainWindow):
             )
 
     def show_source(self, source):
+        self._remember_scroll()
         self._current_source = source
         self._end_duplicates()
         if source[0] == "device":
@@ -744,9 +748,15 @@ class MainWindow(QMainWindow):
         wanted = self._remembered_view(self._view_key(source))
         if wanted != self.view_mode:
             self._set_view_mode(wanted, remember=False)     # this section's own view
+        order = Qt.SortOrder.AscendingOrder
+        remembered = self._remembered_sort(source)          # this screen's own sort
+        if remembered is not None:
+            sort_column, order = remembered
+        if self.model.sort_state() != (sort_column, order):
+            self.model.sort(sort_column, order)
         header = self.table.horizontalHeader()
         header.blockSignals(True)   # don't make the view re-sort; the model already did
-        header.setSortIndicator(sort_column, Qt.SortOrder.AscendingOrder)
+        header.setSortIndicator(sort_column, order)
         header.blockSignals(False)
         header.viewport().update()
         self.model.set_now_playing(self.player.current["id"] if self.player.current else None)
@@ -754,8 +764,89 @@ class MainWindow(QMainWindow):
         self.search.clear()
         self.search.blockSignals(False)
         self.table.scrollToTop()
+        self._restore_scroll()
         self._update_summary()
         self._update_play_button()
+
+    # ---- Each screen remembers its sort and where it was scrolled to ----------------
+    # A screen is a Library section, a playlist or Up Next. Sorts are kept in the
+    # settings (per screen, and per List / Album List layout); scroll positions
+    # while LuxTunes is open.
+
+    def _screen_key(self, source=None) -> str | None:
+        source = source or self._current_source
+        if not source:
+            return None
+        kind, value = source
+        if kind == "library":
+            return f"library/{value}"
+        if kind == "queue":
+            return "queue"
+        if kind == "playlist":
+            row = self.conn.execute("SELECT persistent_id FROM playlists WHERE id = ?",
+                                    (value,)).fetchone()
+            return f"playlist/{row[0]}" if row and row[0] else f"playlist/{value}"
+        return None
+
+    def _remembered_sort(self, source) -> tuple[int, Qt.SortOrder] | None:
+        key = self._screen_key(source)
+        text = self.settings.value(f"sort/{self._table_layout}/{key}") if key else None
+        if not text:
+            return None
+        name, _, direction = str(text).partition(" ")
+        order = Qt.SortOrder.DescendingOrder if direction == "desc" else Qt.SortOrder.AscendingOrder
+        if name == "-":
+            return -1, Qt.SortOrder.AscendingOrder              # the playlist's own order
+        column = next((i for i, c in enumerate(COLUMNS) if c.key == name), None)
+        return (column, order) if column is not None else None
+
+    def _remember_sort(self, column: int, order):
+        """A column header was clicked: this screen keeps that sort."""
+        if self._automatic_sort or self._drilled or self._showing_device_page():
+            return
+        key = self._screen_key()
+        if key is None:
+            return
+        name = COLUMNS[column].key if 0 <= column < len(COLUMNS) else "-"
+        direction = "desc" if order == Qt.SortOrder.DescendingOrder else "asc"
+        self.settings.setValue(f"sort/{self._table_layout}/{key}", f"{name} {direction}")
+
+    def _remember_scroll(self):
+        key = self._screen_key()
+        if key is None or self._drilled or self._showing_device_page():
+            return
+        self._scroll_memory[key] = (self.table.verticalScrollBar().value(),
+                                    self.grid.list.verticalScrollBar().value())
+
+    def _restore_scroll(self):
+        key = self._screen_key()
+        if key not in self._scroll_memory:
+            return
+        targets = list(zip((self.table.verticalScrollBar(),
+                            self.grid.list.verticalScrollBar()), self._scroll_memory[key]))
+
+        landed: list[int | None] = [None] * len(targets)    # where each bar ended up
+
+        def restore(tries_left: int):
+            # The lists lay out their rows a moment after they're filled; until then
+            # a scroll bar can't reach far enough, so this tries again briefly.
+            if self._screen_key() != key:
+                return                                  # moved on meanwhile
+            if self._views_refresh_pending:
+                self._refresh_views()                   # the grid is filled first
+            short = False
+            for i, (bar, value) in enumerate(targets):
+                if landed[i] is not None and bar.value() != landed[i]:
+                    landed[i] = value                   # you scrolled it: left alone
+                    continue
+                if landed[i] != value:
+                    bar.setValue(value)
+                    landed[i] = bar.value()
+                    short = short or landed[i] != value
+            if short and tries_left:
+                QTimer.singleShot(25, lambda: restore(tries_left - 1))
+
+        QTimer.singleShot(0, lambda: restore(40))       # up to about a second
 
     def _on_search(self, text):
         self.model.set_filter(text)
@@ -1247,13 +1338,17 @@ class MainWindow(QMainWindow):
         self._header_states[self._table_layout] = header.saveState()
         self._table_layout = layout
         saved = self._header_states.get(layout)
-        if saved is not None:
-            header.restoreState(saved)
-        elif layout == "album":
-            self._default_album_layout()
-        else:
-            for i, column in enumerate(COLUMNS):
-                self.table.setColumnHidden(i, not column.shown)
+        self._automatic_sort = True          # not a sort you chose for this screen
+        try:
+            if saved is not None:
+                header.restoreState(saved)
+            elif layout == "album":
+                self._default_album_layout()
+            else:
+                for i, column in enumerate(COLUMNS):
+                    self.table.setColumnHidden(i, not column.shown)
+        finally:
+            self._automatic_sort = False
         for i in (ALBUM_GROUP_COLUMN, ALBUM_TRACK_COLUMN):   # album columns only in Album List
             self.table.setColumnHidden(i, layout != "album")
         self.table.setColumnHidden(ENABLED_COLUMN, not appearance(self.settings)["show_list_checkboxes"])
@@ -3794,11 +3889,14 @@ class MainWindow(QMainWindow):
         self.show_source(self._current_source or SOURCE_MUSIC)
         added = len(result.added)
         items = f"{added:,} item{'s' if added != 1 else ''}"
+        skipped = len(result.already)
+        skipped_text = (f"{skipped:,} file{'s were' if skipped != 1 else ' was'} skipped because "
+                        f"{'they are' if skipped != 1 else 'it is'} already in your library.")
         if result.stopped:
             message = f"Adding stopped: {items} added. Add the folder again to carry on."
         elif added:
             message = f"Added {items} to your library."
-        elif result.already and not result.failed:
+        elif skipped and not result.failed:
             message = "Those items are already in your library."
         else:
             message = "Nothing was added."
@@ -3807,9 +3905,14 @@ class MainWindow(QMainWindow):
         if result.failed:
             QMessageBox.warning(
                 self, "Add To Library",
-                f"{len(result.failed):,} file(s) couldn't be added:\n\n"
+                (f"{message} {skipped_text}\n\n" if skipped else "")
+                + f"{len(result.failed):,} file(s) couldn't be added:\n\n"
                 + "\n".join(result.failed[:20])
                 + ("\n…" if len(result.failed) > 20 else ""))
+        elif skipped:
+            QMessageBox.information(self, "Add To Library",
+                                    (f"Added {items} to your library. " if added else "")
+                                    + skipped_text)
 
     # ---- Create MP3 Version (FLAC → 320 kbps MP3) ------------------------------------
 
@@ -3995,7 +4098,9 @@ class MainWindow(QMainWindow):
         self._dup_ids = {t["id"] for t in tracks if counts[self._duplicate_key(t)] > 1}
         self.model.set_id_filter(self._dup_ids)
         if self.view_mode != "grid":
+            self._automatic_sort = True               # not a sort you chose for this screen
             self.table.sortByColumn(NAME_COLUMN, Qt.SortOrder.AscendingOrder)   # pairs side by side
+            self._automatic_sort = False
         self.dup_bar.show()
         self._update_summary()
 

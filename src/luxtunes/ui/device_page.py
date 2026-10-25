@@ -576,8 +576,6 @@ class DevicePage(QWidget):
         column.addSpacing(10)
         column.addWidget(heading("Options"))
         frame, inner = box()
-        self.open_on_connect = QCheckBox("Open LuxTunes when this iPod is connected")
-        self.open_on_connect.setEnabled(False)
         self.only_checked = QCheckBox("Sync only checked songs and videos")
         convert_row = QHBoxLayout()
         self.convert = QCheckBox("Convert higher bit rate songs to")
@@ -596,13 +594,12 @@ class DevicePage(QWidget):
         self.convert_kbps.currentIndexChanged.connect(self._changed)
         self.manual = QCheckBox("Manually manage music and videos")
         self.disk_use = QCheckBox("Enable disk use")
-        self._ipod_only += [self.open_on_connect, self.manual, self.disk_use]
+        self._ipod_only += [self.manual, self.disk_use]
         # Phones only (an iPod's database is always kept to the selection).
         self.delete_unselected = QCheckBox("Delete media not in this selection")
         self.delete_unselected.setToolTip(
             "At each sync, songs and videos you no longer sync are taken off the phone. "
             "Only the LuxTunes folder on the phone is ever cleaned; nothing else is touched.")
-        inner.addWidget(self.open_on_connect)
         inner.addWidget(self.only_checked)
         inner.addLayout(convert_row)
         inner.addWidget(self.delete_unselected)

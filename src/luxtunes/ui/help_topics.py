@@ -25,7 +25,9 @@ pauses.</li>
 <li><b>Ctrl+→ / Ctrl+←</b> go to the next or previous song. <b>Ctrl+L</b> shows the song
 that's playing.</li>
 <li><b>Shuffle</b> and <b>Repeat</b> are under the sidebar and in the Controls menu.
-Repeat goes Off → All → One. LuxTunes remembers both.</li>
+Repeat goes Off → All → One. LuxTunes remembers both. Shuffle mixes the whole list
+afresh each time, plays songs you haven't heard in the last couple of days first, and
+keeps songs by the same artist or from the same album apart.</li>
 <li><b>Up Next:</b> right-click songs → <b>Add to Queue</b>, or drag them onto
 <i>Up Next</i>. Those play first, then LuxTunes carries on where you were.</li>
 <li>The song playing has a grey bar behind it, so it's easy to spot.</li>
@@ -209,6 +211,8 @@ Trash) and lets you delete it for good, after asking again.</li>
 <ul>
 <li>Switch views with the buttons at the top or <b>View</b> (Ctrl+Shift+3 to 6).
 <b>View Options…</b> (Ctrl+J) and a right-click on the column headers choose columns.</li>
+<li>Click a column header to sort by it. Each Library section and playlist keeps its own
+sort, and where you'd scrolled to while LuxTunes is open.</li>
 <li>Type in the search box to filter what's shown.</li>
 <li><b>File → Display Duplicates</b> and <b>Display Missing</b> help clean up.</li>
 </ul>"""),
