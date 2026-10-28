@@ -57,16 +57,31 @@ def test_add_folder_copies_into_media_folder(tmp_path):
     assert again.added == [] and sorted(again.already) == sorted(result.added)
 
 
-def test_add_without_copying(tmp_path):
+def test_files_always_end_up_in_the_media_folder(tmp_path):
+    from luxtunes.core.db import set_setting
     conn, root = setup(tmp_path)
-    add_files.set_copy_when_adding(conn, False)
+    set_setting(conn, "copy_when_adding", "0")          # the old "don't copy" choice: ignored
     path = mp3(tmp_path / "Elsewhere" / "x.mp3", name="Song", artist="A", album="B")
     result = add_files.add_paths(conn, [path])
-    assert library.load_track(conn, result.added[0])["location"] == path
+    assert library.load_track(conn, result.added[0])["location"].startswith(str(root))
+    assert (tmp_path / "Elsewhere" / "x.mp3").exists()          # copied; the original stays
     assert add_files.add_paths(conn, [path]).already == result.added
     bad = tmp_path / "Elsewhere" / "bad.mp3"
     bad.write_bytes(b"not audio")
     assert len(add_files.add_paths(conn, [str(bad)]).failed) == 1
+
+
+def test_move_original_files_on_import(tmp_path):
+    conn, root = setup(tmp_path)
+    assert not add_files.move_when_adding(conn)                 # off unless turned on
+    add_files.set_move_when_adding(conn, True)
+    path = mp3(tmp_path / "Downloads" / "x.mp3", name="Song", artist="A", album="B")
+    result = add_files.add_paths(conn, [str(tmp_path / "Downloads")])
+    moved = library.load_track(conn, result.added[0])["location"]
+    assert moved == str(root / "Music" / "A" / "B" / "Song.mp3")
+    assert not (tmp_path / "Downloads" / "x.mp3").exists() and (root / "Music" / "A" / "B" /
+                                                               "Song.mp3").exists()
+    assert path not in moved
 
 
 def test_untagged_video_is_added_as_a_movie(tmp_path):

@@ -92,6 +92,14 @@ class MiniPlayer(QWidget):
         self.seek.sliderReleased.connect(lambda: self.seek_requested.emit(self.seek.value()))
         self.resize(460, self.sizeHint().height())
 
+    def set_on_top(self, on: bool):
+        """Preferences → Playback → Keep the Mini Player on top of other windows."""
+        if bool(self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint) != on:
+            visible = self.isVisible()
+            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, on)
+            if visible:
+                self.show()                  # changing the flag hides the window
+
     @staticmethod
     def _button(icon, tooltip) -> QToolButton:
         button = QToolButton()

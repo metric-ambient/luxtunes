@@ -326,9 +326,13 @@ class Player(QObject):
 
     # ---- Up Next ------------------------------------------------------------
 
-    def add_to_up_next(self, tracks: list[dict]):
+    def add_to_up_next(self, tracks: list[dict], first: bool = False):
+        """Queue songs: at the end of Up Next, or (first) before what's queued, to play next."""
         self._drop_transition()                  # the next song may change
-        self.up_next.extend(tracks)
+        if first:
+            self.up_next[0:0] = tracks
+        else:
+            self.up_next.extend(tracks)
         self.queue_changed.emit()
 
     def remove_from_up_next(self, indexes: list[int]):

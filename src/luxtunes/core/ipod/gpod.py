@@ -14,12 +14,18 @@ it, `available()` is False and LuxTunes says what to install.
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import ctypes.util
+import logging
 from ctypes import (
     POINTER, Structure, byref, c_char_p, c_float, c_int, c_int16, c_int32, c_uint8, c_uint16,
     c_uint32, c_uint64, c_void_p,
 )
+
+from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 time_t = ctypes.c_long          # 64-bit on 64-bit Linux
 gboolean = c_int
@@ -173,10 +179,11 @@ class GpodError(Exception):
 
 _lib = None
 _glib = None
+_has_thumbnails = None          # itdb_track_has_thumbnails, where libgpod has it
 
 
 def _load():
-    global _lib, _glib
+    global _lib, _glib, _has_thumbnails
     if _lib is not None:
         return _lib
     name = ctypes.util.find_library("gpod") or "libgpod.so.4"
@@ -203,6 +210,11 @@ def _load():
     fn("itdb_track_remove", None, PTR)
     fn("itdb_track_set_thumbnails_from_data", gboolean, PTR, c_void_p, c_uint64)
     fn("itdb_track_remove_thumbnails", None, PTR)
+    try:
+        fn("itdb_track_has_thumbnails", gboolean, PTR)
+        _has_thumbnails = lib.itdb_track_has_thumbnails
+    except AttributeError:              # older libgpod: read the track's artwork instead
+        _has_thumbnails = None
     fn("itdb_cp_track_to_ipod", gboolean, PTR, c_char_p, PERR)
     fn("itdb_filename_on_ipod", c_void_p, PTR)
     fn("itdb_playlist_new", PPL, c_char_p, gboolean)
@@ -299,14 +311,55 @@ def free_c_string(pointer) -> str | None:
 
 # ---- The database ---------------------------------------------------------------------
 
+@contextlib.contextmanager
+def _model_known(mountpoint: str, model: str | None):
+    """While inside: SysInfo names `model` if it named none. Afterwards SysInfo
+    is exactly as it was (or gone again, if there wasn't one)."""
+    sysinfo = Path(mountpoint) / "iPod_Control" / "Device" / "SysInfo"
+    try:
+        before = sysinfo.read_bytes() if sysinfo.exists() else None
+    except OSError:
+        before = None
+    names_one = before is not None and any(
+        line.split(b":", 1)[0].strip() == b"ModelNumStr" and line.split(b":", 1)[1:] != [b""]
+        for line in before.splitlines() if b":" in line)
+    if not model or names_one:
+        yield
+        return
+    try:
+        sysinfo.parent.mkdir(parents=True, exist_ok=True)
+        text = (before or b"").rstrip(b"\n")
+        sysinfo.write_bytes((text + b"\n" if text else b"") + f"ModelNumStr: {model}\n".encode())
+    except OSError as error:
+        log.warning("couldn't tell libgpod the iPod's model: %s", error)
+        yield
+        return
+    try:
+        yield
+    finally:
+        try:
+            if before is None:
+                sysinfo.unlink()
+            else:
+                sysinfo.write_bytes(before)
+        except OSError as error:
+            log.warning("couldn't put the iPod's SysInfo back: %s", error)
+
+
 class Database:
     """An iPod's iTunesDB, opened with libgpod. Use as a context manager."""
 
-    def __init__(self, mountpoint: str):
+    def __init__(self, mountpoint: str, model_hint: str | None = None):
+        """model_hint: a model number for an iPod whose SysInfo doesn't name one.
+        libgpod only reads the existing album artwork when it knows the model
+        while it reads the database; without it, saving would keep only the
+        artwork added in this sync. So the hint is put in SysInfo just while
+        the database is read, and SysInfo is put back as it was straight after."""
         lib = _load()
         self.mountpoint = mountpoint
         error = POINTER(GError)()
-        self.db = lib.itdb_parse(mountpoint.encode(), byref(error))
+        with _model_known(mountpoint, model_hint):
+            self.db = lib.itdb_parse(mountpoint.encode(), byref(error))
         if not self.db:
             _raise(error, "couldn't read the iPod's database")
 
@@ -375,6 +428,13 @@ class Database:
         for playlist in self.playlists():
             _lib.itdb_playlist_remove_track(playlist, track)
         _lib.itdb_track_remove(track)
+
+    def has_artwork(self, track) -> bool:
+        """The iPod has album artwork for this track (as read from its ArtworkDB)."""
+        if _has_thumbnails is not None:
+            return bool(_has_thumbnails(track))
+        artwork = track.contents.artwork            # Itdb_Artwork: its first field is the thumbnail
+        return bool(artwork) and bool(ctypes.cast(artwork, POINTER(c_void_p))[0])
 
     def set_artwork(self, track, data: bytes) -> bool:
         buffer = ctypes.create_string_buffer(data, len(data))

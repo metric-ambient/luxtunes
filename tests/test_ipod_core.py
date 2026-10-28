@@ -405,3 +405,47 @@ def test_an_ipod_that_doesnt_say_its_model_gets_its_size_from_its_disk():
     nano = models.Identity("nano_1", models.FAMILIES["nano_1"], 2)
     assert nano.capacity_label == "2 GB"
     assert models.Identity("shuffle_1", models.FAMILIES["shuffle_1"], 0.5).capacity_label == "512 MB"
+
+
+def test_libgpod_is_told_the_model_only_while_reading(tmp_path):
+    from luxtunes.core.ipod import gpod
+    sysinfo = tmp_path / "iPod_Control" / "Device" / "SysInfo"
+    sysinfo.parent.mkdir(parents=True)
+    sysinfo.write_bytes(b"FirewireGuid: 0x000A27001234ABCD\n")
+    with gpod._model_known(str(tmp_path), "xB147"):
+        assert b"ModelNumStr: xB147" in sysinfo.read_bytes()
+    assert sysinfo.read_bytes() == b"FirewireGuid: 0x000A27001234ABCD\n"     # as it was
+    sysinfo.write_bytes(b"ModelNumStr: xC297\n")                          # it says: left alone
+    with gpod._model_known(str(tmp_path), "xB147"):
+        assert sysinfo.read_bytes() == b"ModelNumStr: xC297\n"
+    sysinfo.unlink()                                                     # no SysInfo at all
+    with gpod._model_known(str(tmp_path), "xB147"):
+        assert sysinfo.exists()
+    assert not sysinfo.exists()
+
+
+def test_songs_missing_artwork_on_the_ipod_get_it_back(tmp_path, monkeypatch):
+    from luxtunes.core.ipod import sync as ipod_sync
+    for name in ("a.mp3", "b.mp3", "c.mp3"):
+        (tmp_path / name).write_bytes(b"x")
+
+    class FakeDb:
+        def __init__(self):
+            self.given = {}
+
+        def has_artwork(self, pointer):
+            return pointer == "has"
+
+        def set_artwork(self, pointer, data):
+            self.given[pointer] = data
+            return True
+
+    monkeypatch.setattr(ipod_sync.artwork_reader, "read_embedded_artwork",
+                        lambda path: b"art of " + path.encode())
+    songs = {1: {"location": str(tmp_path / "a.mp3"), "artwork_count": 1},
+             2: {"location": str(tmp_path / "b.mp3"), "artwork_count": 1},
+             3: {"location": str(tmp_path / "c.mp3"), "artwork_count": 0}}     # known: none
+    fake = FakeDb()
+    restored = ipod_sync.restore_missing_artwork(
+        fake, {1: "missing", 2: "has", 3: "none"}, songs, lambda *a, **k: None)
+    assert restored == 1 and fake.given == {"missing": b"art of " + str(tmp_path / "a.mp3").encode()}

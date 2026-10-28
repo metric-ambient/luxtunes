@@ -49,6 +49,13 @@ def find_file(location: str | None) -> str | None:
     return str(resolved) if resolved.exists() else None
 
 
+def file_uri(path: str) -> str:
+    """file:///… with every special character encoded. dbus-send splits its
+    array arguments at commas, so a comma left as it is ("The Lion, the
+    Witch…") would hand the file manager two broken paths."""
+    return Path(os.path.abspath(path)).as_uri()
+
+
 def nearest_existing_folder(location: str | None) -> str:
     """The closest folder that exists on the way to `location` (for file dialogs)."""
     folder = Path(location).parent if location else Path.home()

@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QProgressBar,
     QSizePolicy,
     QSlider,
@@ -867,6 +868,7 @@ class ArtworkPane(QWidget):
 
     header_clicked = Signal()
     image_clicked = Signal()
+    view_requested = Signal()          # right-click → View Full Size Album Art
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -889,9 +891,19 @@ class ArtworkPane(QWidget):
         layout.addWidget(self.image)
         self._pixmap: QPixmap | None = None
         self._placeholder = "No Artwork"
+        self.data: bytes | None = None    # the picture as it is in the file (full size)
+        self.caption = ""                 # "Album — Artist", for the viewer's title
 
     def eventFilter(self, obj, event):
+        if obj is self.image and event.type() == QEvent.Type.ContextMenu:
+            menu = QMenu(self)
+            view = menu.addAction("View Full Size Album Art", self.view_requested.emit)
+            view.setEnabled(self._pixmap is not None)
+            menu.exec(event.globalPos())
+            return True
         if event.type() == QEvent.Type.MouseButtonRelease:
+            if getattr(event, "button", lambda: None)() == Qt.MouseButton.RightButton:
+                return True
             if obj is self.header:
                 self.header_clicked.emit()
                 return True
@@ -903,9 +915,11 @@ class ArtworkPane(QWidget):
     def set_title(self, text: str):
         self.header.setText(text)
 
-    def set_image(self, data: bytes | None, placeholder: str = "No Artwork"):
+    def set_image(self, data: bytes | None, placeholder: str = "No Artwork", caption: str = ""):
         pixmap = QPixmap()
         self._pixmap = pixmap if data and pixmap.loadFromData(data) else None
+        self.data = data if self._pixmap is not None else None
+        self.caption = caption
         self._placeholder = placeholder
         self._rescale()
 

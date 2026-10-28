@@ -54,6 +54,7 @@ class SyncReport:
     photos: int = 0
     phone_playlists: object = None     # Android: changes.PlaylistResult from the phone
     equalizer_from_phone: bool = False  # Android: the phone's equalizer was taken
+    artwork_restored: int = 0          # iPod: songs given back artwork they were missing
     imported: list = field(default_factory=list)   # Android: track ids of songs added on the phone
     edited: list = field(default_factory=list)     # Android: track ids edited on the phone
 
@@ -195,6 +196,23 @@ def fill_track(t: "gpod.Itdb_Track", song: dict) -> None:
     t.type2 = 1 if "mpeg" in kind else 0
 
 
+def restore_missing_artwork(db, kept: dict, library_by_dbid: dict, tell) -> int:
+    """Give songs on the iPod without artwork their file's artwork. Songs the
+    library knows have none (artwork_count 0) aren't read. Returns how many."""
+    missing = [(dbid, pointer) for dbid, pointer in kept.items()
+               if library_by_dbid[dbid].get("artwork_count") != 0 and not db.has_artwork(pointer)]
+    restored = 0
+    for i, (dbid, pointer) in enumerate(missing):
+        tell("Checking album artwork…", i, len(missing), can_stop=False)
+        path = find_file(library_by_dbid[dbid].get("location"))
+        art = artwork_reader.read_embedded_artwork(path) if path else None
+        if art and db.set_artwork(pointer, art):
+            restored += 1
+    if restored:
+        log.info("added missing album artwork to %d songs on the iPod", restored)
+    return restored
+
+
 def _convert_for_ipod(path: str, kbps: int, folder: str, report: SyncReport,
                       song: dict) -> str | None:
     """An AAC copy of the song for the iPod, in `folder`; None (and a problem
@@ -319,7 +337,10 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
             raise SyncCancelled()
 
     tell("Reading the iPod…")
-    with gpod.Database(ipod.mountpoint) as db:
+    hint = None
+    if not ipod.model_number:
+        hint = models.stand_in_model_number(usb_details(ipod.device)[0])
+    with gpod.Database(ipod.mountpoint, model_hint=hint) as db:
         prepare_device_info(db, ipod)
         settings = record.settings
         all_tracks = db.tracks()
@@ -385,6 +406,11 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
         for dbid, pointer in kept.items():
             fill_track(pointer.contents, library_by_dbid[dbid])
             report.updated += 1
+
+        # 3b. Album artwork the iPod is missing for songs already on it (e.g.
+        # lost by an earlier sync): added again from the song's file.
+        if ipod.supports_artwork:
+            report.artwork_restored = restore_missing_artwork(db, kept, library_by_dbid, tell)
 
         # 4. Copy new songs (converted on the way when the settings say so).
         added = {}

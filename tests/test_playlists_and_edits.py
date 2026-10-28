@@ -166,7 +166,7 @@ def test_upgrade_to_schema_7_fills_tv_fields(tmp_path):
                                                       "Season": 2, "Episode Order": 3,
                                                       "Episode": "S2E3"})))
     for column in ("show", "season", "episode_number", "episode_id", "equalizer",
-                   "loudness"):                                      # as in v6
+                   "loudness", "description"):                       # as in v6
         conn.execute(f"ALTER TABLE tracks DROP COLUMN {column}")
     conn.execute("PRAGMA user_version = 6")
     conn.commit()

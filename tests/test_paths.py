@@ -21,3 +21,9 @@ def test_nearest_existing_folder(tmp_path):
     (tmp_path / "Music").mkdir()
     expected = tmp_path / "Music" / "Missing Artist" / "Missing Album" / "song.mp3"
     assert nearest_existing_folder(str(expected)) == str(tmp_path / "Music")
+
+
+def test_file_addresses_keep_commas_inside_one_path():
+    from luxtunes.core.paths import file_uri
+    uri = file_uri("/mnt/Drive 8TB/Music/01 - The Lion, the Witch and the Wardrobe.m4b")
+    assert uri.startswith("file:///mnt/Drive%208TB/") and "," not in uri and "%2C" in uri

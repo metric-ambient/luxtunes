@@ -26,6 +26,11 @@ class Column(NamedTuple):
     width: int
     align_right: bool = False
     shown: bool = False        # visible by default?
+    heading: str = ""          # a shorter title for the header itself (menus keep `title`)
+
+    @property
+    def header(self) -> str:
+        return self.heading or self.title
 
 
 # Every column on offer (right-click a column header to show/hide).
@@ -47,15 +52,15 @@ COLUMNS = [
     # Hidden by default:
     Column("album_artist", "Album Artist", 160),
     Column("album_rating", "Album Rating", 90),
-    Column("bpm", "Beats Per Minute", 60, True),
+    Column("bpm", "Beats Per Minute", 60, True, heading="BPM"),
     Column("category", "Category", 100),
     Column("comments", "Comments", 160),
     Column("composer", "Composer", 140),
     Column("date_modified", "Date Modified", 135),
     Column("description", "Description", 160),
-    Column("disc_number", "Disc Number", 70, True),
+    Column("disc_number", "Disc Number", 70, True, heading="Disc #"),
     Column("episode_id", "Episode ID", 80),
-    Column("episode_number", "Episode Number", 70, True),
+    Column("episode_number", "Episode Number", 70, True, heading="Episode #"),
     Column("equalizer", "Equalizer", 90),
     Column("grouping", "Grouping", 120),
     Column("play_date", "Last Played", 135),
@@ -73,7 +78,7 @@ COLUMNS = [
     Column("sort_composer", "Sort Composer", 140),
     Column("sort_name", "Sort Name", 160),
     Column("sort_show", "Sort Show", 120),
-    Column("track_number", "Track Number", 75, True),
+    Column("track_number", "Track Number", 75, True, heading="Track #"),
     # Only shown in Album List view (always first there):
     Column("album_group", "Album by Artist", 240),
     Column("album_track", "#", 32, True),
@@ -108,6 +113,23 @@ def track_ids_from_mime(data: QMimeData) -> list[int]:
 # Ask for this role to get the whole track dict for a row.
 TrackRole = Qt.ItemDataRole.UserRole
 
+# Roles as plain numbers: data() runs for every cell and role on every repaint
+# (about ten times per cell), so it compares numbers and answers the common
+# "nothing" quickly.
+_DISPLAY = Qt.ItemDataRole.DisplayRole.value
+_EDIT = Qt.ItemDataRole.EditRole.value
+_TRACK = TrackRole.value
+_CHECK = Qt.ItemDataRole.CheckStateRole.value
+_ALIGN = Qt.ItemDataRole.TextAlignmentRole.value
+_BACKGROUND = Qt.ItemDataRole.BackgroundRole.value
+_DECORATION = Qt.ItemDataRole.DecorationRole.value
+_TOOLTIP = Qt.ItemDataRole.ToolTipRole.value
+_ANSWERED = {_DISPLAY, _EDIT, _TRACK, _CHECK, _ALIGN, _BACKGROUND, _DECORATION, _TOOLTIP}
+_DRAWN = ("enabled", "rating", "album_group")       # a checkbox / stars / album cell instead
+# Cells whose text comes from other fields too ("3 of 12", Album List's "#").
+_SOURCES = {"track_number": ("track_number", "track_count"),
+            "disc_number": ("disc_number", "disc_count"), "album_track": ("track_number",)}
+
 
 class TrackTableModel(QAbstractTableModel):
     rating_edited = Signal(int, int)        # track id, new rating (0-100)
@@ -119,6 +141,7 @@ class TrackTableModel(QAbstractTableModel):
         self._all: list[dict] = []          # every track in the current source
         self._rows: list[dict] = []         # after search filter + sort
         self._words: list[str] = []
+        self._scope = "all"                 # which tags the search looks in (formatting.SEARCH_SCOPES)
         self._id_filter: set[int] | None = None   # Grid view "open an album": only these songs
         self._sort_column = ARTIST_COLUMN
         self._sort_order = Qt.SortOrder.AscendingOrder
@@ -156,9 +179,23 @@ class TrackTableModel(QAbstractTableModel):
         self._apply()
         self.endResetModel()
 
+    def set_search_scope(self, scope: str):
+        """Search everything ("all") or one kind of tag: "artist", "album", "composer", "name"."""
+        scope = scope if scope in formatting.SEARCH_SCOPES else "all"
+        if scope == self._scope:
+            return
+        self.beginResetModel()
+        self._scope = scope
+        self._apply()
+        self.endResetModel()
+
     def _apply(self):
+        if self._words and self._scope != "all":
+            text = lambda t: formatting.search_text(t, self._scope)
+        else:
+            text = lambda t: t["_search"]
         rows = [t for t in self._all
-                if formatting.matches(t["_search"], self._words)
+                if (not self._words or formatting.matches(text(t), self._words))
                 and (self._id_filter is None or t["id"] in self._id_filter)]
         if self._sort_column < 0:
             key = lambda t: t["_order"]
@@ -205,8 +242,8 @@ class TrackTableModel(QAbstractTableModel):
         column = COLUMNS[section]
         if role == Qt.ItemDataRole.DisplayRole:
             if column.align_right and section == self._sort_column:
-                return column.title + SORT_ARROW_PAD
-            return column.title
+                return column.header + SORT_ARROW_PAD
+            return column.header
         if role == Qt.ItemDataRole.TextAlignmentRole and column.align_right:
             return RIGHT_ALIGNED
         return None
@@ -220,28 +257,29 @@ class TrackTableModel(QAbstractTableModel):
         return flags
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
-        if not index.isValid():
+        role = getattr(role, "value", role)
+        if role not in _ANSWERED or not index.isValid():
             return None
         track = self._rows[index.row()]
         column = COLUMNS[index.column()]
 
-        if role == Qt.ItemDataRole.DisplayRole:
-            if column.key in ("enabled", "rating", "album_group"):
-                return None  # drawn as a checkbox / stars / album cell instead
-            return formatting.display_value(track, column.key)
-        if role == Qt.ItemDataRole.EditRole and column.key in EDITABLE_KEYS:
+        if role == _DISPLAY:
+            if column.key in _DRAWN:
+                return None
+            return self._cell_text(track, column.key)
+        if role == _EDIT and column.key in EDITABLE_KEYS:
             value = track.get(column.key)
             return "" if value is None else str(value)
-        if role == TrackRole:
+        if role == _TRACK:
             return track
-        if role == Qt.ItemDataRole.CheckStateRole and column.key == "enabled":
+        if role == _CHECK and column.key == "enabled":
             return Qt.CheckState.Checked if track.get("enabled", 1) else Qt.CheckState.Unchecked
-        if role == Qt.ItemDataRole.TextAlignmentRole and column.align_right:
+        if role == _ALIGN and column.align_right:
             return RIGHT_ALIGNED
-        if role == Qt.ItemDataRole.BackgroundRole and track["id"] == self._now_playing_id \
+        if role == _BACKGROUND and track["id"] == self._now_playing_id \
                 and self._now_playing_id is not None:
             return theme.now_playing_color()        # a grey bar; the selection's blue covers it
-        if role == Qt.ItemDataRole.DecorationRole and column.key == "name":
+        if role == _DECORATION and column.key == "name":
             if track["id"] == self._now_playing_id:
                 if self._speaker_icon is None:
                     self._speaker_icon = QApplication.style().standardIcon(
@@ -254,10 +292,26 @@ class TrackTableModel(QAbstractTableModel):
                         QStyle.StandardPixmap.SP_MessageBoxWarning
                     )
                 return self._missing_icon
-        if role == Qt.ItemDataRole.ToolTipRole and column.key == "name" and track.get("_problem"):
+        if role == _TOOLTIP and column.key == "name" and track.get("_problem"):
             location = track.get("location") or "no location"
             return f"{track['_problem']}\n{location}"      # Display Missing: what's wrong
         return None
+
+    @staticmethod
+    def _cell_text(track: dict, key: str) -> str:
+        """The cell's text, remembered with the value it was made from (dates and
+        sizes take a moment to format, and each cell is asked again and again)."""
+        sources = _SOURCES.get(key)
+        raw = tuple(track.get(k) for k in sources) if sources else track.get(key)
+        cells = track.get("_cells")
+        if cells is None:
+            cells = track["_cells"] = {}
+        known = cells.get(key)
+        if known is not None and known[0] == raw:
+            return known[1]
+        text = formatting.display_value(track, key)
+        cells[key] = (raw, text)
+        return text
 
     # ---- Editing (checkbox and stars) --------------------------------------
 
