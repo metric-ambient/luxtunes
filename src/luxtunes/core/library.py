@@ -346,11 +346,21 @@ def update_track_fields(conn: sqlite3.Connection, track_id: int, fields: dict) -
         pending = set(json.loads(row["dirty_fields"])) if row["dirty_fields"] else set()
         clean["dirty_fields"] = json.dumps(sorted(pending | tag_keys))
         clean["tags_dirty"] = 1
+    if "lyrics" in clean and "synced_lyrics" in row.keys() and row["synced_lyrics"]:
+        from luxtunes.core import lrc
+        if not lrc.same_words(clean["lyrics"], row["synced_lyrics"]):
+            clean["synced_lyrics"] = None       # the timed lyrics no longer fit these words
     clean["date_modified"] = now_utc()
     assignments = ", ".join(f"{k} = ?" for k in clean)
     with conn:
         conn.execute(f"UPDATE tracks SET {assignments} WHERE id = ?", [*clean.values(), track_id])
     return clean
+
+
+def set_synced_lyrics(conn: sqlite3.Connection, track_id: int, timed: str | None) -> None:
+    """Timed lyrics (LRC), kept in the library only, for highlighting as the song plays."""
+    with conn:
+        conn.execute("UPDATE tracks SET synced_lyrics = ? WHERE id = ?", (timed or None, track_id))
 
 
 def pending_tag_fields(conn: sqlite3.Connection, track_id: int) -> set[str]:

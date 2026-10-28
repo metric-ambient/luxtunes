@@ -191,7 +191,7 @@ def test_upgrade_to_schema_10_adds_description(tmp_path):
     conn.close()
     conn = db.connect(tmp_path / "library.db")
     assert "description" in {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
 
 
 def test_searching_one_kind_of_tag():

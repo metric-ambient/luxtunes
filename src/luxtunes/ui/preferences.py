@@ -58,6 +58,7 @@ APPEARANCE = {
     "gapless": False,
     "sound_check": False,
     "mini_on_top": True,            # the Mini Player stays above other windows
+    "follow_lyrics": True,          # Pop-Out Player: highlight the line being sung
 }
 
 
@@ -253,12 +254,18 @@ class PreferencesDialog(QDialog):
                             "volume tags, and measures songs without them in the background "
                             "(this needs FFmpeg, and takes a while for a big library the "
                             "first time). The levels also go to iPods and phones.")
+        self.follow_lyrics = QCheckBox("Highlight lyrics as they're sung")
+        self.follow_lyrics.setChecked(look["follow_lyrics"])
+        follow_note = QLabel("In the Pop-Out Player's lyrics, the line being sung is lit up and "
+                             "kept in the middle, for songs with timed lyrics (Get Lyrics "
+                             "Online… adds them where it can).")
         self.mini_on_top = QCheckBox("Keep the Mini Player on top of other windows")
         self.mini_on_top.setChecked(look["mini_on_top"])
         on_top_note = QLabel("The Mini Player stays visible above the programs you're using.")
         layout = QVBoxLayout(page)
         for widget, note in ((self.crossfade, fade_note), (self.gapless, gapless_note),
-                             (self.sound_check, check_note), (self.mini_on_top, on_top_note)):
+                             (self.sound_check, check_note), (self.follow_lyrics, follow_note),
+                             (self.mini_on_top, on_top_note)):
             note.setWordWrap(True)
             note.setContentsMargins(24, 0, 0, 0)
             note.setEnabled(False)
@@ -350,6 +357,7 @@ class PreferencesDialog(QDialog):
         s.setValue("prefs/gapless", self.gapless.isChecked())
         s.setValue("prefs/sound_check", self.sound_check.isChecked())
         s.setValue("prefs/mini_on_top", self.mini_on_top.isChecked())
+        s.setValue("prefs/follow_lyrics", self.follow_lyrics.isChecked())
         s.setValue("prefs/source_text", self.source_text.currentData())
         s.setValue("prefs/list_text", self.list_text.currentData())
         s.setValue("prefs/grid_dark", bool(self.grid_view.currentData()))

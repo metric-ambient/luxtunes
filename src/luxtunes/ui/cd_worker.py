@@ -110,3 +110,41 @@ class SongLookupWorker(QThread):
         except Exception as error:
             self.failed.emit(f"{type(error).__name__}: {error}" if not isinstance(error, cd.CdError)
                              else str(error))
+
+
+class LyricsLookupWorker(QThread):
+    """Right-click → Get Lyrics Online…, in the background. Also reads the
+    lyrics already in each song's file, so only songs without any get new ones."""
+    progress = Signal(int, int, str)          # songs done, songs in all, which
+    done = Signal(object, object)             # lyrics_online.LyricsResult, {track id: lyrics now}
+    failed = Signal(str)
+
+    def __init__(self, tracks: list[dict], approved: bool, parent=None):
+        super().__init__(parent)
+        self.tracks = copy.deepcopy(tracks)
+        self.approved = approved              # you said yes to going online
+        self._stop = threading.Event()
+
+    def stop(self):
+        self._stop.set()
+
+    def run(self):
+        from luxtunes.core import lyrics_online
+        from luxtunes.core.paths import find_file
+        from luxtunes.core.tags import TagError, read_details
+        try:
+            existing = {}
+            for track in self.tracks:
+                words = track.get("lyrics") or ""
+                if not words:
+                    path = find_file(track.get("location"))
+                    try:
+                        words = (read_details(path).get("lyrics") or "") if path else ""
+                    except (TagError, OSError):
+                        words = ""
+                existing[track["id"]] = words
+            result = lyrics_online.find_many(self.tracks, approved=self.approved,
+                                             progress=self.progress.emit, stop=self._stop)
+            self.done.emit(result, existing)
+        except Exception as error:
+            self.failed.emit(f"{type(error).__name__}: {error}")

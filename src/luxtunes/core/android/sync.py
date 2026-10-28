@@ -469,7 +469,9 @@ TRACK_COLUMNS = (
     # LuxTunes 0.7.0: the song's own equalizer preset (a name in equalizer_presets)
     "equalizer",
     # LuxTunes 0.8.0: Sound Check's loudness correction in dB (NULL: not known yet)
-    "loudness")
+    "loudness",
+    # LuxTunes 0.8.5: timed lyrics (LRC) for highlighting the line being sung (NULL: none)
+    "synced_lyrics")
 
 # The equalizer's bands as equalizer_presets columns.
 EQ_COLUMNS = ("band_32", "band_64", "band_125", "band_250", "band_500", "band_1k", "band_2k",

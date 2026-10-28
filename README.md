@@ -62,8 +62,8 @@ Made for Linux Mint, and it runs on most recent Linux systems.
 - A **10-band equalizer** with presets, and a preset of its own for any song.
 - **Crossfade**, **gapless playback** and **Sound Check** (every song at about the same
   volume).
-- A **Mini Player**, a **Pop-Out Player** with big artwork and lyrics, and a
-  **sleep timer**.
+- A **Mini Player**, a **Pop-Out Player** with big artwork and lyrics (the line being sung
+  highlighted, with lyrics from LRCLIB), and a **sleep timer**.
 - Media keys and the desktop's sound menu work as you'd expect.
 
 ### Devices
@@ -82,7 +82,7 @@ Made for Linux Mint, and it runs on most recent Linux systems.
 ### Privacy
 
 LuxTunes asks before it ever goes online, which only happens for CD names, Get Track Info
-Online…, and checking for updates. There's no account and nothing is collected.
+Online…, Get Lyrics Online…, and checking for updates. There's no account and nothing is collected.
 
 ## Get LuxTunes
 

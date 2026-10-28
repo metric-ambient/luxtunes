@@ -10,9 +10,10 @@ those extras on.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QItemSelection, QItemSelectionModel, QRect, Qt
-from PySide6.QtGui import QColor, QFont, QPainter, QPalette
-from PySide6.QtWidgets import QStyledItemDelegate, QTableView
+from PySide6.QtCore import QItemSelection, QItemSelectionModel, QPoint, QRect, QRectF, Qt
+from PySide6.QtGui import (QColor, QDrag, QFont, QPainter, QPainterPath, QPalette, QPen,
+                           QPixmap)
+from PySide6.QtWidgets import QApplication, QStyledItemDelegate, QTableView
 
 from luxtunes.core import albums
 from luxtunes.ui.art_cache import ART_CACHE
@@ -74,6 +75,58 @@ class AlbumCellDelegate(QStyledItemDelegate):
                          Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
                          "★" * stars + "☆" * (5 - stars))
         painter.restore()
+
+
+def drag_icon(count: int, ratio: float = 1.0) -> QPixmap:
+    """What follows the mouse while several songs are dragged: a small music
+    file with a red bubble saying how many, so you can still see where
+    they're going."""
+    size = 56
+    pixmap = QPixmap(round(size * ratio), round(size * ratio))
+    pixmap.setDevicePixelRatio(ratio)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pixmap)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    # The file: a page with its top-right corner folded over.
+    left, top, width, height, fold = 8.0, 12.0, 30.0, 38.0, 9.0
+    page = QPainterPath()
+    page.moveTo(left, top)
+    page.lineTo(left + width - fold, top)
+    page.lineTo(left + width, top + fold)
+    page.lineTo(left + width, top + height)
+    page.lineTo(left, top + height)
+    page.closeSubpath()
+    p.setPen(QPen(QColor(90, 90, 90), 1.2))
+    p.setBrush(QColor(250, 250, 250))
+    p.drawPath(page)
+    corner = QPainterPath()
+    corner.moveTo(left + width - fold, top)
+    corner.lineTo(left + width - fold, top + fold)
+    corner.lineTo(left + width, top + fold)
+    p.setBrush(QColor(215, 215, 215))
+    p.drawPath(corner)
+    # The music note.
+    note = QFont(QApplication.font())
+    note.setPixelSize(22)
+    p.setFont(note)
+    p.setPen(QColor(60, 60, 60))
+    p.drawText(QRectF(left, top + 6, width, height - 6), Qt.AlignmentFlag.AlignCenter, "\u266b")
+    # The bubble with the count.
+    text = f"{count:,}" if count < 1000 else "999+"
+    badge = QFont(QApplication.font())
+    badge.setPixelSize(11)
+    badge.setBold(True)
+    p.setFont(badge)
+    text_width = p.fontMetrics().horizontalAdvance(text)
+    bubble_w = max(20.0, text_width + 10.0)
+    bubble = QRectF(size - bubble_w - 1, 2, bubble_w, 20)
+    p.setPen(QPen(QColor(255, 255, 255), 1.5))
+    p.setBrush(QColor(220, 50, 47))
+    p.drawRoundedRect(bubble, 10, 10)
+    p.setPen(QColor(255, 255, 255))
+    p.drawText(bubble, Qt.AlignmentFlag.AlignCenter, text)
+    p.end()
+    return pixmap
 
 
 class TrackTableView(QTableView):
@@ -145,6 +198,27 @@ class TrackTableView(QTableView):
                 self.selectionModel().select(selection, flags)
                 self.selectionModel().setCurrentIndex(
                     model.index(start, 1), QItemSelectionModel.SelectionFlag.NoUpdate)
+
+    def startDrag(self, supported_actions):
+        """One song drags as its row, as before; two or more as a small file
+        icon with a count, instead of a picture of every row."""
+        indexes = [i for i in self.selectionModel().selectedIndexes()
+                   if self.model().flags(i) & Qt.ItemFlag.ItemIsDragEnabled]
+        count = len({i.row() for i in indexes})
+        if count < 2:
+            super().startDrag(supported_actions)
+            return
+        data = self.model().mimeData(indexes)
+        if data is None:
+            return
+        drag = QDrag(self)
+        drag.setMimeData(data)
+        drag.setPixmap(drag_icon(count, self.devicePixelRatioF()))
+        drag.setHotSpot(QPoint(20, 30))
+        action = self.defaultDropAction()
+        if action == Qt.DropAction.IgnoreAction:
+            action = Qt.DropAction.CopyAction
+        drag.exec(supported_actions, action)
 
     def paintEvent(self, event):
         super().paintEvent(event)

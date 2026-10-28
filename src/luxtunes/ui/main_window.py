@@ -1182,7 +1182,8 @@ class MainWindow(QMainWindow):
                                     QAbstractItemView.ScrollHint.PositionAtCenter)
         if self._art_window is not None:
             self._art_window.show_track(track, self._artwork_for(track))
-            self._art_window.set_lyrics(self._lyrics_for(track))
+            self._art_window.set_lyrics(self._lyrics_for(track),
+                                        (track or {}).get("synced_lyrics"))
         if self._mini_player is not None:
             self._mini_player.show_track(track)
         # Movies and TV shows play in the video window; music closes it.
@@ -1699,6 +1700,8 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(
                 f"{len(problems):,} file(s) still can't be updated with your earlier edits "
                 "(missing or read-only).", 8000)
+        elif problems and getattr(self, "_closing_with_tags", False):
+            log.info("closing: %d file(s) not updated yet; tried again next start", len(problems))
         elif problems:
             QMessageBox.warning(
                 self, "LuxTunes",
@@ -1792,6 +1795,96 @@ class MainWindow(QMainWindow):
         worker.failed.connect(on_failed)
         worker.finished.connect(on_finished)
         worker.start()
+
+    def _get_lyrics_online(self, tracks: list[dict]):
+        """Right-click → Get Lyrics Online…: lyrics from LRCLIB (after you say yes)
+        for songs that have none, plus timed lyrics for highlighting the line
+        being sung in the Pop-Out Player."""
+        tracks = [{k: v for k, v in t.items() if not k.startswith("_")} for t in tracks if t]
+        if not tracks or self._song_lookup is not None:
+            return
+        count = len(tracks)
+        approved = self._approve_internet(
+            "Get Lyrics Online",
+            f"Look up lyrics for {'“' + tracks[0].get('name', '') + '”' if count == 1 else f'{count:,} songs'} "
+            "on the internet?",
+            "LuxTunes will send the song names, artists, albums and lengths to LRCLIB, a free "
+            "online lyrics library, and download the lyrics it has. Songs that already have "
+            "lyrics keep them; where LRCLIB knows when each line is sung, the Pop-Out Player "
+            "highlights it as the song plays.",
+            "Look Up Lyrics")
+        if not approved:
+            return
+        from luxtunes.ui.cd_worker import LyricsLookupWorker
+        worker = LyricsLookupWorker(tracks, approved=True, parent=self)
+        self._song_lookup = worker
+        progress = QProgressDialog("Looking up lyrics…", "Stop", 0, count, self)
+        progress.setWindowTitle("Get Lyrics Online")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.canceled.connect(worker.stop)
+
+        def on_progress(done, total, name):
+            progress.setMaximum(max(total, 1))
+            progress.setValue(min(done, total))
+            progress.setLabelText(f"“{name}”…" if name != "Done" else name)
+
+        def on_done(result, existing):
+            progress.close()
+            self._save_found_lyrics(result, existing)
+
+        def on_failed(message):
+            progress.close()
+            QMessageBox.warning(self, "Get Lyrics Online", f"The lookup didn't work:\n\n{message}")
+
+        def on_finished():
+            self._song_lookup = None
+            worker.deleteLater()
+
+        worker.progress.connect(on_progress)
+        worker.done.connect(on_done)
+        worker.failed.connect(on_failed)
+        worker.finished.connect(on_finished)
+        worker.start()
+
+    def _save_found_lyrics(self, result, existing: dict):
+        """Lyrics into the library (and, in the background, the files); timed
+        lyrics into the library only."""
+        from luxtunes.core import lyrics_online
+        added = timed = 0
+        for track_id, found in result.found.items():
+            track = library.load_track(self.conn, track_id)
+            if track is None:
+                continue
+            changes = lyrics_online.to_save(track, existing.get(track_id, ""), found)
+            if "lyrics" in changes:
+                library.update_track_fields(self.conn, track_id, {"lyrics": changes["lyrics"]})
+                self._tag_jobs.append((track_id, UNCHANGED))
+                added += 1
+            if "synced_lyrics" in changes:
+                library.set_synced_lyrics(self.conn, track_id, changes["synced_lyrics"])
+                timed += 1
+            if changes:
+                self.model.update_track(track_id, changes)
+                current = self.player.current
+                if current is not None and current.get("id") == track_id:
+                    current.update(changes)
+                    if self._art_window is not None:
+                        self._art_window.set_lyrics(self._lyrics_for(current),
+                                                    current.get("synced_lyrics"))
+        self._start_tag_writes()
+        looked = len(result.found) + len(result.not_found)
+        parts = [f"Lyrics were added to {added:,} song{'s' if added != 1 else ''}."]
+        if timed:
+            parts.append(f"{timed:,} can highlight the line being sung in the Pop-Out Player.")
+        missing = len(result.not_found)
+        if missing:
+            parts.append(f"LRCLIB has no lyrics for {missing:,} of the {looked:,} songs.")
+        if result.stopped:
+            parts.append("The lookup was stopped before the end.")
+        if result.problems:
+            parts.append("\n" + "\n".join(dict.fromkeys(result.problems[:5])))
+        QMessageBox.information(self, "Get Lyrics Online", " ".join(parts))
 
     def _review_track_info(self, result):
         from luxtunes.ui.track_info_dialog import TrackInfoDialog
@@ -1891,6 +1984,8 @@ class MainWindow(QMainWindow):
         self.player.apply_volume()
         if getattr(self, "_mini_player", None) is not None:
             self._mini_player.set_on_top(look["mini_on_top"])
+        if getattr(self, "_art_window", None) is not None:
+            self._art_window.set_follow(look["follow_lyrics"])
         if look["sound_check"]:
             QTimer.singleShot(3000, self._measure_loudness)   # after the window is up
 
@@ -2225,6 +2320,7 @@ class MainWindow(QMainWindow):
         It shows the playing song; if nothing is playing, the selected one."""
         if self._art_window is None:
             w = ArtworkWindow(self)
+            w.set_follow(appearance(self.settings)["follow_lyrics"])
             w.play_clicked.connect(self._on_play_clicked)
             w.next_clicked.connect(self.player.next)
             w.previous_clicked.connect(self.player.previous)
@@ -2236,7 +2332,7 @@ class MainWindow(QMainWindow):
         w = self._art_window
         track = self.player.current or self.model.track_at(self.table.currentIndex().row())
         w.show_track(track, self._artwork_for(track))
-        w.set_lyrics(self._lyrics_for(track))
+        w.set_lyrics(self._lyrics_for(track), (track or {}).get("synced_lyrics"))
         w.set_volume(self.volume.value())
         w.set_playing(self.player.is_playing)
         if not w.isVisible():
@@ -2470,6 +2566,7 @@ class MainWindow(QMainWindow):
 
         menu.addAction("Get Info", self._get_info)
         menu.addAction("Get Track Info Online…", lambda: self._get_track_info_online(tracks))
+        menu.addAction("Get Lyrics Online…", lambda: self._get_lyrics_online(tracks))
         paste = menu.addAction("Paste Artwork", lambda: self._paste_artwork(tracks))
         mime = QApplication.clipboard().mimeData()
         paste.setEnabled(bool(mime) and (mime.hasImage() or mime.hasUrls()))
@@ -4715,6 +4812,7 @@ class MainWindow(QMainWindow):
         if self._tag_worker is not None:
             self.statusBar().showMessage("Finishing writing your changes into the files…")
             QApplication.processEvents()
+            self._closing_with_tags = True       # no warning now: they're tried again next start
             self._tag_worker.wait()              # never stop half-way through a file
         if self._loudness_worker is not None:
             self._loudness_worker.stop()

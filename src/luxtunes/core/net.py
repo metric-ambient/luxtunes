@@ -3,7 +3,7 @@
 Callers check approved=True first (require()), so nothing goes online without
 your OK. On top of that, this module only talks HTTPS, only to the services
 LuxTunes uses (MusicBrainz, the Cover Art Archive and the archive.org servers
-it sends covers from, and GitHub for updates), checks that again on every
+it sends covers from, LRCLIB for lyrics, and GitHub for updates), checks that again on every
 redirect, and caps how much it reads, so a bad or hijacked answer can't send
 LuxTunes somewhere else or fill up memory. No Qt in here.
 """
@@ -16,10 +16,10 @@ import urllib.request
 
 from luxtunes import __version__
 
-USER_AGENT = f"LuxTunes/{__version__} (Linux music player)"
+USER_AGENT = f"LuxTunes/{__version__} (https://github.com/metric-ambient/luxtunes)"
 
 # A host is allowed if it is one of these or a subdomain of one.
-ALLOWED_HOSTS = ("musicbrainz.org", "coverartarchive.org", "archive.org",
+ALLOWED_HOSTS = ("musicbrainz.org", "coverartarchive.org", "archive.org", "lrclib.net",
                  "github.com", "githubusercontent.com")
 
 MAX_ANSWER = 32 * 1024 * 1024           # JSON answers and cover images

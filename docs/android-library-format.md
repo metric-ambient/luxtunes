@@ -109,7 +109,9 @@ per star), `rating_computed` (1 if the rating is the album's, not set for this s
 `compilation`, `comments`, `lyrics`, `bookmarkable`, `bookmark_time` (milliseconds),
 `skip_when_shuffling`, `start_time`, `stop_time`, `volume_adjustment` (−100 to +100, a
 percentage of the playing volume), `equalizer`, `loudness` (Sound Check's correction in
-dB for a −18 LUFS target, at most +6; NULL when not known yet), `show`, `season`,
+dB for a −18 LUFS target, at most +6; NULL when not known yet), `synced_lyrics` (timed
+lyrics in LRC form, `[mm:ss.xx]line`, from LuxTunes 0.8.5; NULL when there are none; the
+words match `lyrics`, so a player can highlight the line being sung), `show`, `season`,
 `episode_number`, the `sort_*` names, `enabled`, `bpm`, `kind` (e.g. "MPEG audio file")
 and `purchased`. That's every detail a smart playlist rule can test. Dates are UTC,
 written as `YYYY-MM-DDTHH:MM:SSZ`.

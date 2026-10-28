@@ -41,7 +41,12 @@ player with the controls. Long names scroll. Click ⤢, or close it, to get the 
 window back.</li>
 <li><b>View → Pop-Out Player</b> (or click the album art in the corner) shows the
 artwork large, with controls when you move the mouse over it. Drag its corner to resize.
-Click <b>Lyrics</b> in its controls to show the song's lyrics over the artwork.</li>
+Click <b>Lyrics</b> in its controls to show the song's lyrics over the artwork. When the
+lyrics are timed, the line being sung is highlighted and stays in the middle (turn
+this off in <b>Edit → Preferences… → Playback</b>).</li>
+<li>No lyrics? Right-click songs → <b>Get Lyrics Online…</b>. After you say yes, LuxTunes
+asks LRCLIB, a free lyrics library, and adds lyrics to songs that have none (and timing,
+where LRCLIB has it).</li>
 <li>The Mini Player stays on top of your other windows; turn that off in
 <b>Edit → Preferences… → Playback</b>.</li>
 <li>To look at a selected song's artwork without changing what's playing, right-click the
@@ -234,8 +239,8 @@ order; playlists use Music's.</li>
 
     ("Updates and privacy", "Nothing goes online without asking", """
 <ul>
-<li>LuxTunes only goes online when you agree: CD names, Get Track Info Online…, and
-updates.</li>
+<li>LuxTunes only goes online when you agree: CD names, Get Track Info Online…, Get Lyrics
+Online…, and updates.</li>
 <li><b>Help → Check for Updates…</b> looks for a new version (after asking) and offers
 to install it.</li>
 </ul>"""),
