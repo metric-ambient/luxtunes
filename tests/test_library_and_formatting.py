@@ -180,3 +180,23 @@ def test_changing_a_field_clears_its_old_sort_field(tmp_path):
     library.update_track_fields(conn, 1, {"album": "X", "sort_album": "Custom"})
     library.update_track_fields(conn, 1, {"album": "X"})
     assert library.load_track(conn, 1)["sort_album"] == "Custom"
+
+
+def test_upgrade_to_schema_10_adds_description(tmp_path):
+    from luxtunes.core import db
+    conn = db.connect(tmp_path / "library.db")
+    conn.execute("ALTER TABLE tracks DROP COLUMN description")
+    conn.execute("PRAGMA user_version = 9")
+    conn.commit()
+    conn.close()
+    conn = db.connect(tmp_path / "library.db")
+    assert "description" in {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
+
+
+def test_searching_one_kind_of_tag():
+    from luxtunes.ui import formatting
+    song = {"name": "Misery Business", "artist": "Paramore", "album": "Brand New Eyes"}
+    assert "brand new" in formatting.search_text(song)
+    assert "brand new" not in formatting.search_text(song, "artist")
+    assert formatting.search_text(song, "album") == "brand new eyes"

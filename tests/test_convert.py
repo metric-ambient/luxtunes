@@ -58,6 +58,44 @@ def test_real_conversion(tmp_path):
     assert flac.exists()
 
 
+def test_which_versions_each_format_gets():
+    def offered(location, kind="", media_kind="music"):
+        track = {"location": location, "kind": kind, "media_kind": media_kind}
+        return [to for to in convert.FORMATS if convert.can_convert(track, to)]
+    for lossless in ("/x/a.flac", "/x/a.wav", "/x/a.aiff", "/x/a.ogg", "/x/a.opus"):
+        assert offered(lossless) == ["mp3", "aac"]
+    assert offered("/x/a.m4a", "Apple Lossless audio file") == ["mp3", "aac"]
+    assert offered("/x/a.mp3", "MPEG audio file") == ["aac"]
+    assert offered("/x/a.m4a", "AAC audio file") == ["mp3"]
+    assert offered("/x/a.m4b", "AAC audio file", "audiobook") == ["mp3"]
+    assert offered("/x/a.m4p", "Protected AAC audio file") == []
+    assert offered("/x/film.m4v", "MPEG-4 video file", "movie") == []
+    assert convert.target_for("/x/a.mp3", "aac").name == "a.m4a"
+    cmd = convert.command("ffmpeg", "a.mp3", "a.m4a", 44100, to="aac")
+    assert cmd[-1] == "a.m4a" and "256k" in cmd and "aac" in cmd
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+def test_real_aac_version_of_an_mp3(tmp_path):
+    conn = db.connect(tmp_path / "library.db")
+    organize.set_media_folder(conn, tmp_path / "Media")
+    song = tmp_path / "Media" / "Music" / "A" / "B" / "01 Song.mp3"
+    song.parent.mkdir(parents=True)
+    subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i",
+                    "sine=frequency=440:duration=1", "-codec:a", "libmp3lame", str(song)],
+                   check=True)
+    tags.write_tags(str(song), {"name": "Song", "artist": "A", "album": "B"}, artworks=[PNG])
+    conn.execute("INSERT INTO tracks (persistent_id, name, artist, album, kind, location) "
+                 "VALUES ('P1', 'Song', 'A', 'B', 'MPEG audio file', ?)", (str(song),))
+    conn.commit()
+    source = library.load_track(conn, 1)
+    target = convert.target_for(str(song), "aac")
+    subprocess.run(convert.command("ffmpeg", str(song), str(target), 44100, to="aac"), check=True)
+    new = library.load_track(conn, convert.finish(conn, source, str(song), str(target)))
+    assert new["location"].endswith("01 Song.m4a") and new["kind"] == "AAC audio file"
+    assert new["name"] == "Song" and tags.read_details(new["location"])["artworks"] == [PNG]
+
+
 def test_ipod_video_name_and_settings(tmp_path):
     from luxtunes.core import convert
     source = tmp_path / "Film.mkv"

@@ -23,7 +23,7 @@ from pathlib import Path
 from luxtunes.core.paths import data_home
 
 # Bump this when the schema changes, and add a step to _migrate().
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS library_info (
@@ -237,8 +237,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # Sound Check: the song's loudness correction in dB (from its ReplayGain
         # tags or measured), NULL until known.
         conn.execute("ALTER TABLE tracks ADD COLUMN loudness REAL")
+    if version < 10:
+        # Get Info's Video tab: a movie's or episode's description.
+        if "description" not in {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}:
+            conn.execute("ALTER TABLE tracks ADD COLUMN description TEXT")
     # Future schema changes go here:
-    # if version < 10:
+    # if version < 11:
     #     conn.execute("ALTER TABLE tracks ADD COLUMN ...")
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()

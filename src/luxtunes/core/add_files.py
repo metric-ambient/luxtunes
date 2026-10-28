@@ -1,9 +1,11 @@
 """File → Add File to Library… / Add Folder to Library…
 
-Reads each file's tags and adds it to the library. With "Copy files to
-LuxTunes Media folder when adding to library" on (the default), files
-from elsewhere are copied into the media folder, filed the same way "Keep
-LuxTunes Media folder organized" files them; the original is left alone.
+Reads each file's tags and adds it to the library. Files from elsewhere are
+always copied into the LuxTunes Media folder, filed the same way "Keep
+LuxTunes Media folder organized" files them, so everything LuxTunes shows
+lives there. The original is left alone, unless Preferences → Advanced →
+"Move original files on import" is on: then it's moved instead (taken away
+from where it was only once the library has the song).
 Files already in the library are skipped (the same file, or a copy of a song
 already there: same name, artist, album, file type and length), and adding
 carries on with the rest. No Qt in here.
@@ -34,15 +36,16 @@ VIDEO_KINDS = {".mkv": "Matroska video file", ".avi": "AVI video file", ".webm":
                ".wmv": "Windows Media video file", ".mpg": "MPEG video file",
                ".mpeg": "MPEG video file", ".mov": "QuickTime movie file"}
 SUPPORTED = AUDIO_EXTENSIONS | VIDEO_EXTENSIONS
-KEY_COPY = "copy_when_adding"
+KEY_MOVE = "move_when_adding"
 
 
-def copy_when_adding(conn: sqlite3.Connection) -> bool:
-    return get_setting(conn, KEY_COPY) != "0"
+def move_when_adding(conn: sqlite3.Connection) -> bool:
+    """Preferences → Advanced → Move original files on import (off unless turned on)."""
+    return get_setting(conn, KEY_MOVE) == "1"
 
 
-def set_copy_when_adding(conn: sqlite3.Connection, on: bool) -> None:
-    set_setting(conn, KEY_COPY, "1" if on else "0")
+def set_move_when_adding(conn: sqlite3.Connection, on: bool) -> None:
+    set_setting(conn, KEY_MOVE, "1" if on else "0")
 
 
 @dataclass
@@ -158,7 +161,7 @@ def add_paths(conn: sqlite3.Connection, paths: list[str], progress=None, stop=No
         return result
     known = _known_locations(conn)
     songs = _known_songs(conn)
-    copy = copy_when_adding(conn)
+    move = move_when_adding(conn)
     root = organize.media_folder(conn)
     log.info("adding %d files from %s", len(files), ", ".join(paths))
     for done, path in enumerate(files):
@@ -172,7 +175,7 @@ def add_paths(conn: sqlite3.Connection, paths: list[str], progress=None, stop=No
             continue
         started = time.monotonic()
         try:
-            track_id = add_file(conn, path, copy, root, known, stop, songs=songs)
+            track_id = add_file(conn, path, True, root, known, stop, songs=songs, move=move)
         except AddStopped:
             result.stopped = True
             break
@@ -233,7 +236,7 @@ def add_file(conn: sqlite3.Connection, path: str, copy: bool, root: Path,
              known: dict[str, int] | None = None, stop=None, details: dict | None = None,
              file_it: bool = True, persistent_id: str | None = None,
              fallback: dict | None = None, date_added: str | None = None,
-             songs: dict | None = None) -> int:
+             songs: dict | None = None, move: bool = False) -> int:
     """Add one file and return its new track id. Raises TagError / OSError,
     or AlreadyAdded if an earlier copy of this file is already in the library.
     details: song details that win over the file's own (e.g. a converted
@@ -242,7 +245,8 @@ def add_file(conn: sqlite3.Connection, path: str, copy: bool, root: Path,
     (a song added on a phone keeps the phone's). fallback: details used only
     where the file's own tags have none. date_added: when it was really added.
     songs: _known_songs(), to skip a copy of a song already in the library
-    (AlreadyAdded); new songs are added to it."""
+    (AlreadyAdded); new songs are added to it. move: with copy, the original
+    is moved rather than copied (it goes only once the song is saved)."""
     try:
         fields = read_fields(path)
     except TagError:
@@ -270,6 +274,7 @@ def add_file(conn: sqlite3.Connection, path: str, copy: bool, root: Path,
     fields["date_modified"] = _utc(os.path.getmtime(path))
 
     location = path
+    renamed = False
     if copy and not organize.is_inside(path, root):
         ideal = organize.ideal_path(root, fields, Path(path).suffix)
         if known is None:
@@ -279,19 +284,33 @@ def add_file(conn: sqlite3.Connection, path: str, copy: bool, root: Path,
             raise AlreadyAdded(known[_key(str(ideal))])   # copied in an earlier add
         target = organize.target_path(root, fields, path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        copy_file(path, target, stop)
-        log.info("copied %s -> %s", path, target)
+        if move and os.stat(path).st_dev == os.stat(target.parent).st_dev:
+            os.rename(path, target)         # same drive: instant, nothing copied
+            renamed = True
+        else:
+            copy_file(path, target, stop)
+        log.info("%s %s -> %s", "moved" if renamed else "copied", path, target)
         location = str(target)
     fields["location"] = location
     fields["persistent_id"] = persistent_id or new_persistent_id()
 
     columns = {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}
     row = {k: v for k, v in fields.items() if k in columns}
-    with conn:
-        cursor = conn.execute(
-            f"INSERT INTO tracks ({', '.join(row)}) VALUES ({', '.join('?' for _ in row)})",
-            list(row.values()))
+    try:
+        with conn:
+            cursor = conn.execute(
+                f"INSERT INTO tracks ({', '.join(row)}) VALUES ({', '.join('?' for _ in row)})",
+                list(row.values()))
+    except BaseException:
+        if renamed:
+            os.rename(location, path)       # not in the library after all: put it back
+        raise
     track_id = cursor.lastrowid
+    if move and not renamed and location != path:
+        try:
+            os.remove(path)                 # the copy is in the library now
+        except OSError as error:
+            log.warning("couldn't move %s (it was copied; the original stays): %s", path, error)
     if songs is not None:
         songs.setdefault(key, []).append((track_id, fields.get("total_time")))
     if file_it:

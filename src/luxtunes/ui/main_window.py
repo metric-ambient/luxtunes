@@ -27,7 +27,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, QSize, Qt, QTimer, QUrl
+from PySide6.QtCore import QPoint, QPointF, QSettings, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import (
     QAction, QActionGroup, QColor, QDesktopServices, QFont, QIcon, QKeySequence, QPainter, QPalette, QPixmap,
     QShortcut,
@@ -60,7 +60,7 @@ from luxtunes.core import (add_files, artwork, cd, convert, encoders, equalizer,
                            smart, tag_sync, trash)
 from luxtunes.core import edits
 from luxtunes.core.tags import UNCHANGED, TagError
-from luxtunes.core.paths import find_file, nearest_existing_folder
+from luxtunes.core.paths import file_uri, find_file, nearest_existing_folder
 from luxtunes.importer.itunes_xml import import_library
 from luxtunes.ui import formatting, theme
 from luxtunes.ui.player import REPEAT_ALL, REPEAT_OFF, REPEAT_ONE, Player
@@ -92,6 +92,7 @@ from luxtunes.ui.track_model import (
     ALBUM_RATING_COLUMN,
     ALBUM_TRACK_COLUMN,
     ARTIST_COLUMN,
+    COLUMN_INDEX,
     FIXED_COLUMNS,
     NAME_COLUMN,
     COLUMNS,
@@ -175,7 +176,11 @@ class MainWindow(QMainWindow):
         self._playing_source = None      # the list the current song was started from
         self.view_mode = "list"
         self._table_layout = "list"      # which column layout the song table has now
-        self._header_states: dict[str, object] = {"list": None, "album": None}
+        # Column layouts (which columns, their order, widths) for each Library
+        # section and List / Album List: "music/list", "movie/album"... Playlists
+        # and Up Next use Music's.
+        self._header_states: dict[str, object] = {}
+        self._column_group = "music"
         self._scroll_memory: dict[str, tuple[int, int]] = {}   # screen -> (list, grid) scroll
         self._automatic_sort = False
         self._drilled = False            # a Grid tile is open
@@ -303,6 +308,24 @@ class MainWindow(QMainWindow):
         self.search.setPlaceholderText("Search Music")
         self.search.setClearButtonEnabled(True)
         self.search.setFixedWidth(200)
+        # The magnifier opens a menu: search everything, or only one kind of tag.
+        self._search_menu = QMenu(self)
+        heading = self._search_menu.addAction("Search")
+        heading.setEnabled(False)
+        scope_group = QActionGroup(self)
+        scope = self.settings.value("search_scope", "all")
+        self._search_scope_actions = {}
+        for key, label in (("all", "All"), ("artist", "Artist"), ("album", "Album"),
+                           ("composer", "Composer"), ("name", "Song")):
+            action = self._search_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(key == scope)
+            scope_group.addAction(action)
+            action.triggered.connect(lambda checked=False, k=key: self._set_search_scope(k))
+            self._search_scope_actions[key] = action
+        self._search_icon = self.search.addAction(QIcon(), QLineEdit.ActionPosition.LeadingPosition)
+        self._search_icon.triggered.connect(
+            lambda: self._search_menu.exec(self.search.mapToGlobal(QPoint(0, self.search.height()))))
         bar.addWidget(self.search)
 
         # ---- Left panel: sidebar + album art + small buttons --------------
@@ -343,6 +366,10 @@ class MainWindow(QMainWindow):
         self.table.setItemDelegateForColumn(
             ALBUM_RATING_COLUMN, RatingDelegate(self.table, key="album_rating", editable=False))
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        # Sideways by pixels: only the strip that comes into view is drawn, instead of
+        # the whole list again for every column it jumps.
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.table.horizontalScrollBar().setSingleStep(24)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(
             QAbstractItemView.EditTrigger.SelectedClicked
@@ -607,6 +634,8 @@ class MainWindow(QMainWindow):
         self.sidebar.source_selected.connect(self.show_source)
         self.sidebar.tracks_dropped.connect(self._on_tracks_dropped)
         self.search.textChanged.connect(self._on_search)
+        scope = self.settings.value("search_scope", "all")
+        self._set_search_scope(scope if scope in self._search_scope_actions else "all")
         # Double-clicking the stars rates the song (a quick second click); it doesn't play it.
         self.table.doubleClicked.connect(
             lambda index: index.column() == RATING_COLUMN or self._play_row(index.row()))
@@ -635,6 +664,7 @@ class MainWindow(QMainWindow):
         self.art_toggle.clicked.connect(lambda: self._toggle_artwork(not self.art.isVisible()))
         self.art.header_clicked.connect(self._flip_art_mode)
         self.art.image_clicked.connect(self._open_art_window)
+        self.art.view_requested.connect(self._view_full_size_art)
         self.new_playlist_button.clicked.connect(self._new_playlist)
         self.sidebar.playlist_renamed.connect(self._on_playlist_renamed)
         self.sidebar.menu_requested.connect(self._show_sidebar_menu)
@@ -745,6 +775,7 @@ class MainWindow(QMainWindow):
             self.search.setPlaceholderText("Search Playlist")
             self.grid.set_section("music")
         self.model.set_tracks(tracks, sort_column)
+        self._use_column_group(source)                      # this section's own columns
         wanted = self._remembered_view(self._view_key(source))
         if wanted != self.view_mode:
             self._set_view_mode(wanted, remember=False)     # this section's own view
@@ -1294,6 +1325,38 @@ class MainWindow(QMainWindow):
         color = theme.text_color(self.dark_action.isChecked())
         for button, icon in zip(self.view_buttons, view_icons(color)):
             button.setIcon(icon)
+        self._search_icon.setIcon(self._magnifier_icon(QColor(color)))
+
+    @staticmethod
+    def _magnifier_icon(color: QColor) -> QIcon:
+        """A magnifying glass with a small arrow: the search box's menu."""
+        ratio = QApplication.primaryScreen().devicePixelRatio() if QApplication.primaryScreen() else 1
+        pixmap = QPixmap(round(24 * ratio), round(16 * ratio))
+        pixmap.setDevicePixelRatio(ratio)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = painter.pen()
+        pen.setColor(color)
+        pen.setWidthF(1.6)
+        painter.setPen(pen)
+        painter.drawEllipse(QPointF(7, 7), 4.5, 4.5)
+        painter.drawLine(QPointF(10.3, 10.3), QPointF(14, 14))
+        painter.setBrush(color)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawPolygon([QPointF(16.5, 8), QPointF(22.5, 8), QPointF(19.5, 11.5)])
+        painter.end()
+        return QIcon(pixmap)
+
+    def _set_search_scope(self, scope: str):
+        """The search box's menu: All, Artist, Album, Composer or Song."""
+        self.settings.setValue("search_scope", scope)
+        self._search_scope_actions[scope].setChecked(True)
+        label = self._search_scope_actions[scope].text()
+        self._search_icon.setToolTip(f"Search: {label}")
+        self.model.set_search_scope(scope)
+        if self._current_source is not None:
+            self._update_summary()
 
     # Each Library section remembers its own view (Music: List; Movies, TV
     # Shows, Podcasts and Audiobooks: Grid); playlists and Up Next share one.
@@ -1329,15 +1392,31 @@ class MainWindow(QMainWindow):
             self.cover_flow.center_on_track(self.model.track_at(index.row()) if index.isValid() else None)
             self.cover_flow.setFocus()
 
+    def _header_key(self) -> str:
+        return f"{self._column_group}/{self._table_layout}"
+
     def _apply_table_layout(self, layout: str):
         """Switch the song table between the List and Album List column sets.
         Each keeps its own columns, widths and sort."""
         if layout == self._table_layout:
             return
-        header = self.table.horizontalHeader()
-        self._header_states[self._table_layout] = header.saveState()
+        self._header_states[self._header_key()] = self.table.horizontalHeader().saveState()
         self._table_layout = layout
-        saved = self._header_states.get(layout)
+        self._restore_columns()
+
+    def _use_column_group(self, source):
+        """Each Library section has its own columns; playlists and Up Next use Music's."""
+        group = source[1] if source and source[0] == "library" else "music"
+        if group == self._column_group:
+            return
+        self._header_states[self._header_key()] = self.table.horizontalHeader().saveState()
+        self._column_group = group
+        self._restore_columns()
+
+    def _restore_columns(self):
+        header = self.table.horizontalHeader()
+        layout = self._table_layout
+        saved = self._header_states.get(self._header_key())
         self._automatic_sort = True          # not a sort you chose for this screen
         try:
             if saved is not None:
@@ -1347,6 +1426,10 @@ class MainWindow(QMainWindow):
             else:
                 for i, column in enumerate(COLUMNS):
                     self.table.setColumnHidden(i, not column.shown)
+                for position, key in enumerate(c.key for c in COLUMNS):     # the usual order
+                    header.moveSection(header.visualIndex(COLUMN_INDEX[key]), position)
+                for i, column in enumerate(COLUMNS):
+                    self.table.setColumnWidth(i, column.width)
         finally:
             self._automatic_sort = False
         for i in (ALBUM_GROUP_COLUMN, ALBUM_TRACK_COLUMN):   # album columns only in Album List
@@ -1806,6 +1889,8 @@ class MainWindow(QMainWindow):
         self.player.gapless = look["gapless"]
         self.player.sound_check = look["sound_check"]
         self.player.apply_volume()
+        if getattr(self, "_mini_player", None) is not None:
+            self._mini_player.set_on_top(look["mini_on_top"])
         if look["sound_check"]:
             QTimer.singleShot(3000, self._measure_loudness)   # after the window is up
 
@@ -2173,6 +2258,7 @@ class MainWindow(QMainWindow):
             w.restore_requested.connect(self._close_mini_player)
             self._mini_player = w
         w = self._mini_player
+        w.set_on_top(appearance(self.settings)["mini_on_top"])
         w.show_track(self.player.current)
         w.set_volume(self.volume.value())
         w.set_playing(self.player.is_playing)
@@ -2376,8 +2462,10 @@ class MainWindow(QMainWindow):
         if self._current_source == SOURCE_UP_NEXT:
             menu.addAction("Remove from Queue", lambda: self._delete_tracks(tracks))
         else:
-            menu.addAction("Add to Queue", lambda: self.player.add_to_up_next(
-                [{k: v for k, v in t.items() if not k.startswith("_")} for t in tracks]))
+            plain = lambda: [{k: v for k, v in t.items() if not k.startswith("_")} for t in tracks]
+            # Add to Queue: these play next; Add to End of Queue: after everything queued.
+            menu.addAction("Add to Queue", lambda: self.player.add_to_up_next(plain(), first=True))
+            menu.addAction("Add to End of Queue", lambda: self.player.add_to_up_next(plain()))
         menu.addSeparator()
 
         menu.addAction("Get Info", self._get_info)
@@ -2393,9 +2481,11 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
 
         menu.addAction("Reset Plays", lambda: self._reset_plays(tracks))
-        flacs = [t for t in tracks if convert.can_convert(t)]
-        if flacs:
-            menu.addAction("Create MP3 Version", lambda: self._create_mp3_versions(flacs))
+        for to, label in (("mp3", "Create MP3 Version"), ("aac", "Create AAC Version")):
+            convertible = [t for t in tracks if convert.can_convert(t, to)]
+            if convertible:
+                menu.addAction(label, lambda songs=convertible, to=to:
+                               self._create_audio_versions(songs, to))
         videos = [t for t in tracks if convert.can_make_ipod_video(t)]
         if videos:
             menu.addAction("Create iPod Version", lambda: self._create_ipod_versions(videos))
@@ -2793,7 +2883,7 @@ class MainWindow(QMainWindow):
         if path is None:
             return
         # Ask the file manager (Nemo on Mint) to open the folder with the file selected.
-        uri = QUrl.fromLocalFile(path).toString()
+        uri = file_uri(path)
         try:
             shown = subprocess.run(
                 ["dbus-send", "--session", "--type=method_call",
@@ -3284,6 +3374,11 @@ class MainWindow(QMainWindow):
         if report.stats and report.stats.plays:
             self.statusBar().showMessage(
                 f"{report.stats.plays:,} plays were read from “{self._sync_name}”.", 8000)
+        restored = getattr(report, "artwork_restored", 0)
+        if restored:
+            self.statusBar().showMessage(
+                f"Album artwork was missing on “{self._sync_name}” for {restored:,} "
+                f"song{'s' if restored != 1 else ''}; it's back now.", 8000)
         imported = len(getattr(report, "imported", None) or [])
         if imported:
             self.statusBar().showMessage(
@@ -3914,19 +4009,24 @@ class MainWindow(QMainWindow):
                                     (f"Added {items} to your library. " if added else "")
                                     + skipped_text)
 
-    # ---- Create MP3 Version (FLAC → 320 kbps MP3) ------------------------------------
+    # ---- Create MP3 / AAC Version ------------------------------------------------------
 
     def _create_mp3_versions(self, tracks: list[dict]):
+        self._create_audio_versions(tracks, "mp3")
+
+    def _create_audio_versions(self, tracks: list[dict], to: str = "mp3"):
+        name = {"mp3": "MP3", "aac": "AAC"}[to]
+        title = f"Create {name} Version"
         ffmpeg = convert.ffmpeg_path()
         if ffmpeg is None:
             QMessageBox.warning(
-                self, "Create MP3 Version",
-                "Creating MP3 versions needs FFmpeg, which isn't installed.\n\n"
+                self, title,
+                f"Creating {name} versions needs FFmpeg, which isn't installed.\n\n"
                 "Install it from a terminal with:\n    sudo apt install ffmpeg\n\n"
                 "then try again.")
             return
         progress = QProgressDialog("", "Stop", 0, len(tracks), self)
-        progress.setWindowTitle("Create MP3 Version")
+        progress.setWindowTitle(title)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
         made, problems, converted = 0, [], []
@@ -3938,9 +4038,9 @@ class MainWindow(QMainWindow):
                 problems.append(f"{track.get('name')}: file not found")
                 continue
             source_track = library.load_track(self.conn, track["id"]) or track
-            target = str(convert.mp3_target(source))
+            target = str(convert.target_for(source, to))
             process = subprocess.Popen(
-                convert.command(ffmpeg, source, target, source_track.get("sample_rate")),
+                convert.command(ffmpeg, source, target, source_track.get("sample_rate"), to),
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             while process.poll() is None:        # keep the window responsive meanwhile
                 QApplication.processEvents()
@@ -3964,14 +4064,14 @@ class MainWindow(QMainWindow):
             except (OSError, ValueError, TagError) as problem:
                 problems.append(f"{track.get('name')}: {problem}")
         progress.setValue(len(tracks))
-        self._delete_originals(converted, "Create MP3 Version")
+        self._delete_originals(converted, title)
         if made:
             self.reload_library()
             self.show_source(self._current_source or SOURCE_MUSIC)
             self.statusBar().showMessage(
-                f"Created {made} MP3 version{'s' if made != 1 else ''}.", 6000)
+                f"Created {made} {name} version{'s' if made != 1 else ''}.", 6000)
         if problems:
-            QMessageBox.warning(self, "Create MP3 Version",
+            QMessageBox.warning(self, title,
                                 "Some files couldn't be converted:\n\n" + "\n".join(problems[:20]))
 
     def _create_ipod_versions(self, tracks: list[dict]):
@@ -4279,7 +4379,20 @@ class MainWindow(QMainWindow):
         elif find_file(track.get("location")) is None:
             self.art.set_image(None, "Artwork Not\nAvailable")  # the file is missing
         else:
-            self.art.set_image(artwork.read_embedded_artwork(find_file(track.get("location"))))
+            caption = " — ".join(t for t in (track.get("album") or track.get("name"),
+                                              track.get("album_artist") or track.get("artist")) if t)
+            self.art.set_image(artwork.read_embedded_artwork(find_file(track.get("location"))),
+                               caption=caption)
+
+    def _view_full_size_art(self):
+        """Right-click the art → View Full Size Album Art: just the picture, in a
+        window of its own you can resize, while the music plays on."""
+        if not self.art.data:
+            return
+        from luxtunes.ui.art_viewer import ArtViewer
+        viewer = ArtViewer(self.art.data, self.art.caption, self)
+        viewer.show()
+        viewer.raise_()
 
     def _on_current_row_changed(self, current, previous):
         if current.isValid():            # you clicked (or moved to) a song
@@ -4509,10 +4622,20 @@ class MainWindow(QMainWindow):
         if s.value("splitter") is not None:
             self.splitter.restoreState(s.value("splitter"))
         if s.value("header_version", 0, type=int) == HEADER_LAYOUT_VERSION:
-            self._header_states["list"] = s.value("header_list")
-            self._header_states["album"] = s.value("header_album")
-            if self._header_states["list"] is not None:
-                self.table.horizontalHeader().restoreState(self._header_states["list"])
+            s.beginGroup("columns")
+            for group in s.childGroups():
+                for layout in ("list", "album"):
+                    state = s.value(f"{group}/{layout}")
+                    if state is not None:
+                        self._header_states[f"{group}/{layout}"] = state
+            s.endGroup()
+            # Before each section had its own: the one layout becomes Music's.
+            for layout in ("list", "album"):
+                if f"music/{layout}" not in self._header_states \
+                        and s.value(f"header_{layout}") is not None:
+                    self._header_states[f"music/{layout}"] = s.value(f"header_{layout}")
+            if self._header_states.get("music/list") is not None:
+                self.table.horizontalHeader().restoreState(self._header_states["music/list"])
         if s.value("songs_split") is not None:
             self.songs_split.restoreState(s.value("songs_split"))
 
@@ -4601,9 +4724,10 @@ class MainWindow(QMainWindow):
         s = self.settings
         s.setValue("geometry", self.saveGeometry())
         s.setValue("splitter", self.splitter.saveState())
-        self._header_states[self._table_layout] = self.table.horizontalHeader().saveState()
-        s.setValue("header_list", self._header_states["list"])
-        s.setValue("header_album", self._header_states["album"])
+        self._header_states[self._header_key()] = self.table.horizontalHeader().saveState()
+        for key, state in self._header_states.items():
+            if state is not None:
+                s.setValue(f"columns/{key}", state)
         s.setValue("header_version", HEADER_LAYOUT_VERSION)
         s.setValue("songs_split", self.songs_split.saveState())
         equalizer.save(self.conn, self.eq_settings)

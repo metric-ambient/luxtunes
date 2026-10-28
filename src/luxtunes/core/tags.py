@@ -23,7 +23,11 @@ TAG_FIELDS = (
     "comments", "year", "track_number", "track_count", "disc_number", "disc_count",
     "bpm", "compilation", "sort_name", "sort_artist", "sort_album_artist",
     "sort_album", "sort_composer",
+    # Movies and TV shows (written into MP4 / M4V files only):
+    "show", "season", "episode_id", "episode_number", "description",
 )
+VIDEO_TEXT = {"show": "tvsh", "episode_id": "tven", "description": "desc"}
+VIDEO_NUMBERS = {"season": "tvsn", "episode_number": "tves"}
 UNCHANGED = object()   # "leave lyrics / artwork as they are"
 
 
@@ -276,6 +280,12 @@ def _write_mp4(audio, fields, lyrics, artworks):
         put("tmpo", [int(fields["bpm"])] if fields["bpm"] else None)
     if "compilation" in fields:
         put("cpil", True if fields["compilation"] else None)
+    for key, atom in VIDEO_TEXT.items():
+        if key in fields:
+            put(atom, [str(fields[key])] if fields[key] not in (None, "") else None)
+    for key, atom in VIDEO_NUMBERS.items():
+        if key in fields:
+            put(atom, [int(fields[key])] if fields[key] else None)
     if lyrics is not UNCHANGED:
         put("\xa9lyr", [lyrics] if lyrics else None)
     if artworks is not UNCHANGED:
@@ -422,6 +432,15 @@ def read_fields(path: str) -> dict:
         if tags.get("tmpo"):
             fields["bpm"] = int(tags["tmpo"][0]) or None
         fields["compilation"] = int(bool(tags.get("cpil")))
+        for key, atom in VIDEO_TEXT.items():
+            if atom in tags:
+                fields[key] = _first(tags[atom])
+        for key, atom in VIDEO_NUMBERS.items():
+            if tags.get(atom):
+                try:
+                    fields[key] = int(tags[atom][0]) or None
+                except (TypeError, ValueError):
+                    pass
         lyrics = _first(tags.get("\xa9lyr"))
         artworks = len(tags.get("covr", []))
     elif isinstance(tags, ID3):

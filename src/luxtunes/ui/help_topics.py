@@ -28,7 +28,8 @@ that's playing.</li>
 Repeat goes Off → All → One. LuxTunes remembers both. Shuffle mixes the whole list
 afresh each time, plays songs you haven't heard in the last couple of days first, and
 keeps songs by the same artist or from the same album apart.</li>
-<li><b>Up Next:</b> right-click songs → <b>Add to Queue</b>, or drag them onto
+<li><b>Up Next:</b> right-click songs → <b>Add to Queue</b> to play them next, or
+<b>Add to End of Queue</b> to play them after everything already queued. Or drag them onto
 <i>Up Next</i>. Those play first, then LuxTunes carries on where you were.</li>
 <li>The song playing has a grey bar behind it, so it's easy to spot.</li>
 </ul>"""),
@@ -41,6 +42,10 @@ window back.</li>
 <li><b>View → Pop-Out Player</b> (or click the album art in the corner) shows the
 artwork large, with controls when you move the mouse over it. Drag its corner to resize.
 Click <b>Lyrics</b> in its controls to show the song's lyrics over the artwork.</li>
+<li>The Mini Player stays on top of your other windows; turn that off in
+<b>Edit → Preferences… → Playback</b>.</li>
+<li>To look at a selected song's artwork without changing what's playing, right-click the
+album art in the corner → <b>View Full Size Album Art</b>. Resize its window as you like.</li>
 </ul>"""),
 
     ("Sleep timer", "Stop the music after a while", """
@@ -112,8 +117,10 @@ file too. <b>Artwork</b>: paste or choose a picture.</li>
 <li><b>Options</b>: Volume Adjustment (it snaps back to None near the middle),
 Equalizer Preset, Media Kind, Start and Stop Time, Remember playback position and
 Skip when shuffling.</li>
+<li><b>Video</b> (movies and TV shows): Show, Season Number, Episode ID, Episode Number and
+Description.</li>
 <li>With several songs selected you get <i>Multiple Item Information</i>: only the
-fields you change are applied.</li>
+fields you change are applied (a whole season's episodes at once, for example).</li>
 </ul>"""),
 
     ("Movies, TV Shows, Podcasts, Audiobooks", "The Library sections", """
@@ -129,8 +136,9 @@ Options → Media Kind, or drag it onto <b>TV Shows</b>.</li>
 <ul>
 <li>With <b>Keep LuxTunes Media folder organized</b> on (Preferences → Advanced), files
 are named and filed as Artist / Album / <i>Track Name</i>, and follow your edits.</li>
-<li><b>Copy files to LuxTunes Media folder when adding</b> copies new files into the
-folder and leaves your originals where they are.</li>
+<li>Everything you add is copied into the LuxTunes Media folder, so your whole library
+lives in one place; your originals stay where they were. Turn on <b>Move original files
+on import</b> (Preferences → Advanced) to move them there instead.</li>
 <li><b>Moved the folder to another drive?</b> Change its location in Preferences →
 Advanced and click OK: songs that are in the new place are pointed there.</li>
 <li><b>File → Library → Organize Library…</b> tidies everything at once.</li>
@@ -151,8 +159,10 @@ Preferences → General (for example <i>Ask to Import CD</i>).</li>
 
     ("Converting files", "MP3 and iPod versions", """
 <ul>
-<li>Right-click FLAC songs → <b>Create MP3 Version</b>, or videos →
-<b>Create iPod Version</b>. The new file is made beside the original. (Needs FFmpeg:
+<li>Right-click songs → <b>Create MP3 Version</b> (320 kbps) or <b>Create AAC Version</b>
+(256 kbps). Each format offers the other: an MP3 gets an AAC version, an AAC file an MP3
+one, and FLAC, WAV, AIFF, Apple Lossless and others both. Videos → <b>Create iPod
+Version</b>. The new file is made beside the original. (Needs FFmpeg:
 <code>sudo apt install ffmpeg</code>.)</li>
 <li><b>Delete original after conversion</b> (Preferences → Advanced, off unless you turn
 it on): the original goes to the Trash and the new version takes its place, keeping
@@ -179,6 +189,8 @@ playlists, artists, albums and genres.</li>
 <li>Works with iPod classic, mini, shuffle and nano 1st–5th generation, and the
 original iPods. iPod nano 6th/7th generation and iPod touch can't be synced.</li>
 <li>Play counts and ratings from the iPod come back to your library.</li>
+<li>Songs on the iPod that are missing their album artwork get it back at the next
+sync.</li>
 <li>Click the eject button next to the iPod before unplugging it.</li>
 </ul>"""),
 
@@ -213,7 +225,10 @@ Trash) and lets you delete it for good, after asking again.</li>
 <b>View Options…</b> (Ctrl+J) and a right-click on the column headers choose columns.</li>
 <li>Click a column header to sort by it. Each Library section and playlist keeps its own
 sort, and where you'd scrolled to while LuxTunes is open.</li>
-<li>Type in the search box to filter what's shown.</li>
+<li>Type in the search box to filter what's shown. Click the magnifier to search only
+one kind of tag: Artist, Album, Composer or Song (All searches them all).</li>
+<li>Each Library section (Music, Movies, TV Shows…) keeps its own columns and their
+order; playlists use Music's.</li>
 <li><b>File → Display Duplicates</b> and <b>Display Missing</b> help clean up.</li>
 </ul>"""),
 

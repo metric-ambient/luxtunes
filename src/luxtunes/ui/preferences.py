@@ -57,6 +57,7 @@ APPEARANCE = {
     "crossfade_seconds": 6,         # 1-15
     "gapless": False,
     "sound_check": False,
+    "mini_on_top": True,            # the Mini Player stays above other windows
 }
 
 
@@ -252,9 +253,12 @@ class PreferencesDialog(QDialog):
                             "volume tags, and measures songs without them in the background "
                             "(this needs FFmpeg, and takes a while for a big library the "
                             "first time). The levels also go to iPods and phones.")
+        self.mini_on_top = QCheckBox("Keep the Mini Player on top of other windows")
+        self.mini_on_top.setChecked(look["mini_on_top"])
+        on_top_note = QLabel("The Mini Player stays visible above the programs you're using.")
         layout = QVBoxLayout(page)
         for widget, note in ((self.crossfade, fade_note), (self.gapless, gapless_note),
-                             (self.sound_check, check_note)):
+                             (self.sound_check, check_note), (self.mini_on_top, on_top_note)):
             note.setWordWrap(True)
             note.setContentsMargins(24, 0, 0, 0)
             note.setEnabled(False)
@@ -285,24 +289,33 @@ class PreferencesDialog(QDialog):
                       "on the disc number, track number, and the song title.")
         note.setWordWrap(True)
         note.setContentsMargins(24, 0, 0, 0)
+        note.setEnabled(False)            # lighter grey, like the Playback notes
 
-        self.copy_files = QCheckBox("Copy files to LuxTunes Media folder when adding to library")
-        self.copy_files.setChecked(add_files.copy_when_adding(self.conn))
+        self.move_files = QCheckBox("Move original files on import")
+        self.move_files.setChecked(add_files.move_when_adding(self.conn))
+        move_note = QLabel("Songs you add are always copied into the LuxTunes Media folder. "
+                           "With this on, they're moved there instead, so the originals "
+                           "don't stay behind.")
+        move_note.setWordWrap(True)
+        move_note.setContentsMargins(24, 0, 0, 0)
+        move_note.setEnabled(False)            # lighter grey, like the Playback notes
 
         self.delete_original = QCheckBox("Delete original after conversion")
         self.delete_original.setChecked(convert.delete_original(self.conn))
-        delete_note = QLabel("After Create MP3 Version or Create iPod Version works, the "
+        delete_note = QLabel("After Create MP3, AAC or iPod Version works, the "
                              "original file (FLAC, AVI…) goes to the Trash and the new version "
                              "takes its place in your library, keeping its plays, rating and "
                              "playlists.")
         delete_note.setWordWrap(True)
         delete_note.setContentsMargins(24, 0, 0, 0)
+        delete_note.setEnabled(False)            # lighter grey, like the Playback notes
 
         layout = QVBoxLayout(page)
         layout.addWidget(box)
         layout.addWidget(self.keep_organized)
         layout.addWidget(note)
-        layout.addWidget(self.copy_files)
+        layout.addWidget(self.move_files)
+        layout.addWidget(move_note)
         layout.addWidget(self.delete_original)
         layout.addWidget(delete_note)
         layout.addStretch(1)
@@ -318,7 +331,7 @@ class PreferencesDialog(QDialog):
     def _save(self):
         organize.set_enabled(self.conn, self.keep_organized.isChecked())
         organize.set_media_folder(self.conn, self._folder)
-        add_files.set_copy_when_adding(self.conn, self.copy_files.isChecked())
+        add_files.set_move_when_adding(self.conn, self.move_files.isChecked())
         convert.set_delete_original(self.conn, self.delete_original.isChecked())
         cd.set_insert_action(self.conn, self.insert_action.currentData())
         cd.set_ask_lookup(self.conn, self.ask_lookup.isChecked())
@@ -336,6 +349,7 @@ class PreferencesDialog(QDialog):
         s.setValue("prefs/crossfade_seconds", self.crossfade_seconds.value())
         s.setValue("prefs/gapless", self.gapless.isChecked())
         s.setValue("prefs/sound_check", self.sound_check.isChecked())
+        s.setValue("prefs/mini_on_top", self.mini_on_top.isChecked())
         s.setValue("prefs/source_text", self.source_text.currentData())
         s.setValue("prefs/list_text", self.list_text.currentData())
         s.setValue("prefs/grid_dark", bool(self.grid_view.currentData()))

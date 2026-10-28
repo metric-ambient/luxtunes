@@ -47,12 +47,13 @@ Made for Linux Mint, and it runs on most recent Linux systems.
 - Playlists and live **smart playlists**, plus an **Up Next** queue.
 - **Get Info** for editing details, artwork and lyrics, for one song or many at once.
   Your edits are written into the files' tags.
-- **Keeps your files tidy** (optional): files are named and filed as
-  Artist / Album / *Track Name*, and follow your edits.
+- **Keeps your files tidy:** everything you add is copied (or, if you like, moved) into one
+  LuxTunes Media folder, named and filed as Artist / Album / *Track Name*, and follows
+  your edits.
 - **Cut, copy, paste and Undo**, including moving songs between Library sections.
 - **Import CDs** as MP3, AAC, Apple Lossless, AIFF or WAV, with track names looked up
   online if you agree.
-- Make MP3 copies of FLAC songs, and iPod-ready copies of videos.
+- Make MP3 and AAC versions of songs, and iPod-ready copies of videos.
 - **Find duplicates and missing files**, and point LuxTunes at moved files in one go.
 - **A weekly backup** of your library, with the last four weeks kept.
 

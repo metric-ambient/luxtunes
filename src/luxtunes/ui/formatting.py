@@ -167,8 +167,14 @@ def sort_key(key: str):
 SEARCH_FIELDS = ("name", "artist", "album_artist", "album", "composer", "genre")
 
 
-def search_text(track: dict) -> str:
-    return " ".join(str(track.get(f) or "") for f in SEARCH_FIELDS).casefold()
+# The search box's menu: All, or just one kind of tag.
+SEARCH_SCOPES = {"all": SEARCH_FIELDS, "artist": ("artist", "album_artist"), "album": ("album",),
+                 "composer": ("composer",), "name": ("name",)}
+
+
+def search_text(track: dict, scope: str = "all") -> str:
+    fields = SEARCH_SCOPES.get(scope, SEARCH_FIELDS)
+    return " ".join(str(track.get(f) or "") for f in fields).casefold()
 
 
 def matches(search_blob: str, words: list[str]) -> bool:

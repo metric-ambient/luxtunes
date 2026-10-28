@@ -2043,3 +2043,112 @@ def test_restore_from_backup(window, monkeypatch):
     assert library.count_tracks(conn, "music") == before     # the song is back
     kept = [p.name for p in backup.folder_for(conn).iterdir() if "before restore" in p.name]
     assert len(kept) == 1
+
+
+def test_search_menu_queue_menu_and_short_column_titles(window):
+    from luxtunes.core import library
+    from luxtunes.ui.track_model import COLUMN_INDEX
+    from luxtunes.ui.widgets import SOURCE_MUSIC
+    with window.conn:
+        window.conn.executemany(
+            "INSERT INTO tracks (persistent_id, name, artist, album, media_kind) "
+            "VALUES (?, ?, ?, ?, 'music')",
+            [("BEEF000000000001", "Sic Transit Gloria", "Brand New", "Deja Entendu"),
+             ("BEEF000000000002", "Misery Business", "Paramore", "Brand New Eyes")])
+    window.reload_library()
+    window.sidebar.select_source(SOURCE_MUSIC)
+    window.show_source(SOURCE_MUSIC)
+    window.search.setText("brand new")
+    names = lambda: {t["name"] for t in window.model.visible_tracks()}
+    assert {"Sic Transit Gloria", "Misery Business"} <= names()      # All: either tag
+    window._search_scope_actions["artist"].trigger()
+    assert names() == {"Sic Transit Gloria"}                         # Artist: Brand New only
+    window._search_scope_actions["album"].trigger()
+    assert names() == {"Misery Business"}
+    assert window.settings.value("search_scope") == "album"
+    window._set_search_scope("all")
+    window.search.clear()
+
+    # Add to Queue plays next; Add to End of Queue after what's queued.
+    a, b, c = window.model.visible_tracks()[:3]
+    window.player.add_to_up_next([a])
+    window.player.add_to_up_next([b], first=True)
+    window.player.add_to_up_next([c])
+    assert [t["id"] for t in window.player.up_next] == [b["id"], a["id"], c["id"]]
+    window.player.remove_from_up_next([0, 1, 2])
+
+    header = lambda key: window.model.headerData(COLUMN_INDEX[key], Qt_horizontal())
+    assert (header("bpm"), header("disc_number"), header("track_number"),
+            header("episode_number")) == ("BPM", "Disc #", "Track #", "Episode #")
+    assert library.EDITABLE_TEXT_FIELDS >= {"show", "episode_id", "description"}
+
+
+def Qt_horizontal():
+    from PySide6.QtCore import Qt
+    return Qt.Orientation.Horizontal
+
+
+def test_video_tab_columns_per_section_art_viewer_and_mini_on_top(window, tmp_path):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+
+    from luxtunes.core import library
+    from luxtunes.ui import get_info
+    from luxtunes.ui.art_viewer import ArtViewer
+    from luxtunes.ui.track_model import COLUMN_INDEX
+    from luxtunes.ui.widgets import SOURCE_MOVIES, SOURCE_MUSIC
+    with window.conn:
+        window.conn.execute(
+            "INSERT INTO tracks (persistent_id, name, media_kind, show, season, location) "
+            "VALUES ('F11F000000000001', 'Pilot', 'tvshow', 'Narnia', 1, ?)",
+            (str(tmp_path / "pilot.m4v"),))
+    episode = library.load_tracks(window.conn, media_kind="tvshow")[0]
+    song = window.model.visible_tracks()[0]
+    # Saved the way Get Info saves: the library now, the file in the background.
+    dialog = get_info.InfoDialog(window.conn, [episode, song], 0, window._queue_info, window)
+    assert dialog.tabs.isTabVisible(dialog.video_tab)
+    assert dialog.edits["show"].text() == "Narnia" and dialog.edits["season"].text() == "1"
+    dialog.edits["episode_number"].setText("3")
+    dialog.description.setPlainText("The beginning.")
+    dialog._step(1)                                       # saves, then shows the song
+    assert not dialog.tabs.isTabVisible(dialog.video_tab)
+    dialog.reject()
+    window._tag_jobs.clear()                              # (the test episode has no file)
+    saved = library.load_track(window.conn, episode["id"])
+    assert saved["episode_number"] == 3 and saved["description"] == "The beginning."
+
+    # Each Library section keeps its own columns; Movies starts with the usual ones.
+    window.show_source(SOURCE_MUSIC)
+    genre = COLUMN_INDEX["genre"]
+    window.table.setColumnHidden(genre, True)
+    window.show_source(SOURCE_MOVIES)
+    assert not window.table.isColumnHidden(genre)
+    window.show_source(SOURCE_MUSIC)
+    assert window.table.isColumnHidden(genre)
+    window.table.setColumnHidden(genre, False)
+
+    from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+    from PySide6.QtGui import QColor, QImage
+    image = QImage(40, 30, QImage.Format.Format_RGB32)          # a real picture, made here
+    image.fill(QColor("darkred"))
+    data = QByteArray()
+    buffer = QBuffer(data)
+    buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+    image.save(buffer, "PNG")
+    png = bytes(data)
+    viewer = ArtViewer(png, "Album — Artist")
+    assert viewer.has_image() and viewer.windowTitle() == "Album — Artist"
+    viewer.grab()
+    viewer.close()
+    window.art.set_image(png, caption="Album — Artist")
+    assert window.art.data == png
+    window._view_full_size_art()
+    QApplication.processEvents()
+    assert any(isinstance(w, ArtViewer) for w in window.findChildren(ArtViewer))
+
+    window._open_mini_player()                            # on top of other windows by default
+    assert window._mini_player.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    window._mini_player.set_on_top(False)
+    assert not window._mini_player.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    window._mini_player.restore_button.click()
+    QApplication.processEvents()

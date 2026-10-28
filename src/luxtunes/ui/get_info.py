@@ -416,8 +416,10 @@ class InfoDialog(QDialog):
         self.tabs = QTabWidget()
         self.tabs.addTab(self._summary_tab(), "Summary")
         self.tabs.addTab(self._info_tab(), "Info")
+        self.video_tab = self.tabs.addTab(self._video_tab(), "Video")   # movies and TV shows
         self.tabs.addTab(self._sorting_tab(), "Sorting")
         self.tabs.addTab(self._options_tab(), "Options")
+        self.media_kind.currentIndexChanged.connect(lambda _: self._show_video_tab())
         self.lyrics = QPlainTextEdit()
         self.tabs.addTab(self.lyrics, "Lyrics")
         self.artwork = ArtworkEditor()
@@ -529,6 +531,30 @@ class InfoDialog(QDialog):
         grid.setRowStretch(16, 1)
         return page
 
+    def _video_tab(self) -> QWidget:
+        page = QWidget()
+        self.edits["show"] = QLineEdit()
+        self.edits["episode_id"] = QLineEdit()
+        self.edits["season"] = _number_edit(60)
+        self.edits["episode_number"] = _number_edit(60)
+        self.description = QPlainTextEdit()
+        grid = QGridLayout(page)
+        def place(title, widget, row, column, span=1):
+            grid.addWidget(_heading(title), row, column, 1, span)
+            grid.addWidget(widget, row + 1, column, 1, span)
+        place("Show", self.edits["show"], 0, 0)
+        place("Season Number", self.edits["season"], 0, 1)
+        place("Episode ID", self.edits["episode_id"], 2, 0)
+        place("Episode Number", self.edits["episode_number"], 2, 1)
+        place("Description", self.description, 4, 0, 2)
+        grid.setColumnStretch(0, 1)
+        grid.setRowStretch(5, 1)
+        return page
+
+    def _show_video_tab(self):
+        self.tabs.setTabVisible(self.video_tab,
+                                self.media_kind.currentData() in ("movie", "tvshow"))
+
     def _pair(self, first, second) -> QWidget:
         box = QWidget()
         row = QHBoxLayout(box)
@@ -634,6 +660,8 @@ class InfoDialog(QDialog):
         self.bookmarkable.setChecked(bool(track.get("bookmarkable")))
         self.skip_shuffle.setChecked(bool(track.get("skip_when_shuffling")))
         self.gapless.setChecked(bool(track.get("part_of_gapless_album")))
+        self.description.setPlainText(_text(track.get("description")))
+        self._show_video_tab()
         self.lyrics.setPlainText(details.get("lyrics") or _text(track.get("lyrics")))
         self.artwork.set_images(details.get("artworks", []))
         self._fill_summary(track, details, path)
@@ -684,6 +712,7 @@ class InfoDialog(QDialog):
     def _values(self) -> dict:
         values = {key: edit.text().strip() for key, edit in self.edits.items()}
         values["comments"] = self.comments.toPlainText().strip()
+        values["description"] = self.description.toPlainText().strip()
         values["genre"] = _combo_text(self.genre)
         values["compilation"] = self.compilation.isChecked()
         values["volume_adjustment"] = self.volume.value()
@@ -753,6 +782,8 @@ class MultiInfoDialog(QDialog):
 
         tabs = QTabWidget()
         tabs.addTab(self._info_tab(), "Info")
+        if all(t.get("media_kind") in ("movie", "tvshow") for t in self.tracks):
+            tabs.addTab(self._video_tab(), "Video")       # e.g. a season's episodes at once
         tabs.addTab(self._sorting_tab(), "Sorting")
         tabs.addTab(self._options_tab(), "Options")
         ok = QPushButton("OK")
@@ -859,6 +890,29 @@ class MultiInfoDialog(QDialog):
         place("Part of a compilation", self._yes_no("compilation"), 12, 1)
         grid.setColumnStretch(0, 1)
         grid.setRowStretch(14, 1)
+        return page
+
+    def _video_tab(self) -> QWidget:
+        page = QWidget()
+        grid = QGridLayout(page)
+
+        def place(title, widget, row, column, span=1):
+            grid.addWidget(_heading(title), row, column, 1, span)
+            grid.addWidget(widget, row + 1, column, 1, span)
+
+        place("Show", self._line("show"), 0, 0)
+        place("Season Number", self._line("season", number=True), 0, 1)
+        place("Episode ID", self._line("episode_id"), 2, 0)
+        place("Episode Number", self._line("episode_number", number=True), 2, 1)
+        description = QPlainTextEdit()
+        common = self._common("description")
+        if common:
+            description.setPlainText(common)
+        place("Description", self._field("description", description,
+                                         lambda: description.toPlainText().strip(),
+                                         description.textChanged), 4, 0, 2)
+        grid.setColumnStretch(0, 1)
+        grid.setRowStretch(5, 1)
         return page
 
     def _sorting_tab(self) -> QWidget:

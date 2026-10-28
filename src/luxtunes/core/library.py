@@ -259,9 +259,10 @@ def load_tracks_by_ids(conn: sqlite3.Connection, track_ids: list[int]) -> list[d
 EDITABLE_TEXT_FIELDS = {
     "name", "artist", "album_artist", "album", "genre", "composer", "grouping",
     "comments", "sort_name", "sort_artist", "sort_album_artist", "sort_album",
-    "sort_composer", "lyrics",
+    "sort_composer", "lyrics", "show", "episode_id", "description",
 }
-EDITABLE_NUMBER_FIELDS = {"year", "bpm", "track_number", "track_count", "disc_number", "disc_count"}
+EDITABLE_NUMBER_FIELDS = {"year", "bpm", "track_number", "track_count", "disc_number", "disc_count",
+                          "season", "episode_number"}
 # Get Info's Options tab: settings kept in the library only (never in the file).
 EDITABLE_FLAG_FIELDS = {"compilation", "bookmarkable", "skip_when_shuffling", "part_of_gapless_album"}
 EDITABLE_TIME_FIELDS = {"start_time", "stop_time"}          # milliseconds, or None
