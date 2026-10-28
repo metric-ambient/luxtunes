@@ -2152,3 +2152,58 @@ def test_video_tab_columns_per_section_art_viewer_and_mini_on_top(window, tmp_pa
     assert not window._mini_player.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
     window._mini_player.restore_button.click()
     QApplication.processEvents()
+
+
+def test_dragging_several_songs_shows_a_small_icon_with_a_count(window):
+    from luxtunes.ui.album_view import drag_icon
+    for count in (2, 48, 12000):
+        icon = drag_icon(count)
+        assert not icon.isNull() and icon.width() <= 64 and icon.height() <= 64
+    sharp = drag_icon(5, 2.0)
+    assert sharp.width() == 112 and sharp.devicePixelRatio() == 2.0
+
+
+def test_lyrics_from_lrclib_are_saved_and_the_sung_line_is_highlighted(window, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from luxtunes.core import library, lrc, lyrics_online
+    from luxtunes.ui.artwork_window import ArtworkWindow
+    timed = "[00:01.00]Hello there\n[00:05.00]Second line\n[00:09.00]Last line\n"
+    song = window.model.visible_tracks()[0]
+    library.update_track_fields(window.conn, song["id"], {"lyrics": ""})
+    told = []
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: told.append(a[2])))
+    result = lyrics_online.LyricsResult(
+        found={song["id"]: lyrics_online.Found(plain=lrc.plain(timed), timed=timed)},
+        not_found=["Another"])
+    monkeypatch.setattr(window, "_start_tag_writes", lambda: None)    # (test songs have no files)
+    window._save_found_lyrics(result, {song["id"]: ""})
+    assert window._tag_jobs == [(song["id"], window_unchanged())]
+    window._tag_jobs.clear()
+    saved = library.load_track(window.conn, song["id"])
+    assert saved["lyrics"] == lrc.plain(timed) and saved["synced_lyrics"] == timed
+    assert "added to 1 song" in told[0] and "no lyrics for 1 of the 2" in told[0]
+
+    art = ArtworkWindow()
+    art.resize(400, 400)
+    art.show()
+    art.set_lyrics_shown(True)
+    art.set_lyrics(saved["lyrics"], saved["synced_lyrics"])
+    art.update_position(6000, 12000)
+    assert art._line == 1                                   # "Second line" is lit
+    assert "Second line" in art.lyrics_view.toPlainText()
+    art.update_position(9500, 12000)
+    assert art._line == 2
+    art.set_follow(False)                                   # Preferences: highlighting off
+    assert art._timed == [] and "[00:" not in art.lyrics_view.toPlainText()
+    assert "Second line" in art.lyrics_view.toPlainText()
+    art.set_follow(True)
+    assert art._line == 2
+    art.set_lyrics("Plain words only")                      # untimed: shown as before
+    assert art._timed == [] and "Plain words only" in art.lyrics_view.toPlainText()
+    art.close()
+
+
+def window_unchanged():
+    from luxtunes.core.tags import UNCHANGED
+    return UNCHANGED

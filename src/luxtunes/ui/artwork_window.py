@@ -2,7 +2,9 @@
 
 It shows the art large and puts playback
 controls over the bottom of it while the mouse is over the window. The Lyrics
-button (♪ in the controls) lays the song's lyrics over the art. It opens
+button (♪ in the controls) lays the song's lyrics over the art; with timed
+lyrics (LRC, from Get Lyrics Online… or the file), the line being sung is
+highlighted and kept in the middle as the song plays. It opens
 at the picture's own size (up to 90% of the screen) and can be stretched
 bigger or smaller with the grip in the bottom-right corner. Colours come
 from the app theme (light/dark) via the stylesheet in theme.py.
@@ -25,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from luxtunes.core import lrc
 from luxtunes.ui.formatting import format_duration
 from luxtunes.ui.widgets import JumpSlider, themed_icon
 
@@ -66,6 +69,10 @@ class ArtworkWindow(QWidget):
         self.lyrics_view.viewport().installEventFilter(self)
         self.lyrics_view.hide()
         self._lyrics = ""
+        self._timed: list[tuple[int, str]] = []    # (ms, line) when the lyrics are timed
+        self._line = -2                             # the line highlighted now
+        self._follow = True             # Preferences → Playback → highlight lyrics as they're sung
+        self._timed_text: str | None = None
 
         # ---- Controls overlay ----------------------------------------------
         self.controls = QFrame(self)
@@ -168,15 +175,58 @@ class ArtworkWindow(QWidget):
         side = max(self.minimumWidth(), min(side, int(area.width() * 0.9), int(area.height() * 0.9)))
         self.resize(side, side)
 
-    def set_lyrics(self, text: str | None):
+    def set_lyrics(self, text: str | None, timed: str | None = None):
+        """The song's lyrics; `timed` (LRC) highlights the line being sung. Lyrics
+        that are themselves in LRC form are timed too."""
         self._lyrics = (text or "").strip()
-        if self._lyrics:
-            self.lyrics_view.setPlainText(self._lyrics)
+        self._timed_text = timed
+        self._timed = (lrc.parse(timed) or lrc.parse(self._lyrics)) if self._follow else []
+        self._line = -2
+        if self._timed:
+            self._show_timed(lrc.line_at(self._timed, self._position))
+        elif self._lyrics:
+            self.lyrics_view.setPlainText(lrc.plain(self._lyrics))     # never the raw times
         else:
             self.lyrics_view.setHtml("<p><i>No lyrics for this song.</i></p>")
-        self.lyrics_view.document().setDefaultStyleSheet("")
-        self._center_lyrics()
+        if not self._timed:
+            self.lyrics_view.document().setDefaultStyleSheet("")
+            self._center_lyrics()
         self.lyrics_view.verticalScrollBar().setValue(0)
+
+    def set_follow(self, on: bool):
+        """Highlight the line being sung (on), or show timed lyrics as plain text."""
+        if on != self._follow:
+            self._follow = on
+            self.set_lyrics(self._lyrics, self._timed_text)
+
+    def _show_timed(self, current: int):
+        """Every line, the one being sung bright and bold, the rest dimmed; the
+        current one is scrolled to the middle."""
+        import html
+        self._line = current
+        palette = self.lyrics_view.palette()
+        bright = palette.color(palette.ColorRole.Text)
+        base = palette.color(palette.ColorRole.Base)
+        dim = "#%02x%02x%02x" % tuple(round(b + (t - b) * 0.45) for t, b in (
+            (bright.red(), base.red()), (bright.green(), base.green()), (bright.blue(), base.blue())))
+        rows = []
+        for i, (_, line) in enumerate(self._timed):
+            text = html.escape(line) or "&nbsp;"
+            if i == current:
+                rows.append(f'<p style="color:{bright.name()}; font-weight:bold">{text}</p>')
+            else:
+                rows.append(f'<p style="color:{dim}">{text}</p>')
+        bar = self.lyrics_view.verticalScrollBar()
+        self.lyrics_view.setHtml("".join(rows))
+        self._center_lyrics()
+        if current < 0:
+            bar.setValue(0)
+            return
+        from PySide6.QtGui import QTextCursor
+        block = self.lyrics_view.document().findBlockByNumber(current)
+        cursor = QTextCursor(block)
+        middle = self.lyrics_view.cursorRect(cursor).center().y()
+        bar.setValue(bar.value() + middle - self.lyrics_view.viewport().height() // 2)
 
     def set_lyrics_shown(self, shown: bool):
         self.lyrics_button.setChecked(shown)
@@ -185,6 +235,8 @@ class ArtworkWindow(QWidget):
     def _lyrics_toggled(self, shown: bool):
         self.lyrics_view.setVisible(shown)
         self._layout_children()
+        if shown and self._timed:
+            self._show_timed(lrc.line_at(self._timed, self._position))   # placed: now centre it
         self.lyrics_toggled.emit(shown)
 
     def _center_lyrics(self):
@@ -198,6 +250,10 @@ class ArtworkWindow(QWidget):
 
     def update_position(self, position: int, duration: int):
         self._position, self._duration = position, duration
+        if self._timed:
+            line = lrc.line_at(self._timed, position)
+            if line != self._line and self.lyrics_view.isVisible():
+                self._show_timed(line)
         if self.seek.isSliderDown():
             return
         self.seek.setMaximum(max(0, duration))
