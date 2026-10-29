@@ -30,7 +30,7 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from luxtunes.core import equalizer, loudness
 from luxtunes.core.library import AUDIO_KINDS
 from luxtunes.core.paths import find_file
-from luxtunes.core.shuffle import album_key, artist_key, played_recently, spread_shuffle
+from luxtunes.core.shuffle import album_key, artist_key, freshness_tiers, spread_shuffle
 from luxtunes.ui import eq_output
 
 # A skip counts when you jump to the next song within its first 20 seconds.
@@ -173,10 +173,9 @@ class Player(QObject):
 
     def _shuffled(self, indexes: list[int]) -> list[int]:
         context = self._context
+        tiers = freshness_tiers(context, self._heard)    # albums you haven't been hearing first
         return spread_shuffle(indexes, key=lambda i: artist_key(context[i]),
-                              album=lambda i: album_key(context[i]),
-                              recent=lambda i: context[i].get("id") in self._heard
-                              or played_recently(context[i]))
+                              album=lambda i: album_key(context[i]), tier=lambda i: tiers[i])
 
     @property
     def is_playing(self) -> bool:

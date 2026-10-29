@@ -74,10 +74,30 @@ def test_where_a_shuffle_starts_isnt_fixed():
     assert len(firsts) > 250
 
 
-def test_played_recently():
+def test_albums_heard_lately_wait_their_turn():
     from datetime import datetime, timezone
-    from luxtunes.core.shuffle import played_recently
-    now = datetime(2026, 10, 25, 12, tzinfo=timezone.utc)
-    assert played_recently({"play_date": "2026-10-24T20:00:00Z"}, now)
-    assert not played_recently({"play_date": "2026-10-20T20:00:00Z"}, now)
-    assert not played_recently({"play_date": None}, now) and not played_recently({}, now)
+    from luxtunes.core.shuffle import freshness_tiers
+    now = datetime(2026, 10, 29, 12, tzinfo=timezone.utc)
+    tracks = [
+        {"id": 1, "artist": "A", "album": "One", "play_date": "2026-10-29T08:00:00Z"},   # just played
+        {"id": 2, "artist": "A", "album": "One"},                 # its album was just heard
+        {"id": 3, "artist": "B", "album": "Two", "skip_date": "2026-10-20T08:00:00Z"},  # skipped lately
+        {"id": 4, "artist": "B", "album": "Two"},
+        {"id": 5, "artist": "C", "album": "Three", "play_date": "2026-09-01T08:00:00Z"},  # long ago
+        {"id": 6, "artist": "D", "album": "Four"},
+        {"id": 7, "artist": "D", "album": "Four"},                # heard this session
+        {"id": 8, "artist": "E", "album": ""},                    # no album: only itself counts
+    ]
+    assert freshness_tiers(tracks, heard_ids={7}, now=now) == [2, 1, 1, 1, 0, 1, 2, 0]
+
+
+def test_a_new_shuffle_starts_with_albums_not_heard_lately():
+    from luxtunes.core.shuffle import freshness_tiers
+    songs = [{"id": i, "artist": f"a{i // 40}", "album": f"b{i // 10}",
+              "play_date": "2099-01-01T00:00:00Z" if i % 10 == 0 and i < 600 else None}
+             for i in range(1000)]                 # one song of each of the first 60 albums
+    tiers = dict(zip((s["id"] for s in songs), freshness_tiers(songs)))
+    order = spread_shuffle(songs, key=lambda s: s["artist"], album=lambda s: s["album"],
+                           tier=lambda s: tiers[s["id"]])
+    assert sorted(s["id"] for s in order) == list(range(1000))
+    assert all(int(s["album"][1:]) >= 60 for s in order[:300])     # untouched albums first
