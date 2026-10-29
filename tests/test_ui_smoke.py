@@ -2065,7 +2065,7 @@ def test_search_menu_queue_menu_and_short_column_titles(window):
     assert names() == {"Sic Transit Gloria"}                         # Artist: Brand New only
     window._search_scope_actions["album"].trigger()
     assert names() == {"Misery Business"}
-    assert window.settings.value("search_scope") == "album"
+    assert window.settings.value("search_scope") is None             # not kept after closing
     window._set_search_scope("all")
     window.search.clear()
 
@@ -2201,6 +2201,88 @@ def test_lyrics_from_lrclib_are_saved_and_the_sung_line_is_highlighted(window, m
     assert art._line == 2
     art.set_lyrics("Plain words only")                      # untimed: shown as before
     assert art._timed == [] and "Plain words only" in art.lyrics_view.toPlainText()
+    art.close()
+
+
+def test_the_playing_songs_file_is_written_when_it_stops(window, monkeypatch):
+    from luxtunes.core.tags import UNCHANGED
+    song = window.model.visible_tracks()[0]
+    window.player._current = song                         # as if it were playing
+    try:
+        assert window.player.busy_track_ids() == {song["id"]}
+        window._tag_jobs = [(song["id"], UNCHANGED)]
+        window._start_tag_writes()
+        assert window._tag_jobs == [] and window._tag_worker is None    # not written under the player
+        assert window._deferred_tag_jobs == [(song["id"], UNCHANGED)]
+    finally:
+        window.player._current = None
+    started = []
+    monkeypatch.setattr(window, "_start_tag_writes", lambda: started.append(list(window._tag_jobs)))
+    window._release_deferred_tags()                        # it stopped: now it's written
+    assert started == [[(song["id"], UNCHANGED)]] and window._deferred_tag_jobs == []
+    window._tag_jobs = []
+
+
+def test_changing_the_search_changes_what_plays_next(window):
+    from luxtunes.ui.widgets import SOURCE_MUSIC
+    player = window.player
+    window.sidebar.select_source(SOURCE_MUSIC)
+    window.show_source(SOURCE_MUSIC)
+    everything = window.model.visible_tracks()
+    assert len(everything) >= 3
+    song = everything[1]
+    window.search.setText(song["name"])
+    filtered = window.model.visible_tracks()
+    assert len(filtered) < len(everything)
+    # Playing from the filtered list (set up by hand: the test songs have no files).
+    player._context, player._order, player._pos = list(filtered), list(range(len(filtered))), 0
+    player._current = filtered[0]
+    window._playing_source, window._play_follows_search = window._current_source, True
+    try:
+        window.search.clear()
+        assert window._search_follow_timer.isActive()      # waits until you stop typing
+        window._follow_search()
+        assert len(player._context) == len(everything)     # the whole list again
+        assert player._context[player._order[player._pos]]["id"] == filtered[0]["id"]
+        player._shuffle = True
+        window.search.setText(song["name"])
+        window._follow_search()                            # narrowed again, reshuffled
+        assert player._order[player._pos] == player._order[0]
+        assert sorted(player._order) == list(range(len(player._context)))
+        assert player._context[player._order[0]]["id"] == filtered[0]["id"]
+    finally:
+        player._shuffle = False
+        player._current = None
+        player._context, player._order, player._pos = [], [], -1
+        window._play_follows_search = False
+        window.search.clear()
+
+
+def test_pop_out_scales_quickly_while_resizing(window):
+    from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+    from PySide6.QtGui import QColor, QImage
+
+    from luxtunes.ui.artwork_window import ArtworkWindow
+    from PySide6.QtWidgets import QApplication
+    screen = QApplication.primaryScreen().geometry().size() * QApplication.primaryScreen().devicePixelRatio()
+    side = max(screen.width(), screen.height()) * 2          # bigger than the screen
+    image = QImage(side, side, QImage.Format.Format_RGB32)
+    image.fill(QColor("navy"))
+    data = QByteArray()
+    buffer = QBuffer(data)
+    buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+    image.save(buffer, "PNG")
+    art = ArtworkWindow()
+    art.resize(300, 300)
+    art.show()
+    art.show_track({"name": "Song"}, bytes(data))
+    assert art._pixmap.width() < side                        # shrunk once to the screen
+    art.resize(500, 500)
+    QApplication.processEvents()
+    assert art._shown_size[1] is False and art._smooth_timer.isActive()
+    art._smooth_timer.stop()
+    art._layout_children()                                   # settled: smooth
+    assert art._shown_size[1] is True
     art.close()
 
 

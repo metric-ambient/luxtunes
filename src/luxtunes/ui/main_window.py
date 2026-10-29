@@ -174,12 +174,18 @@ class MainWindow(QMainWindow):
         self._undo_stack: list[tuple[str, object, object]] = []
         self._redo_stack: list[tuple[str, object, object]] = []
         self._playing_source = None      # the list the current song was started from
+        self._play_follows_search = False   # it was started from that list's rows: a new search re-scopes it
+        self._search_follow_timer = QTimer(self)
+        self._search_follow_timer.setSingleShot(True)
+        self._search_follow_timer.setInterval(400)     # once you've stopped typing
+        self._search_follow_timer.timeout.connect(self._follow_search)
         self.view_mode = "list"
         self._table_layout = "list"      # which column layout the song table has now
         # Column layouts (which columns, their order, widths) for each Library
         # section and List / Album List: "music/list", "movie/album"... Playlists
         # and Up Next use Music's.
         self._header_states: dict[str, object] = {}
+        self._deferred_tag_jobs: list = []      # edits for songs playing now (see _start_tag_writes)
         self._column_group = "music"
         self._scroll_memory: dict[str, tuple[int, int]] = {}   # screen -> (list, grid) scroll
         self._automatic_sort = False
@@ -313,13 +319,12 @@ class MainWindow(QMainWindow):
         heading = self._search_menu.addAction("Search")
         heading.setEnabled(False)
         scope_group = QActionGroup(self)
-        scope = self.settings.value("search_scope", "all")
         self._search_scope_actions = {}
         for key, label in (("all", "All"), ("artist", "Artist"), ("album", "Album"),
                            ("composer", "Composer"), ("name", "Song")):
             action = self._search_menu.addAction(label)
             action.setCheckable(True)
-            action.setChecked(key == scope)
+            action.setChecked(key == "all")
             scope_group.addAction(action)
             action.triggered.connect(lambda checked=False, k=key: self._set_search_scope(k))
             self._search_scope_actions[key] = action
@@ -634,8 +639,8 @@ class MainWindow(QMainWindow):
         self.sidebar.source_selected.connect(self.show_source)
         self.sidebar.tracks_dropped.connect(self._on_tracks_dropped)
         self.search.textChanged.connect(self._on_search)
-        scope = self.settings.value("search_scope", "all")
-        self._set_search_scope(scope if scope in self._search_scope_actions else "all")
+        self.settings.remove("search_scope")      # older versions remembered it; every start is All
+        self._set_search_scope("all")
         # Double-clicking the stars rates the song (a quick second click); it doesn't play it.
         self.table.doubleClicked.connect(
             lambda index: index.column() == RATING_COLUMN or self._play_row(index.row()))
@@ -882,6 +887,15 @@ class MainWindow(QMainWindow):
     def _on_search(self, text):
         self.model.set_filter(text)
         self._update_summary()
+        if self._play_follows_search:
+            self._search_follow_timer.start()
+
+    def _follow_search(self):
+        """Like a shuffle of the whole list: changing or clearing the search
+        changes what plays after the current song."""
+        if (self._play_follows_search and self.player.current is not None
+                and self._current_source == self._playing_source):
+            self.player.rescope(self.model.visible_tracks())
 
     def _update_summary(self):
         if self.view_mode == "grid" and not self._drilled:
@@ -935,6 +949,7 @@ class MainWindow(QMainWindow):
             self.player.play_from_up_next(self.model.track_at(row)["_queue_index"])
         else:
             self._playing_source = self._current_source
+            self._play_follows_search = True
             self.player.play_queue(self.model.visible_tracks(), row)
 
     def _play_selected(self):
@@ -1162,7 +1177,18 @@ class MainWindow(QMainWindow):
         self.model.update_track(track["id"], {"location": path})
         self.model.set_missing(track["id"], False)
 
+    def _release_deferred_tags(self):
+        """Edits waiting for their song to stop playing: write those now free."""
+        if not self._deferred_tag_jobs:
+            return
+        waiting, self._deferred_tag_jobs = self._deferred_tag_jobs, []
+        self._tag_jobs.extend(waiting)
+        self._start_tag_writes()            # still-busy ones go back to waiting
+
     def _on_track_started(self, track: dict):
+        self._release_deferred_tags()
+        if self._deferred_tag_jobs:                         # e.g. the last song is still fading out
+            QTimer.singleShot(int(self.player.crossfade_seconds + 1) * 1000, self._release_deferred_tags)
         self._remember_recent(track["id"])
         if self._eq_window is not None:
             self._eq_window.show_song(track)
@@ -1248,10 +1274,12 @@ class MainWindow(QMainWindow):
         self.table.verticalScrollBar().setValue(scroll)
 
     def _on_stopped(self):
+        QTimer.singleShot(0, self._release_deferred_tags)    # once the player has let go
         self._hide_video()
         self.lcd.clear()
         self.model.set_now_playing(None)
         self._playing_source = None
+        self._play_follows_search = False
         self._art_mode = "selected"
         self._refresh_artwork()
         self._update_play_button()
@@ -1330,28 +1358,31 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _magnifier_icon(color: QColor) -> QIcon:
-        """A magnifying glass with a small arrow: the search box's menu."""
-        ratio = QApplication.primaryScreen().devicePixelRatio() if QApplication.primaryScreen() else 1
-        pixmap = QPixmap(round(24 * ratio), round(16 * ratio))
-        pixmap.setDevicePixelRatio(ratio)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pen = painter.pen()
-        pen.setColor(color)
-        pen.setWidthF(1.6)
-        painter.setPen(pen)
-        painter.drawEllipse(QPointF(7, 7), 4.5, 4.5)
-        painter.drawLine(QPointF(10.3, 10.3), QPointF(14, 14))
-        painter.setBrush(color)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawPolygon([QPointF(16.5, 8), QPointF(22.5, 8), QPointF(19.5, 11.5)])
-        painter.end()
-        return QIcon(pixmap)
+        """A magnifying glass with a small down arrow beside it: the
+        search box's menu. Square, so it's never stretched to fit."""
+        icon = QIcon()
+        for ratio in (1, 2):                     # sharp on normal and high-DPI screens
+            pixmap = QPixmap(16 * ratio, 16 * ratio)
+            pixmap.setDevicePixelRatio(ratio)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            pen = painter.pen()
+            pen.setColor(color)
+            pen.setWidthF(1.5)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            painter.drawEllipse(QPointF(5.75, 6), 3.9, 3.9)
+            painter.drawLine(QPointF(8.6, 8.9), QPointF(11, 11.3))
+            painter.setBrush(color)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawPolygon([QPointF(12, 7), QPointF(16, 7), QPointF(14, 9.5)])
+            painter.end()
+            icon.addPixmap(pixmap)
+        return icon
 
     def _set_search_scope(self, scope: str):
-        """The search box's menu: All, Artist, Album, Composer or Song."""
-        self.settings.setValue("search_scope", scope)
+        """The search box's menu: All, Artist, Album, Composer or Song (until LuxTunes closes)."""
         self._search_scope_actions[scope].setChecked(True)
         label = self._search_scope_actions[scope].text()
         self._search_icon.setToolTip(f"Search: {label}")
@@ -1466,6 +1497,7 @@ class MainWindow(QMainWindow):
         """Play a whole album / artist / genre from the top (Grid, Cover Flow)."""
         if tracks:
             self._playing_source = self._current_source
+            self._play_follows_search = False       # an album, not the list
             self.player.play_queue(list(tracks), 0)
 
     def _select_track(self, track: dict, scroll_hint=QAbstractItemView.ScrollHint.PositionAtTop):
@@ -1662,6 +1694,16 @@ class MainWindow(QMainWindow):
         return None
 
     def _start_tag_writes(self):
+        # A file that's being played is never rewritten under the player (its
+        # reader can crash when the file changes size); it waits for the song to end.
+        busy = self.player.busy_track_ids()
+        waiting = [job for job in self._tag_jobs if job[0] in busy]
+        if waiting:
+            self._tag_jobs = [job for job in self._tag_jobs if job[0] not in busy]
+            for track_id, artworks in waiting:
+                self._deferred_tag_jobs.append((track_id, artworks))
+            self.statusBar().showMessage(
+                "Saved. The playing song's file is updated when it stops playing.", 6000)
         if self._tag_worker is not None or not self._tag_jobs:
             return
         db_path = self.conn.execute("PRAGMA database_list").fetchone()[2]
@@ -1727,7 +1769,11 @@ class MainWindow(QMainWindow):
     def _update_file(self, track_id: int, artworks=UNCHANGED) -> str | None:
         """After an edit: write the changes into the file's tags, then (with
         "Keep LuxTunes Media folder organized" on) move/rename the file to
-        match. Returns None, or what went wrong."""
+        match. Returns None, or what went wrong. The playing song's file waits
+        until it stops playing (see _start_tag_writes)."""
+        if track_id in self.player.busy_track_ids():
+            self._deferred_tag_jobs.append((track_id, artworks))
+            return None
         error = tag_sync.write_pending(self.conn, track_id, artworks)
         if error:
             error = f"{error} (LuxTunes will try writing the tags again next time it starts)"
@@ -2229,6 +2275,7 @@ class MainWindow(QMainWindow):
 
     def _play_from_window(self, playlist_id: int, tracks: list, row: int):
         self._playing_source = ("playlist", playlist_id)
+        self._play_follows_search = False
         self.player.play_queue(tracks, row)
 
     def _duplicate_playlist(self, playlist: dict):
@@ -4455,6 +4502,7 @@ class MainWindow(QMainWindow):
             self._play_row(row)
         else:
             self._playing_source = None
+            self._play_follows_search = False
             self.player.play_queue([track], 0)
 
     # ======================================================================
@@ -4809,6 +4857,11 @@ class MainWindow(QMainWindow):
             self._song_lookup.wait(20_000)
         if self._update_worker is not None:
             self._update_worker.wait()       # never stop an update half-installed
+        if self._deferred_tag_jobs:
+            self.player.stop()                   # its file is free now: write the edits waiting
+            self._tag_jobs.extend(self._deferred_tag_jobs)
+            self._deferred_tag_jobs = []
+            self._start_tag_writes()
         if self._tag_worker is not None:
             self.statusBar().showMessage("Finishing writing your changes into the files…")
             QApplication.processEvents()

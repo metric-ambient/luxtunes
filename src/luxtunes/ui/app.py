@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
@@ -64,11 +65,31 @@ def listen_for_others(name: str, window):
     return server
 
 
+def _record_crashes(db_path: str | None) -> None:
+    """If LuxTunes crashes, or freezes and gets `kill -USR1 <its process id>`,
+    write where each part of it was to crash.log beside the library, to help
+    find the cause."""
+    import faulthandler
+    import signal
+    if db_path == ":memory:":
+        return
+    folder = (Path(db_path).expanduser().parent if db_path else db.default_db_path().parent)
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        log = open(folder / "crash.log", "a", encoding="utf-8")   # open for the app's lifetime
+    except OSError:
+        return
+    faulthandler.enable(log, all_threads=True)
+    if hasattr(faulthandler, "register") and hasattr(signal, "SIGUSR1"):
+        faulthandler.register(signal.SIGUSR1, log, all_threads=True)
+
+
 def run(db_path: str | None = None) -> int:
     # Short status lines in the terminal (e.g. "repeat set to one"), handy for
     # reporting problems. Only a few events are logged, so it stays quiet.
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s",
                         datefmt="%H:%M:%S")
+    _record_crashes(db_path)
     app = QApplication(sys.argv)
     app.setApplicationName("LuxTunes")
     app.setOrganizationName("LuxTunes")

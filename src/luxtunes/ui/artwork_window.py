@@ -46,6 +46,11 @@ class ArtworkWindow(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent, Qt.WindowType.Window)
+        self._shown_size = None        # (size, smooth) of the art on screen now
+        self._smooth_timer = QTimer(self)
+        self._smooth_timer.setSingleShot(True)
+        self._smooth_timer.setInterval(150)
+        self._smooth_timer.timeout.connect(self._layout_children)
         close = QShortcut(QKeySequence("Ctrl+W"), self)   # File → Close Window
         close.activated.connect(self.close)
         self.setObjectName("artWindow")
@@ -163,6 +168,18 @@ class ArtworkWindow(QWidget):
             self.setWindowTitle(" - ".join(p for p in parts if p) or "LuxTunes")
         pixmap = QPixmap()
         self._pixmap = pixmap if art and pixmap.loadFromData(art) else None
+        if self._pixmap is not None:
+            # Very large art is shrunk once to the screen's size, so each resize
+            # (e.g. going full screen) only scales what can be seen.
+            screen = self.screen() or QApplication.primaryScreen()
+            if screen is not None:
+                size = screen.geometry().size() * screen.devicePixelRatio()
+                largest = max(size.width(), size.height())
+                if max(self._pixmap.width(), self._pixmap.height()) > largest:
+                    self._pixmap = self._pixmap.scaled(
+                        largest, largest, Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation)
+        self._shown_size = None
         self._layout_children()
 
     def open_at_art_size(self):
@@ -273,9 +290,11 @@ class ArtworkWindow(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._layout_children()
+        # While the size is changing, scale quickly; once it settles, smoothly.
+        self._layout_children(smooth=False)
+        self._smooth_timer.start()
 
-    def _layout_children(self):
+    def _layout_children(self, smooth: bool = True):
         rect = self.rect()
         self.image.setGeometry(rect)
         self.lyrics_view.setGeometry(rect)
@@ -284,11 +303,14 @@ class ArtworkWindow(QWidget):
         if self._pixmap is None:
             self.image.setPixmap(QPixmap())
             self.image.setText("No Artwork")
-        else:
+            self._shown_size = None
+        elif self._shown_size != (rect.size(), smooth):   # only when something changed
             # Scales up past the picture's own size too, if you stretch the window.
+            mode = (Qt.TransformationMode.SmoothTransformation if smooth
+                    else Qt.TransformationMode.FastTransformation)
             self.image.setPixmap(self._pixmap.scaled(
-                rect.size(), Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation))
+                rect.size(), Qt.AspectRatioMode.KeepAspectRatio, mode))
+            self._shown_size = (rect.size(), smooth)
         width = min(rect.width() - 24, CONTROLS_MAX_WIDTH)
         height = self.controls.sizeHint().height()
         self.controls.setGeometry((rect.width() - width) // 2, rect.height() - height - 14, width, height)
