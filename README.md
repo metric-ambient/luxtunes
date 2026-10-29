@@ -32,7 +32,8 @@ LuxTunes is that program:
 - **Your music stays yours.** Everything lives on your computer. No account, no streaming,
   no ads, no tracking. LuxTunes only goes online when you say so.
 - **Your devices keep working.** Classic iPods sync like they always did, and Android
-  phones get a tidy copy of your library that any music player can use.
+  phones get a tidy copy of your library that any music player can use, or that the
+  [LuxTunes app for Android](https://github.com/metric-ambient/luxtunes-mobile) turns into your whole library in your pocket.
 - **Familiar from the first minute.** Playback controls on top, sources on the left, your
   songs on the right, and album art in the corner.
 
@@ -42,11 +43,15 @@ Made for Linux Mint, and it runs on most recent Linux systems.
 
 ### Your library
 
-- List, Album List, Grid and Cover Flow views, each Library section remembering its own.
+- List, Album List, Grid and Cover Flow views. Each Library section keeps its own view,
+  columns and sort; search everything or just artists, albums, composers or song names.
 - Music, Movies, TV Shows, Podcasts and Audiobooks, kept apart.
 - Playlists and live **smart playlists**, plus an **Up Next** queue.
-- **Get Info** for editing details, artwork and lyrics, for one song or many at once.
-  Your edits are written into the files' tags.
+- **Get Info** for editing details, artwork and lyrics (and show, season and episode for
+  movies and TV shows), for one song or many at once. Your edits are written into the
+  files' tags.
+- **Get Track Info Online…** suggests corrections and missing covers from MusicBrainz, and
+  **Get Lyrics Online…** fills in lyrics from LRCLIB, both only after you say yes.
 - **Keeps your files tidy:** everything you add is copied (or, if you like, moved) into one
   LuxTunes Media folder, named and filed as Artist / Album / *Track Name*, and follows
   your edits.
@@ -62,6 +67,9 @@ Made for Linux Mint, and it runs on most recent Linux systems.
 - A **10-band equalizer** with presets, and a preset of its own for any song.
 - **Crossfade**, **gapless playback** and **Sound Check** (every song at about the same
   volume).
+- A **shuffle** that starts with albums you haven't been listening to lately and keeps an
+  artist's or album's songs apart, plus **Up Next** with Add to Queue (play next) and Add
+  to End of Queue.
 - A **Mini Player**, a **Pop-Out Player** with big artwork and lyrics (the line being sung
   highlighted, with lyrics from LRCLIB), and a **sleep timer**.
 - Media keys and the desktop's sound menu work as you'd expect.
@@ -70,12 +78,14 @@ Made for Linux Mint, and it runs on most recent Linux systems.
 
 - **iPods:** classic, mini, shuffle, nano 1st–5th generation and the original models. Sync
   music, podcasts, audiobooks, and, on models that show them, videos and photos. Play
-  counts and ratings come back from the iPod. (The iPod nano 6th/7th generation and the
-  iPod touch can't be supported.)
+  counts and ratings come back from the iPod, and missing album artwork is put back at the
+  next sync. (The iPod nano 6th/7th generation and the iPod touch can't be supported.)
 - **Android phones,** over a USB cable: songs, videos, podcasts, audiobooks, artwork,
-  playlists and your equalizer go into one `LuxTunes` folder on the phone. With the
-  companion LuxTunes app, plays, ratings, playlist changes, equalizer presets and songs
-  added on the phone come back at the next sync ([how the folder is laid out](docs/android-library-format.md)).
+  lyrics, playlists and your equalizer go into one `LuxTunes` folder on the phone, which
+  any music player can use. With the companion
+  [LuxTunes app for Android](https://github.com/metric-ambient/luxtunes-mobile), plays, ratings, playlist changes, equalizer presets,
+  songs added on the phone and details edited there come back at the next sync
+  ([how the folder is laid out](docs/android-library-format.md)).
 - Choose to sync everything, everything with only some playlists, or just chosen
   playlists, artists, albums and genres.
 
@@ -96,14 +106,15 @@ For **Linux Mint 22 / Ubuntu 24.04 or newer** (64-bit PC). No terminal needed:
    You can delete the downloaded file afterwards.
 
 Then choose **File → Library → Import iTunes Library…** to bring in an existing library, or
-**File → Add Folder to Library…** to add your music. **Help → LuxTunes Help** (F1) has
+**File → Add Folder to Library…** to add your music (it's copied into your LuxTunes Media
+folder; your originals stay put unless you choose to move them). **Help → LuxTunes Help** (F1) has
 short guides to everything.
 
 **Optional extras** (install from Software Manager):
 
 | Install | For |
 |---|---|
-| `ffmpeg` | movies and TV shows, MP3 and iPod copies, Sound Check |
+| `ffmpeg` | movies and TV shows, MP3, AAC and iPod versions, Sound Check |
 | `cdparanoia` | importing CDs |
 | `libgpod-common` | iPod sync |
 
@@ -113,9 +124,12 @@ the new version, and uses it the next time you open LuxTunes.
 **Removing it:** Help → Remove LuxTunes from This Computer…. Your library, settings and
 music are kept.
 
+**On your phone:** get the [LuxTunes app for Android](https://github.com/metric-ambient/luxtunes-mobile) to keep plays, ratings,
+playlists and edits in step both ways.
+
 **Other Linux systems:** the AppImage should run on most systems at least as new as
-Ubuntu 24.04, such as Fedora 40+, Debian 13 and Arch. Phone sync needs gvfs, the desktop's support for phones
-plugged in by USB. Most desktops have it; on KDE, install your distribution's `gvfs-mtp` or
+Ubuntu 24.04, such as Fedora 40+, Debian 13 and Arch. Phone sync needs gvfs, the
+desktop's support for phones plugged in by USB. Most desktops have it; on KDE, install your distribution's `gvfs-mtp` or
 `gvfs-backends` package.
 
 ## Where your things are kept
@@ -165,6 +179,8 @@ music.
 | Equalizer | [NumPy](https://numpy.org/) |
 | iPod | [libgpod](https://sourceforge.net/projects/gtkpod/) |
 | CDs | cdparanoia and FFmpeg; names from [MusicBrainz](https://musicbrainz.org/) |
+| Lyrics | [LRCLIB](https://lrclib.net/), only when you ask |
+| Android app | [luxtunes-mobile](https://github.com/metric-ambient/luxtunes-mobile), a separate project |
 
 ```
 src/luxtunes/
@@ -175,7 +191,7 @@ src/luxtunes/
     ui/            the Qt interface
     resources/     icon and licence
 packaging/         install.sh / uninstall.sh, appimage/ (the ready-to-run app)
-docs/              the LuxTunes folder format on Android devices
+docs/              the LuxTunes folder format on Android devices (read by the Android app)
 tests/
     fixtures/      small FAKE test data only, never real music or real library files
 ```

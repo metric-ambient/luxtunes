@@ -14,8 +14,9 @@ playlists (smart ones too) come along.</li>
 <li><b>Adding files:</b> <b>File → Add File to Library…</b> (Ctrl+O) or
 <b>Add Folder to Library…</b>. Adding happens in the background; the display at the top
 shows progress, with ✕ to stop.</li>
-<li>Your library lives in one file, so nothing you do in LuxTunes changes where your
-music is unless you ask it to (see <i>Your LuxTunes Media folder</i>).</li>
+<li>What you add is copied into your LuxTunes Media folder, so your whole library lives in
+one place; the originals stay where they were (see <i>Your LuxTunes Media folder</i>).
+Your ratings, plays and playlists are kept in LuxTunes' library file.</li>
 </ul>"""),
 
     ("Playing music", "Play, shuffle, repeat and Up Next", """
@@ -78,8 +79,9 @@ checks your songs in the background (shown in the display, with ✕ to pause it)
 <ul>
 <li><b>File → New Playlist</b> (Ctrl+N), or <b>New Playlist from Selection</b>
 (Ctrl+Shift+N) with songs selected.</li>
-<li>Drag songs onto a playlist in the sidebar, or right-click → <b>Add to Playlist</b>,
-or copy and paste them (see <i>Cut, copy, paste and undo</i>).</li>
+<li>Drag songs onto a playlist in the sidebar (when you drag several, a small icon shows
+how many), or right-click → <b>Add to Playlist</b>, or copy and paste them (see
+<i>Cut, copy, paste and undo</i>).</li>
 <li>If some songs are already in the playlist, LuxTunes asks whether to add them again
 or skip them.</li>
 <li>Rename a playlist by double-clicking it. Delete removes the playlist only, never
@@ -119,7 +121,8 @@ instead).</li>
 <ul>
 <li>Select songs and press <b>Ctrl+I</b> (or right-click → <b>Get Info</b>).</li>
 <li><b>Info</b>: name, artist, album, genre and more; changes are written into the
-file too. <b>Artwork</b>: paste or choose a picture.</li>
+file too. <b>Lyrics</b>: type or paste them. <b>Artwork</b>: paste or choose a
+picture.</li>
 <li><b>Options</b>: Volume Adjustment (it snaps back to None near the middle),
 Equalizer Preset, Media Kind, Start and Stop Time, Remember playback position and
 Skip when shuffling.</li>
@@ -127,6 +130,9 @@ Skip when shuffling.</li>
 Description.</li>
 <li>With several songs selected you get <i>Multiple Item Information</i>: only the
 fields you change are applied (a whole season's episodes at once, for example).</li>
+<li>Right-click → <b>Get Track Info Online…</b> looks songs up on MusicBrainz (after you
+say yes) and shows every suggested correction, and missing covers, for you to tick
+before anything changes. <b>Get Lyrics Online…</b> fills in missing lyrics.</li>
 </ul>"""),
 
     ("Movies, TV Shows, Podcasts, Audiobooks", "The Library sections", """
@@ -163,7 +169,7 @@ Preferences → General (for example <i>Ask to Import CD</i>).</li>
 <b>Import Settings…</b> in Preferences.</li>
 </ul>"""),
 
-    ("Converting files", "MP3 and iPod versions", """
+    ("Converting files", "MP3, AAC and iPod versions", """
 <ul>
 <li>Right-click songs → <b>Create MP3 Version</b> (320 kbps) or <b>Create AAC Version</b>
 (256 kbps). Each format offers the other: an MP3 gets an AAC version, an AAC file an MP3
@@ -210,8 +216,8 @@ tick, or just chosen playlists, artists, albums and genres.
 Everything goes in one <i>LuxTunes</i> folder that any music player can use.</li>
 <li><b>Delete media not in this selection</b> keeps the phone tidy. LuxTunes only ever
 touches its own folder.</li>
-<li>With the LuxTunes app on the phone, plays, ratings, playlists and the equalizer
-come back at the next sync. Songs you add on the phone are copied into your
+<li>With the LuxTunes app for Android on the phone (luxtunes-mobile on GitHub), plays,
+ratings, playlists and the equalizer come back at the next sync. Songs you add on the phone are copied into your
 library, and details you edit there (names, albums, years…) are saved here too.</li>
 </ul>"""),
 
@@ -243,6 +249,7 @@ order; playlists use Music's.</li>
 <li>LuxTunes only goes online when you agree: CD names, Get Track Info Online…, Get Lyrics
 Online…, and updates.</li>
 <li><b>Help → Check for Updates…</b> looks for a new version (after asking) and offers
-to install it.</li>
+to install it. Every download is checked against the checksum GitHub publishes for it
+before it's installed.</li>
 </ul>"""),
 ]
