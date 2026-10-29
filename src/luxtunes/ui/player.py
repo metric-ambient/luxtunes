@@ -82,6 +82,7 @@ class Player(QObject):
         self.sound_check = False
         self._transition = None          # the next song, prepared on the other deck
         self._fading = None              # (deck, audio, volume) fading out
+        self._fading_id = None           # the song on that deck
         self._fade_in = 1.0              # how far the new song has faded in
         self._fade_steps = 0
         self._fade_step = 0
@@ -204,6 +205,27 @@ class Player(QObject):
             first = start
         # A song you double-click plays even if it's unchecked.
         self._start_at(first, force_first=True)
+
+    def rescope(self, tracks: list[dict]):
+        """The list being played changed (e.g. its search was changed or
+        cleared): the song playing carries on, then play continues through
+        `tracks`, reshuffled if shuffle is on."""
+        if not 0 <= self._pos < len(self._order):
+            return
+        playing = self._context[self._order[self._pos]]
+        self._drop_transition()                  # the next song may change
+        context = list(tracks)
+        here = next((i for i, t in enumerate(context) if t.get("id") == playing.get("id")), -1)
+        if here < 0:                             # no longer in the list: keep it as the first
+            context.insert(0, playing)
+            here = 0
+        self._context = context
+        if self._shuffle:
+            self._order = [here] + self._shuffled([i for i in range(len(context)) if i != here])
+            self._pos = 0
+        else:
+            self._order = list(range(len(context)))
+            self._pos = here
 
     def toggle(self):
         if self.is_playing:
@@ -620,6 +642,18 @@ class Player(QObject):
             self._drop_transition()
             self._transition = {"none": True}
 
+    def busy_track_ids(self) -> set:
+        """Songs whose files are open for playing now: the current one and the
+        next one, if it's already being prepared on the other deck."""
+        busy = {self._fading_id}                 # (the song fading out)
+        if self._current is not None:
+            busy.add(self._current.get("id"))
+        choice = (self._transition or {}).get("choice")
+        if choice:
+            busy.add(choice[2].get("id"))
+        busy.discard(None)
+        return busy
+
     def _drop_transition(self):
         transition = self._transition
         self._transition = None
@@ -680,6 +714,7 @@ class Player(QObject):
             new_deck.setVideoOutput(self._video_widget)
         self._eq.attach(new_deck)
         self._set_loops(new_deck)
+        fading_id = (self._current or {}).get("id")
         self._current = track
         self._heard.add(track.get("id"))
         self._last_position = 0
@@ -694,6 +729,7 @@ class Player(QObject):
         if fade:
             self._fade_in = 0.0
             self._fading = (old_deck, old_audio, old_volume)
+            self._fading_id = fading_id          # its file stays open until the fade ends
             self._fade_steps = max(1, self.crossfade_seconds * 1000 // FADE_STEP_MS)
             self._fade_step = 0
             self._fade_timer.start()
@@ -724,6 +760,7 @@ class Player(QObject):
         if self._fading is not None:
             deck, audio, _ = self._fading
             self._fading = None
+            self._fading_id = None
             deck.stop()
             deck.setSource(QUrl())
             audio.setMuted(False)

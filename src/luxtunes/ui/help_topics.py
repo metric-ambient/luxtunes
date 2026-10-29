@@ -29,7 +29,8 @@ that's playing.</li>
 Repeat goes Off → All → One. LuxTunes remembers both. Shuffle mixes the whole list
 afresh each time and starts with albums you haven't played or skipped anything from in
 the last two weeks; songs you heard in the last couple of days come last. Songs by the
-same artist or from the same album are kept apart.</li>
+same artist or from the same album are kept apart. Change or clear the search while
+the list plays and what plays next follows it.</li>
 <li><b>Up Next:</b> right-click songs → <b>Add to Queue</b> to play them next, or
 <b>Add to End of Queue</b> to play them after everything already queued. Or drag them onto
 <i>Up Next</i>. Those play first, then LuxTunes carries on where you were.</li>
@@ -238,7 +239,8 @@ Trash) and lets you delete it for good, after asking again.</li>
 <li>Click a column header to sort by it. Each Library section and playlist keeps its own
 sort, and where you'd scrolled to while LuxTunes is open.</li>
 <li>Type in the search box to filter what's shown. Click the magnifier to search only
-one kind of tag: Artist, Album, Composer or Song (All searches them all).</li>
+one kind of tag: Artist, Album, Composer or Song (All searches them all). It goes
+back to All each time LuxTunes starts.</li>
 <li>Each Library section (Music, Movies, TV Shows…) keeps its own columns and their
 order; playlists use Music's.</li>
 <li><b>File → Display Duplicates</b> and <b>Display Missing</b> help clean up.</li>
