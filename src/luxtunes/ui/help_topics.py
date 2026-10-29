@@ -26,8 +26,9 @@ pauses.</li>
 that's playing.</li>
 <li><b>Shuffle</b> and <b>Repeat</b> are under the sidebar and in the Controls menu.
 Repeat goes Off → All → One. LuxTunes remembers both. Shuffle mixes the whole list
-afresh each time, plays songs you haven't heard in the last couple of days first, and
-keeps songs by the same artist or from the same album apart.</li>
+afresh each time and starts with albums you haven't played or skipped anything from in
+the last two weeks; songs you heard in the last couple of days come last. Songs by the
+same artist or from the same album are kept apart.</li>
 <li><b>Up Next:</b> right-click songs → <b>Add to Queue</b> to play them next, or
 <b>Add to End of Queue</b> to play them after everything already queued. Or drag them onto
 <i>Up Next</i>. Those play first, then LuxTunes carries on where you were.</li>

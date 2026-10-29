@@ -3,9 +3,13 @@
   1. A fair shuffle of the whole list (Fisher–Yates): every order is equally
      likely, so no song, album or artist has a set place, and two shuffles
      of the same playlist start differently.
-  2. Songs heard recently (this session, or played in the last RECENT_DAYS)
-     move to the back, keeping their shuffled order, so a new shuffle starts
-     with music you haven't just heard.
+  2. Freshness, by album: songs from albums you haven't played or skipped
+     anything from in ALBUM_DAYS come first; then songs from albums you have;
+     songs you played or skipped yourself in RECENT_DAYS (or this session)
+     last. Each part keeps its shuffled order. Freshness by song alone wasn't
+     enough: with a week of listening most albums have had a song played, so
+     the start of every shuffle kept landing on the same albums, just a
+     different song from each.
   3. Neighbours are spread apart: a song isn't played right after another by
      the same artist (ARTIST_GAP) or soon after one from the same album
      (ALBUM_GAP). A clashing song swaps places with the nearest later song
@@ -25,7 +29,8 @@ from datetime import datetime, timedelta, timezone
 ARTIST_GAP = 2          # at least this many songs between two by the same artist
 ALBUM_GAP = 8           # and this many between two from the same album
 LOOK_AHEAD = 300        # how far ahead to look for a song that fits
-RECENT_DAYS = 2
+RECENT_DAYS = 2         # a song played or skipped this recently waits until last
+ALBUM_DAYS = 14         # an album with any song played or skipped this recently waits too
 
 
 def fresh_rng() -> random.Random:
@@ -33,17 +38,59 @@ def fresh_rng() -> random.Random:
 
 
 def spread_shuffle(items: list, key=lambda item: item, rng: random.Random | None = None,
-                   album=None, recent=None) -> list:
+                   album=None, recent=None, tier=None) -> list:
     """Return a new list with `items` shuffled. key(item): the artist;
     album(item): the album (optional); recent(item): True for songs heard
-    recently, which go to the back (optional)."""
+    recently, which go to the back (optional); tier(item): 0 first, then 1,
+    then 2… (optional, see freshness_tiers), each tier in shuffled order."""
     rng = rng or fresh_rng()
     order = list(items)
     rng.shuffle(order)
-    if recent is not None:
-        order = [i for i in order if not recent(i)] + [i for i in order if recent(i)]
+    if tier is None and recent is not None:
+        tier = lambda item: 1 if recent(item) else 0
+    if tier is not None:
+        order.sort(key=tier)                    # stable: each tier keeps its shuffled order
     _spread(order, key, album)
     return order
+
+
+def _when(text) -> datetime | None:
+    if not text:
+        return None
+    try:
+        return datetime.strptime(str(text)[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def freshness_tiers(tracks: list[dict], heard_ids=frozenset(),
+                    now: datetime | None = None) -> list[int]:
+    """For each track: 0 if neither it nor anything from its album was played
+    or skipped lately, 1 if another song from its album was (within ALBUM_DAYS),
+    2 if the song itself was (within RECENT_DAYS, or this session). So a new
+    shuffle starts with albums you haven't been hearing, not just songs."""
+    now = now or datetime.now(timezone.utc)
+    song_since, album_since = now - timedelta(days=RECENT_DAYS), now - timedelta(days=ALBUM_DAYS)
+    heard_at = []
+    for track in tracks:
+        times = [t for t in (_when(track.get("play_date")), _when(track.get("skip_date"))) if t]
+        if track.get("id") in heard_ids:
+            times.append(now)
+        heard_at.append(max(times) if times else None)
+    album_heard: dict = {}
+    for track, at in zip(tracks, heard_at):
+        name = album_key(track)
+        if name and at is not None and (name not in album_heard or at > album_heard[name]):
+            album_heard[name] = at
+    tiers = []
+    for track, at in zip(tracks, heard_at):
+        if at is not None and at >= song_since:
+            tiers.append(2)
+        elif album_heard.get(album_key(track), album_since - timedelta(days=1)) >= album_since:
+            tiers.append(1)
+        else:
+            tiers.append(0)
+    return tiers
 
 
 def _spread(order: list, artist, album) -> None:
@@ -82,15 +129,3 @@ def album_key(track: dict) -> str:
     """Album and its artist, so two artists' "Greatest Hits" are different albums."""
     name = (track.get("album") or "").casefold()
     return f"{artist_key(track)}\x1f{name}" if name else ""
-
-
-def played_recently(track: dict, now: datetime | None = None) -> bool:
-    """Played within RECENT_DAYS (play_date as "YYYY-MM-DDTHH:MM:SSZ")."""
-    text = track.get("play_date")
-    if not text:
-        return False
-    try:
-        played = datetime.strptime(str(text)[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
-    except ValueError:
-        return False
-    return (now or datetime.now(timezone.utc)) - played < timedelta(days=RECENT_DAYS)
