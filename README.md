@@ -18,6 +18,11 @@ back.
 > including fitness for a particular purpose. You run it at your own risk; the author is not
 > liable for any damage or data loss. See the [GPL-3.0 license](LICENSE), sections 15 and 16.
 
+[![Screenshot-from-2026-10-29-13-09-43.png](https://i.postimg.cc/rFrpmNQf/Screenshot-from-2026-10-29-13-09-43.png)](https://postimg.cc/Yht7DYcF)
+[![Screenshot-from-2026-10-29-13-16-25.png](https://i.postimg.cc/m2HrDy85/Screenshot-from-2026-10-29-13-16-25.png)](https://postimg.cc/3d3hfmMX)
+[![Screenshot-from-2026-10-29-13-19-08.png](https://i.postimg.cc/8P6C5mtY/Screenshot-from-2026-10-29-13-19-08.png)](https://postimg.cc/kB7CYKrN)
+[![Screenshot-from-2026-10-29-13-11-15.png](https://i.postimg.cc/BQKv6BM7/Screenshot-from-2026-10-29-13-11-15.png)](https://postimg.cc/fJMsqm4Y)
+
 ## Why LuxTunes?
 
 Plenty of people still keep their music as files: ripped CDs, purchases, years of
