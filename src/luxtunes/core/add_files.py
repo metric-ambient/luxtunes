@@ -1,11 +1,13 @@
 """File → Add File to Library… / Add Folder to Library…
 
-Reads each file's tags and adds it to the library. Files from elsewhere are
-always copied into the LuxTunes Media folder, filed the same way "Keep
-LuxTunes Media folder organized" files them, so everything LuxTunes shows
-lives there. The original is left alone, unless Preferences → Advanced →
-"Move original files on import" is on: then it's moved instead (taken away
-from where it was only once the library has the song).
+Reads each file's tags and adds it to the library. With "Keep LuxTunes
+Media folder organized" on (Preferences → Advanced), files from elsewhere are
+copied into the LuxTunes Media folder and filed there, so everything LuxTunes
+shows lives in one place; the original is left alone, unless "Move original
+files on import" is on: then it's moved instead (taken away from where it was
+only once the library has the song). With it off, files stay where they are
+and the library points to them there, so the media folder can be any folder
+(e.g. a shared drive other programs use too) and nothing in it is renamed.
 Files already in the library are skipped (the same file, or a copy of a song
 already there: same name, artist, album, file type and length), and adding
 carries on with the rest. No Qt in here.
@@ -161,7 +163,8 @@ def add_paths(conn: sqlite3.Connection, paths: list[str], progress=None, stop=No
         return result
     known = _known_locations(conn)
     songs = _known_songs(conn)
-    move = move_when_adding(conn)
+    copy = organize.is_enabled(conn)            # off: files stay where they are
+    move = copy and move_when_adding(conn)
     root = organize.media_folder(conn)
     log.info("adding %d files from %s", len(files), ", ".join(paths))
     for done, path in enumerate(files):
@@ -175,7 +178,7 @@ def add_paths(conn: sqlite3.Connection, paths: list[str], progress=None, stop=No
             continue
         started = time.monotonic()
         try:
-            track_id = add_file(conn, path, True, root, known, stop, songs=songs, move=move)
+            track_id = add_file(conn, path, copy, root, known, stop, songs=songs, move=move)
         except AddStopped:
             result.stopped = True
             break

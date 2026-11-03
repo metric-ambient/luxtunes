@@ -292,15 +292,20 @@ class PreferencesDialog(QDialog):
 
         self.keep_organized = QCheckBox("Keep LuxTunes Media folder organized")
         self.keep_organized.setChecked(organize.is_enabled(self.conn))
-        note = QLabel("Places files into album and artist folders, and names the files based "
-                      "on the disc number, track number, and the song title.")
+        note = QLabel("Copies songs you add into the LuxTunes Media folder, places files into "
+                      "album and artist folders, and names the files based on the disc number, "
+                      "track number, and the song title. Turn it off to use any folder as it is "
+                      "(e.g. a shared drive): songs you add stay where they are, and nothing "
+                      "is renamed or moved.")
         note.setWordWrap(True)
         note.setContentsMargins(24, 0, 0, 0)
         note.setEnabled(False)            # lighter grey, like the Playback notes
 
         self.move_files = QCheckBox("Move original files on import")
         self.move_files.setChecked(add_files.move_when_adding(self.conn))
-        move_note = QLabel("Songs you add are always copied into the LuxTunes Media folder. "
+        self.move_files.setEnabled(self.keep_organized.isChecked())     # only when copying
+        self.keep_organized.toggled.connect(self.move_files.setEnabled)
+        move_note = QLabel("With the folder kept organized, songs you add are copied into it. "
                            "With this on, they're moved there instead, so the originals "
                            "don't stay behind.")
         move_note.setWordWrap(True)

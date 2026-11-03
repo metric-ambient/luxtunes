@@ -217,6 +217,12 @@ class MainWindow(QMainWindow):
         self._import_worker = None              # the CD import running in the background
         self._add_worker = None                 # File → Add to Library running in the background
         self._add_playlist = None               # the playlist shown when it started
+        self._ipod_import_key: str | None = None    # the iPod whose songs are being added
+        self._ipod_import_name = ""
+        self._closing = False                   # past the point of no return in closeEvent
+        self._ipod_check = None                 # reading an iPod's songs in the background
+        self._ipod_check_queue: list = []       # (iPod, asked) waiting for that
+        self._ipods_checked: set[str] = set()   # offered once per plug-in
         self._import_key: str | None = None
         self._import_eject = False
         self._import_failures: list[str] = []
@@ -527,7 +533,8 @@ class MainWindow(QMainWindow):
         self._action(file_menu, "Add File to Library…", self._add_file, "Ctrl+O")
         self._action(file_menu, "Add Folder to Library…", self._add_folder)
         library_menu = file_menu.addMenu("Library")
-        self._action(library_menu, "Organize Library…", self._organize_library)
+        self.organize_action = self._action(library_menu, "Organize Library…", self._organize_library)
+        self.organize_action.setEnabled(organize.is_enabled(self.conn))   # never rearranges a folder you keep as it is
         self._action(library_menu, "Import iTunes Library…", self.import_itunes_library, "Ctrl+Shift+O")
         library_menu.addSeparator()
         self._action(library_menu, "Restore from Backup…", self._restore_backup)
@@ -1968,6 +1975,7 @@ class MainWindow(QMainWindow):
         dialog = PreferencesDialog(self.conn, self, self.settings)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._apply_appearance()
+            self.organize_action.setEnabled(organize.is_enabled(self.conn))
             new_folder = str(organize.media_folder(self.conn))
             if os.path.normpath(new_folder) != os.path.normpath(dialog.old_folder):
                 self._relocate_media_folder(dialog.old_folder, new_folder)
@@ -1980,8 +1988,8 @@ class MainWindow(QMainWindow):
             result = organize.relocate_media_folder(self.conn, old, new)
         finally:
             QApplication.restoreOverrideCursor()
-        if not result.updated and not result.not_found:
-            return                                   # no songs lived in the old folder
+        if not result.updated:
+            return          # nothing was moved there: another folder, not the same one moved
         if result.updated:
             self.reload_library()
             self.player.update_locations(dict(self.conn.execute("SELECT id, location FROM tracks")))
@@ -2233,6 +2241,11 @@ class MainWindow(QMainWindow):
             syncing = self._sync_worker is not None
             sync = menu.addAction("Sync", lambda: self._sync_source(source))
             sync.setEnabled(not (syncing and self._sync_ipod.key == source[1]))
+            if source[1] in self._ipods:
+                adding = menu.addAction("Add Songs to Library…",
+                                        lambda: self._check_ipod_songs(self._ipods.get(source[1]),
+                                                                       asked=True))
+                adding.setEnabled(self._ipod_import_key is None)
             menu.addAction("Rename", lambda: self.sidebar.rename_source(source))
             menu.addSeparator()
             eject = menu.addAction("Eject", lambda: self._eject_device(source[1]))
@@ -3222,6 +3235,7 @@ class MainWindow(QMainWindow):
         for mountpoint, key in known.items():
             if mountpoint not in ipod_mounts:       # unplugged / ejected
                 del self._ipods[key]
+                self._ipods_checked.discard(key)     # plugged in again: offered again
         for mountpoint in ipod_mounts - set(known):
             dev, fs = mounted[mountpoint]
             try:
@@ -3231,6 +3245,9 @@ class MainWindow(QMainWindow):
             self._ipods[ipod.key] = ipod
             ipod_settings.load_device(self.conn, ipod.key, ipod.name, ipod.model_number, ipod.serial)
             self.statusBar().showMessage(f"“{ipod.name}” is connected.", 5000)
+            if ipod.key not in self._ipods_checked:
+                self._ipods_checked.add(ipod.key)
+                self._check_ipod_songs(ipod)
         self._forget_missing_source()
         self.reload_library()
         self._update_device_actions()       # Sync and Eject right away, not at the next check
@@ -3376,6 +3393,10 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Sync", text)
             return
         from luxtunes.core.ipod import gpod
+        if ipod.key == self._ipod_import_key:
+            QMessageBox.information(self, "Sync", f"Songs are still being added from "
+                                    f"“{self._device_name(ipod)}”. Sync once that's finished.")
+            return
         phone = ipod.key.startswith("android:")
         if phone and not ipod.storages:
             QMessageBox.information(
@@ -3550,6 +3571,144 @@ class MainWindow(QMainWindow):
         if self._closing_after_sync:
             QTimer.singleShot(0, self.close)      # stopped safely: now close
 
+    # ---- Songs on an iPod that aren't in the library ----------------------------------------
+
+    def _ipod_offer_key(self, key: str) -> str:
+        return f"ipod_import_declined:{key}"
+
+    def _check_ipod_songs(self, ipod, asked: bool = False):
+        """Read the iPod's songs in the background; then offer to add those that
+        aren't in the library (an iPod synced with another computer). asked:
+        chosen from the menu (always answers), rather than on plugging in."""
+        from luxtunes.core.db import get_setting
+        from luxtunes.core.ipod import gpod
+        if ipod is None:
+            return
+        if not gpod.available():
+            if asked:
+                QMessageBox.warning(self, "Add Songs to Library",
+                                    "Reading an iPod needs libgpod, which isn't installed.\n\n"
+                                    "Install it from a terminal with:\n    sudo apt install libgpod-common")
+            return
+        if not asked and get_setting(self.conn, self._ipod_offer_key(ipod.key)) == "1":
+            return
+        if self._ipod_check is not None:
+            self._ipod_check_queue.append((ipod, asked))
+            return
+        from luxtunes.ui.add_worker import IPodCheckWorker
+        db_path = self.conn.execute("PRAGMA database_list").fetchone()[2]
+        worker = IPodCheckWorker(db_path, ipod, parent=self)
+        self._ipod_check = worker
+        worker.found.connect(lambda key, songs, protected: self._on_ipod_songs_found(
+            key, songs, protected, asked))
+        worker.finished.connect(self._ipod_check_done)
+        if asked:
+            self.statusBar().showMessage(f"Reading the songs on “{self._device_name(ipod)}”…")
+        worker.start()
+
+    def _ipod_check_done(self):
+        if self._ipod_check is not None:
+            self._ipod_check.deleteLater()
+        self._ipod_check = None
+        if self._ipod_check_queue and not self._closing:
+            self._check_ipod_songs(*self._ipod_check_queue.pop(0))
+
+    def _on_ipod_songs_found(self, key: str, songs: list, protected: int, asked: bool):
+        ipod = self._ipods.get(key)
+        if ipod is None or self._closing:
+            return                                   # unplugged meanwhile
+        name = self._device_name(ipod)
+        if asked:
+            self.statusBar().clearMessage()
+        left_out = (f"\n\n{protected:,} song{'s' if protected != 1 else ''} from the iTunes Store "
+                    f"{'are' if protected != 1 else 'is'} copy-protected and can't be played "
+                    "here, so " + ("they're" if protected != 1 else "it's") + " left out."
+                    if protected else "")
+        if not songs:
+            if asked:
+                QMessageBox.information(self, "Add Songs to Library",
+                                        f"Every song on “{name}” is already in your library."
+                                        + left_out)
+            return
+        if self._sync_worker is not None and self._sync_ipod.key == key:
+            return                                   # syncing it already: not now
+        count = len(songs)
+        box = QMessageBox(QMessageBox.Icon.Question, "Add Songs to Library",
+                          f"“{name}” has {count:,} song{'s' if count != 1 else ''} that "
+                          f"{'aren' if count != 1 else 'isn'}'t in your library. It was probably "
+                          "last synced with another computer.\n\n"
+                          f"Add {'them' if count != 1 else 'it'} to your library now?", parent=self)
+        box.setInformativeText(
+            "They're copied into your LuxTunes Media folder with their details, play counts "
+            "and ratings. Nothing on the iPod changes. Syncing it would take songs that aren't in "
+            "your library off the iPod, so add them first to keep them." + left_out)
+        add = box.addButton("Add to Library", QMessageBox.ButtonRole.AcceptRole)
+        later = box.addButton("Not Now", QMessageBox.ButtonRole.RejectRole)
+        never = None
+        if not asked:
+            never = box.addButton("Don't Ask Again", QMessageBox.ButtonRole.DestructiveRole)
+        box.setDefaultButton(add)
+        box.setEscapeButton(later)
+        box.exec()
+        if box.clickedButton() is never:
+            from luxtunes.core.db import set_setting
+            set_setting(self.conn, self._ipod_offer_key(key), "1")
+            self.statusBar().showMessage(f"Right-click “{name}” → Add Songs to Library… to add "
+                                         "them later.", 8000)
+        elif box.clickedButton() is add:
+            self._import_ipod_songs(ipod, songs)
+
+    def _import_ipod_songs(self, ipod, songs: list):
+        if self._add_worker is not None:
+            QMessageBox.information(self, "Add Songs to Library",
+                                    "LuxTunes is still adding files. Wait for it to finish, "
+                                    "then right-click the iPod → Add Songs to Library….")
+            return
+        if self._sync_worker is not None and self._sync_ipod.key == ipod.key:
+            QMessageBox.information(self, "Add Songs to Library",
+                                    f"“{self._device_name(ipod)}” is syncing. Add its songs once "
+                                    "the sync has finished.")
+            return
+        from luxtunes.ui.add_worker import IPodImportWorker
+        name = self._device_name(ipod)
+        db_path = self.conn.execute("PRAGMA database_list").fetchone()[2]
+        worker = IPodImportWorker(db_path, songs, self)
+        self._add_worker = worker                # one add at a time; ✕ and closing stop it
+        self._add_playlist = None
+        self._ipod_import_key = ipod.key
+        self._ipod_import_name = name
+        worker.progress.connect(lambda done, total, song: self.lcd.update_count(
+            "add", f"“{song}”", done, total))
+        worker.done.connect(self._on_ipod_import_done)
+        worker.finished.connect(worker.deleteLater)
+        self.lcd.start_task("add", f"Adding songs from “{name}”", "Copying…", "Stop adding")
+        self._update_device_actions()
+        worker.start()
+
+    def _on_ipod_import_done(self, result):
+        self._add_worker = None
+        self._ipod_import_key = None
+        name = self._ipod_import_name
+        self.reload_library()
+        self.show_source(self._current_source or SOURCE_MUSIC)
+        self._update_device_actions()
+        added = len(result.added)
+        songs = f"{added:,} song{'s' if added != 1 else ''}"
+        if result.stopped:
+            message = (f"Stopped: {songs} added from “{name}”. Right-click it → Add Songs to "
+                       "Library… to add the rest.")
+        elif added:
+            message = f"Added {songs} from “{name}” to your library."
+        else:
+            message = "Nothing was added."
+        self._lcd_finished("add", message)
+        self.statusBar().showMessage(message, 8000)
+        if result.failed:
+            QMessageBox.warning(self, "Add Songs to Library",
+                                f"{message}\n\n{len(result.failed):,} song(s) couldn't be added:\n\n"
+                                + "\n".join(result.failed[:20])
+                                + ("\n…" if len(result.failed) > 20 else ""))
+
     def _eject_current_device(self):
         if self._current_source and self._current_source[0] == "device" \
                 and self._current_source[1].startswith("cd:"):
@@ -3572,6 +3731,11 @@ class MainWindow(QMainWindow):
         if self._sync_worker is not None and self._sync_ipod.key == key:
             QMessageBox.information(self, "Eject", f"“{self._device_name(ipod)}” is syncing. "
                                     "Stop the sync (✕ in the display) or let it finish, then eject.")
+            return
+        if key == self._ipod_import_key:
+            QMessageBox.information(self, "Eject", f"Songs are being added from "
+                                    f"“{self._device_name(ipod)}”. Stop that (✕ in the display) "
+                                    "or let it finish, then eject.")
             return
         if key.startswith("android:"):
             self._eject_phone(ipod)
@@ -4838,7 +5002,11 @@ class MainWindow(QMainWindow):
                 "Stopping the sync safely; LuxTunes closes when it's done.")
             self._sync_worker.stop()
             return
+        self._closing = True
         self._device_timer.stop()            # no more looking for iPods and CDs
+        self._ipod_check_queue.clear()
+        if self._ipod_check is not None:
+            self._ipod_check.wait(30_000)    # reading an iPod's song list: a few seconds
         if self._mpris is not None:
             self._mpris.close()              # media keys go to other players now
         self._cd_pending.clear()             # and no "Import this CD?" after closing

@@ -72,8 +72,8 @@ Made for Linux Mint, and it runs on most recent Linux systems.
 - A **10-band equalizer** with presets, and a preset of its own for any song.
 - **Crossfade**, **gapless playback** and **Sound Check** (every song at about the same
   volume).
-- A **shuffle** that starts with albums you haven't been listening to lately and keeps an
-  artist's or album's songs apart, plus **Up Next** with Add to Queue (play next) and Add
+- A **shuffle** that leans towards albums you haven't been listening to lately and keeps an
+  artist's or album's songs well apart, plus **Up Next** with Add to Queue (play next) and Add
   to End of Queue.
 - A **Mini Player**, a **Pop-Out Player** with big artwork and lyrics (the line being sung
   highlighted, with lyrics from LRCLIB), and a **sleep timer**.
@@ -84,7 +84,9 @@ Made for Linux Mint, and it runs on most recent Linux systems.
 - **iPods:** classic, mini, shuffle, nano 1st–5th generation and the original models. Sync
   music, podcasts, audiobooks, and, on models that show them, videos and photos. Play
   counts and ratings come back from the iPod, and missing album artwork is put back at the
-  next sync. (The iPod nano 6th/7th generation and the iPod touch can't be supported.)
+  next sync. An iPod synced with another computer? LuxTunes offers to add its songs that
+  aren't in your library, with their play counts and ratings. (The iPod nano 6th/7th
+  generation and the iPod touch can't be supported.)
 - **Android phones,** over a USB cable: songs, videos, podcasts, audiobooks, artwork,
   lyrics, playlists and your equalizer go into one `LuxTunes` folder on the phone, which
   any music player can use. With the companion
@@ -112,7 +114,8 @@ For **Linux Mint 22 / Ubuntu 24.04 or newer** (64-bit PC). No terminal needed:
 
 Then choose **File → Library → Import iTunes Library…** to bring in an existing library, or
 **File → Add Folder to Library…** to add your music (it's copied into your LuxTunes Media
-folder; your originals stay put unless you choose to move them). **Help → LuxTunes Help** (F1) has
+folder and your originals stay put; or turn off "Keep LuxTunes Media folder organized" in
+Preferences → Advanced to use your music where it already is). **Help → LuxTunes Help** (F1) has
 short guides to everything.
 
 **Optional extras** (install from Software Manager):
