@@ -15,7 +15,8 @@ playlists (smart ones too) come along.</li>
 <b>Add Folder to Library…</b>. Adding happens in the background; the display at the top
 shows progress, with ✕ to stop.</li>
 <li>What you add is copied into your LuxTunes Media folder, so your whole library lives in
-one place; the originals stay where they were (see <i>Your LuxTunes Media folder</i>).
+one place; the originals stay where they were. Or turn off <b>Keep LuxTunes Media folder
+organized</b> and songs stay where they are (see <i>Your LuxTunes Media folder</i>).
 Your ratings, plays and playlists are kept in LuxTunes' library file.</li>
 </ul>"""),
 
@@ -27,9 +28,11 @@ pauses.</li>
 that's playing.</li>
 <li><b>Shuffle</b> and <b>Repeat</b> are under the sidebar and in the Controls menu.
 Repeat goes Off → All → One. LuxTunes remembers both. Shuffle mixes the whole list
-afresh each time and starts with albums you haven't played or skipped anything from in
-the last two weeks; songs you heard in the last couple of days come last. Songs by the
-same artist or from the same album are kept apart. Change or clear the search while
+afresh each time and leans towards albums you haven't played or skipped anything from in
+the last two weeks; songs you heard in the last couple of days come last. In a big
+library an album doesn't come back for hours, and an artist not for dozens of songs;
+albums and artists with lots of songs come up as often as their size says, but spread
+out. Change or clear the search while
 the list plays and what plays next follows it.</li>
 <li><b>Up Next:</b> right-click songs → <b>Add to Queue</b> to play them next, or
 <b>Add to End of Queue</b> to play them after everything already queued. Or drag them onto
@@ -147,14 +150,19 @@ Options → Media Kind, or drag it onto <b>TV Shows</b>.</li>
 
     ("Your LuxTunes Media folder", "Where your files live", """
 <ul>
-<li>With <b>Keep LuxTunes Media folder organized</b> on (Preferences → Advanced), files
-are named and filed as Artist / Album / <i>Track Name</i>, and follow your edits.</li>
-<li>Everything you add is copied into the LuxTunes Media folder, so your whole library
-lives in one place; your originals stay where they were. Turn on <b>Move original files
-on import</b> (Preferences → Advanced) to move them there instead.</li>
+<li>With <b>Keep LuxTunes Media folder organized</b> on (Preferences → Advanced, the
+usual way), everything you add is copied into the LuxTunes Media folder, so your whole
+library lives in one place, and files are named and filed as Artist / Album /
+<i>Track Name</i> and follow your edits. Your originals stay where they were; turn on
+<b>Move original files on import</b> to move them there instead.</li>
+<li>Turn it off to use a folder just as it is, for example a shared drive other programs
+read too: choose it as the media folder, and songs you add from it (or anywhere) stay
+where they are. LuxTunes never renames or moves them. New files it makes itself (CDs you
+import, converted copies, songs from an iPod or phone) still go into the media folder.</li>
 <li><b>Moved the folder to another drive?</b> Change its location in Preferences →
 Advanced and click OK: songs that are in the new place are pointed there.</li>
-<li><b>File → Library → Organize Library…</b> tidies everything at once.</li>
+<li><b>File → Library → Organize Library…</b> tidies everything at once (only while the
+folder is kept organized).</li>
 <li>Once a week LuxTunes keeps a copy of your library (ratings, plays, playlists) in a
 <i>Backups</i> folder next to it, the last four weeks. To go back to one, choose
 <b>File → Library → Restore from Backup…</b>; your library as it was is kept there too,
@@ -202,6 +210,12 @@ playlists, artists, albums and genres.</li>
 <li>Works with iPod classic, mini, shuffle and nano 1st–5th generation, and the
 original iPods. iPod nano 6th/7th generation and iPod touch can't be synced.</li>
 <li>Play counts and ratings from the iPod come back to your library.</li>
+<li><b>An iPod synced with another computer?</b> When it's plugged in, LuxTunes offers to
+add the songs on it that aren't in your library: they're copied into your library with
+their details, play counts and ratings, and nothing on the iPod changes. Do it before
+syncing, since a sync takes songs that aren't in your library off the iPod. To do it
+later, right-click the iPod → <b>Add Songs to Library…</b>. Songs bought from the iTunes
+Store with copy protection can't be played here, so they're left out.</li>
 <li>Songs on the iPod that are missing their album artwork get it back at the next
 sync.</li>
 <li>Click the eject button next to the iPod before unplugging it.</li>

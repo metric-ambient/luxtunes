@@ -190,7 +190,9 @@ def test_keep_media_organized(window, tmp_path):
     assert window.model.track_at(window.model.row_of(track["id"]))["location"] == saved["location"]
 
     prefs = PreferencesDialog(conn, window)
+    assert prefs.move_files.isEnabled()
     prefs.keep_organized.setChecked(False)
+    assert not prefs.move_files.isEnabled()           # nothing is copied, so nothing to move
     prefs._save()
     assert not organize.is_enabled(conn)
 
@@ -2284,6 +2286,52 @@ def test_pop_out_scales_quickly_while_resizing(window):
     art._layout_children()                                   # settled: smooth
     assert art._shown_size[1] is True
     art.close()
+
+
+def test_songs_on_an_ipod_from_another_computer_can_be_added(window, tmp_path, monkeypatch):
+    import time
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from luxtunes.core import library, tags
+    from luxtunes.core.db import get_setting
+    from luxtunes.core.ipod import import_songs
+    path = tmp_path / "IPOD" / "iPod_Control" / "Music" / "F00" / "ABCD.mp3"
+    path.parent.mkdir(parents=True)
+    path.write_bytes((b"\xff\xfb\x90\x64" + b"\x00" * 413) * 40)
+    tags.write_tags(str(path), {"name": "From Elsewhere", "artist": "Someone", "album": "Away"})
+    song = import_songs.IPodSong(str(path), 0x1234, {"name": "From Elsewhere"},
+                                 {"media_kind": "music", "play_count": 5, "rating": 100})
+    ipod = SimpleNamespace(key="ipod:test", name="Other iPod", model_number="", serial="",
+                           mountpoint=str(tmp_path / "IPOD"))
+    window._ipods[ipod.key] = ipod
+    from luxtunes.core import organize
+    organize.set_media_folder(window.conn, tmp_path / "Media")       # never your real folder
+    try:
+        # Plugged in: offered; "Don't Ask Again" is remembered for this iPod.
+        monkeypatch.setattr(QMessageBox, "exec", lambda self: 0)
+        monkeypatch.setattr(QMessageBox, "clickedButton", lambda self: next(
+            b for b in self.buttons() if b.text() == "Don't Ask Again"))
+        window._on_ipod_songs_found(ipod.key, [song], 0, asked=False)
+        assert get_setting(window.conn, window._ipod_offer_key(ipod.key)) == "1"
+
+        # From the menu, it's added: copied, with the iPod's plays and rating.
+        window._import_ipod_songs(ipod, [song])
+        assert window._ipod_import_key == ipod.key
+        deadline = time.time() + 30
+        while window._add_worker is not None and time.time() < deadline:
+            QApplication.processEvents()
+            time.sleep(0.02)
+        assert window._add_worker is None and window._ipod_import_key is None
+        row = window.conn.execute("SELECT id FROM tracks WHERE persistent_id = ?",
+                                  ("0000000000001234",)).fetchone()
+        track = library.load_track(window.conn, row[0])
+        assert track["name"] == "From Elsewhere" and track["play_count"] == 5
+        assert track["rating"] == 100 and path.exists()
+        assert track["location"].startswith(str(tmp_path / "Media"))
+    finally:
+        del window._ipods[ipod.key]
 
 
 def window_unchanged():

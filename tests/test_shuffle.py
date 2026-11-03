@@ -52,10 +52,36 @@ def test_albums_and_artists_are_kept_apart():
     order = spread_shuffle(songs, key=lambda s: s[0], album=lambda s: s[1],
                            rng=random.Random(3))
     assert sorted(order) == sorted(songs)
-    assert same_artist_neighbours(order, lambda s: s[0]) == 0
-    near = sum(1 for i in range(len(order)) for back in range(1, shuffle.ALBUM_GAP + 1)
-               if i >= back and order[i][1] == order[i - back][1])
+    body = order[:-20]               # (the last few songs are whatever is left over)
+    assert same_artist_neighbours(body, lambda s: s[0]) == 0
+    near = sum(1 for i in range(len(body)) for back in range(1, shuffle.ALBUM_GAP + 1)
+               if i >= back and body[i][1] == body[i - back][1])
     assert near == 0
+
+
+def test_a_big_library_goes_a_long_way_before_an_album_comes_back():
+    # 600 albums of 10 songs (6,000 songs): no album twice within 150 songs, no
+    # artist (3 albums each) twice within a sixth of the number of artists.
+    from luxtunes.core import shuffle
+    songs = [(f"artist{a // 3}", f"album{a}", n) for a in range(600) for n in range(10)]
+    order = spread_shuffle(songs, key=lambda s: s[0], album=lambda s: s[1], rng=random.Random(5))
+    artist_gap, album_gap = shuffle.gaps(songs, lambda s: s[0], lambda s: s[1])
+    assert album_gap == shuffle.ALBUM_GAP_MAX and artist_gap == 200 // 6
+    last_album, last_artist = {}, {}
+    for i, (artist, album, _) in enumerate(order[:3000]):
+        assert i - last_album.get(album, -10_000) > album_gap
+        assert i - last_artist.get(artist, -10_000) > artist_gap
+        last_album[album] = last_artist[artist] = i
+
+
+def test_a_big_album_comes_up_as_often_as_its_size_says_but_spread_out():
+    # One album is a tenth of the list: about a tenth of any stretch, never in a clump.
+    songs = [("big", "Big", n) for n in range(300)] + \
+            [(f"artist{a}", f"album{a}", n) for a in range(270) for n in range(10)]
+    order = spread_shuffle(songs, key=lambda s: s[0], album=lambda s: s[1], rng=random.Random(6))
+    places = [i for i, s in enumerate(order) if s[1] == "Big"]
+    assert 45 <= sum(1 for i in places if i < 600) <= 75
+    assert min(b - a for a, b in zip(places, places[1:]) if b < 2900) >= 5
 
 
 def test_songs_heard_recently_go_last():
@@ -100,4 +126,9 @@ def test_a_new_shuffle_starts_with_albums_not_heard_lately():
     order = spread_shuffle(songs, key=lambda s: s["artist"], album=lambda s: s["album"],
                            tier=lambda s: tiers[s["id"]])
     assert sorted(s["id"] for s in order) == list(range(1000))
-    assert all(int(s["album"][1:]) >= 60 for s in order[:300])     # untouched albums first
+    just_heard = {s["id"] for s in songs if s["play_date"]}
+    assert not just_heard & {s["id"] for s in order[:900]}           # songs just heard: last
+    # Albums heard lately aren't left out, but come up far less: they're 57% of
+    # the rest, and about a fifth of the start.
+    lately = sum(int(s["album"][1:]) < 60 for s in order[:200])
+    assert 10 < lately < 80

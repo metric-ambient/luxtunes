@@ -71,6 +71,20 @@ def test_files_always_end_up_in_the_media_folder(tmp_path):
     assert len(add_files.add_paths(conn, [str(bad)]).failed) == 1
 
 
+def test_with_organizing_off_files_stay_where_they_are(tmp_path):
+    conn, _ = setup(tmp_path)
+    share = tmp_path / "Share"                       # e.g. a shared drive's own layout
+    organize.set_enabled(conn, False)
+    organize.set_media_folder(conn, share)
+    add_files.set_move_when_adding(conn, True)       # only applies when copying
+    inside = mp3(share / "Rock" / "my song.mp3", name="Song", artist="A", album="B")
+    outside = mp3(tmp_path / "Downloads" / "x.mp3", name="Other", artist="C", album="D")
+    result = add_files.add_paths(conn, [str(share), outside])
+    locations = {library.load_track(conn, i)["location"] for i in result.added}
+    assert locations == {inside, outside}            # nothing copied, moved or renamed
+    assert (tmp_path / "Downloads" / "x.mp3").exists() and not (share / "Music").exists()
+
+
 def test_move_original_files_on_import(tmp_path):
     conn, root = setup(tmp_path)
     assert not add_files.move_when_adding(conn)                 # off unless turned on

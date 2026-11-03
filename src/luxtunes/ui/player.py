@@ -33,7 +33,9 @@ from luxtunes.core.paths import find_file
 from luxtunes.core.shuffle import album_key, artist_key, freshness_tiers, spread_shuffle
 from luxtunes.ui import eq_output
 
-# A skip counts when you jump to the next song within its first 20 seconds.
+# A skip counts when you jump to the next song between 2 and 20 seconds into it
+# (as iTunes counts them): clicking quickly through songs isn't skipping them.
+SKIP_MIN_MS = 2_000
 SKIP_WINDOW_MS = 20_000
 # "Previous" restarts the current song if it has played longer than this.
 RESTART_THRESHOLD_MS = 3_000
@@ -238,7 +240,8 @@ class Player(QObject):
         track = self._current
         if track is None:
             return
-        if self._player.position() < SKIP_WINDOW_MS:
+        played = self._player.position() - self._start_of(track)
+        if SKIP_MIN_MS <= played < SKIP_WINDOW_MS:
             self.track_skipped.emit(track)
         self._advance("Next pressed")
 
