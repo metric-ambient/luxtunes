@@ -744,7 +744,7 @@ class MainWindow(QMainWindow):
             self.sidebar.select_source(SOURCE_MUSIC)
         if library.count_tracks(self.conn, "music") == 0:
             self.statusBar().showMessage(
-                "Your library is empty. Use File → Import iTunes Library… to get started."
+                "Your library is empty. Use File → Library → Import iTunes Library… to get started."
             )
 
     def show_source(self, source):

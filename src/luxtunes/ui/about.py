@@ -56,6 +56,10 @@ THIRD_PARTY = [
      "https://www.xiph.org/paranoia/"),
     ("libgpod", "reading and writing iPod databases", "GNU LGPL v2 or later",
      "https://sourceforge.net/projects/gtkpod/"),
+    ("hashab by Dylan Staley", "signing the iPod nano 6th generation's song list (translated into "
+     "Python in LuxTunes)", "The Unlicense (public domain)", "https://github.com/dstaley/hashab"),
+    ("RHash (EDON-R)", "a hash inside hashab, by Aleksey Kravchenko", "BSD Zero Clause",
+     "https://github.com/rhash/RHash"),
     ("MusicBrainz", "CD track names (an online database)", "Data: CC0 (public domain)",
      "https://musicbrainz.org/doc/About/Data_License"),
     ("Cover Art Archive", "CD covers (an online archive)", "Each cover belongs to its owner",

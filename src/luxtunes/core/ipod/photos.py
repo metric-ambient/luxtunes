@@ -117,6 +117,45 @@ def chosen_albums(folder: str, mode: str, selected: list[str]) -> list[tuple[str
     return albums
 
 
+# Bytes of thumbnails libgpod makes per photo, by iPod family: the sum of
+# width × height × bytes per pixel over the family's photo sizes (from
+# libgpod's model tables; the nano 6th/7th generation's from hash_ab_nanos).
+_THUMBNAIL_BYTES = {
+    "photo": 794_040,
+    "video": 871_780, "video_1": 871_780, "video_2": 871_780,
+    "nano_1": 49_572, "nano_2": 49_572,
+    "nano_3": 680_192,
+    "classic": 680_192, "classic_1": 680_192, "classic_2": 680_192, "classic_3": 680_192,
+    "nano_4": 328_192,
+    "nano_5": 315_904,
+}
+
+
+def thumbnail_bytes(family_key: str) -> int:
+    """About how much one photo takes on this kind of iPod (0: unknown)."""
+    from luxtunes.core.ipod import hash_ab_nanos
+    nano = hash_ab_nanos.NANOS.get(family_key)
+    if nano is not None:
+        return sum(spec["RenderWidth"] * spec["RenderHeight"] * 2 for spec in nano.photos)
+    return _THUMBNAIL_BYTES.get(family_key, 0)
+
+
+def files_size(albums) -> int:
+    total = 0
+    for _, paths in albums:
+        for path in paths:
+            try:
+                total += os.path.getsize(path)
+            except OSError:
+                pass
+    return total
+
+
+def ours_on(mountpoint: str) -> bool:
+    """The iPod has photos LuxTunes put there."""
+    return _read_marker(mountpoint) is not None
+
+
 def as_jpeg(path: str, folder: str) -> str | None:
     """A temporary JPEG copy of a photo libgpod can't read itself (None if no
     installed tool could make one)."""
@@ -225,14 +264,18 @@ def _write_marker(mountpoint: str, data: dict | None) -> None:
     path.write_text(json.dumps(data))
 
 
-def _open_db(mountpoint: str):
+def _open_db(mountpoint: str, sysinfo_extended: bytes | None = None):
+    """sysinfo_extended: a nano 6th/7th generation's own details (its photo
+    sizes), which libgpod only reads while the database is opened."""
     lib = _lib()
     error = POINTER(gpod.GError)()
     db = None
-    if database_path(mountpoint) is not None:
-        db = lib.itdb_photodb_parse(mountpoint.encode(), byref(error))
-    if not db:
-        db = lib.itdb_photodb_create(mountpoint.encode())
+    extended = Path(mountpoint) / "iPod_Control" / "Device" / "SysInfoExtended"
+    with gpod._file_for_a_while(extended, sysinfo_extended), gpod._libgpod_output():
+        if database_path(mountpoint) is not None:
+            db = lib.itdb_photodb_parse(mountpoint.encode(), byref(error))
+        if not db:
+            db = lib.itdb_photodb_create(mountpoint.encode())
     if not db:
         raise gpod.GpodError("this iPod can't hold photos")
     return db
@@ -249,22 +292,44 @@ def _empty(db) -> None:
             lib.itdb_photodb_photoalbum_remove(db, album, 0)
 
 
+def _remove_other_sizes(mountpoint: str, sysinfo_extended: bytes | None) -> None:
+    """Delete thumbnail files in sizes this nano doesn't use (made before
+    LuxTunes knew its sizes). Only for a nano 6th/7th generation."""
+    if not sysinfo_extended:
+        return
+    import plistlib
+    try:
+        sizes = {spec["FormatId"] for spec in
+                 plistlib.loads(sysinfo_extended).get("ImageSpecifications2", [])}
+    except (ValueError, KeyError, TypeError):
+        return
+    database = database_path(mountpoint)
+    thumbs = (database.parent if database else Path(mountpoint) / "Photos") / "Thumbs"
+    for path in thumbs.glob("F*_*.ithmb"):
+        size = path.name[1:].split("_", 1)[0]
+        if size.isdigit() and sizes and int(size) not in sizes:
+            path.unlink(missing_ok=True)
+
+
 def _write(db) -> None:
     error = POINTER(gpod.GError)()
-    if not _lib().itdb_photodb_write(db, byref(error)):
+    with gpod._libgpod_output():
+        written = _lib().itdb_photodb_write(db, byref(error))
+    if not written:
         gpod._raise(error, "couldn't save the iPod's photos")
 
 
-def remove_all(mountpoint: str) -> bool:
+def remove_all(mountpoint: str, sysinfo_extended: bytes | None = None) -> bool:
     """Take off the photos LuxTunes put on the iPod. False if there were none."""
     marker = _read_marker(mountpoint)
     if marker is None:
         return False
     lib = _lib()
-    db = _open_db(mountpoint)
+    db = _open_db(mountpoint, sysinfo_extended)
     try:
         _empty(db)
         _write(db)
+        _remove_other_sizes(mountpoint, sysinfo_extended)
     finally:
         lib.itdb_photodb_free(db)
     if marker.get("full_resolution"):
@@ -273,11 +338,15 @@ def remove_all(mountpoint: str) -> bool:
     return True
 
 
-def sync(mountpoint: str, albums, full_resolution: bool, progress=None) -> tuple[int, list[str]]:
+def sync(mountpoint: str, albums, full_resolution: bool, progress=None,
+         sysinfo_extended: bytes | None = None) -> tuple[int, list[str]]:
     """Put these photos on the iPod (replacing what LuxTunes put there before).
     progress(done, total) may return False to stop (nothing is changed then).
-    Returns (photos added, problems). Unchanged photos are left as they are."""
+    Returns (photos added, problems). Unchanged photos are left as they are.
+    sysinfo_extended: see _open_db."""
     wanted = signature(albums, full_resolution)
+    if sysinfo_extended:              # (photos made in other sizes are made again)
+        wanted += "-" + hashlib.sha1(sysinfo_extended).hexdigest()[:12]
     marker = _read_marker(mountpoint) or {}
     if marker.get("signature") == wanted and database_path(mountpoint) is not None:
         return count(albums), []
@@ -285,7 +354,7 @@ def sync(mountpoint: str, albums, full_resolution: bool, progress=None) -> tuple
     problems: list[str] = []
     added = 0
     total = count(albums)
-    db = _open_db(mountpoint)
+    db = _open_db(mountpoint, sysinfo_extended)
     scratch = tempfile.TemporaryDirectory(prefix="luxtunes-photos-")   # kept until written
     try:
         _empty(db)
@@ -315,6 +384,7 @@ def sync(mountpoint: str, albums, full_resolution: bool, progress=None) -> tuple
                     lib.itdb_photodb_photoalbum_add_photo(db, album, photo, -1)
                 added += 1
         _write(db)
+        _remove_other_sizes(mountpoint, sysinfo_extended)
     finally:
         lib.itdb_photodb_free(db)
         scratch.cleanup()

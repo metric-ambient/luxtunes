@@ -5,7 +5,7 @@ up in libgpod's table of every model it knows) or, failing that, from its USB
 product ID, which tells the family but not the exact model. Each family says
 whether the iPod plays video, shows photos and album artwork, and whether
 LuxTunes can write to it at all: some later iPods check a signature on their
-song list, and the newest nanos use one nobody outside Apple can make.
+song list. The nano 6th and 7th generation's (hashAB) is made by hashab.py.
 
 No Qt in here.
 """
@@ -35,8 +35,8 @@ class Family:
 
 TOUCH = ("iPod touch, iPhone and iPad keep their music in a different way that "
          "LuxTunes doesn't support.")
-HASH_AB_REASON = ("This iPod checks a signature on its song list that only Apple's "
-                  "software can make, so LuxTunes can't add songs to it.")
+HASH_AB_NOTE = ("New in LuxTunes: LuxTunes keeps a copy of this iPod's song list before each "
+                "sync, in case it needs to be put back.")
 
 FAMILIES = {
     "first": Family("iPod (1st generation)"),
@@ -62,9 +62,9 @@ FAMILIES = {
                      note="Needs to have been synced with iTunes once (LuxTunes reuses that "
                           "signature). Not tested with LuxTunes yet."),
     "nano_6": Family("iPod nano (6th generation)", photos=True, artwork=True,
-                     signature=HASH_AB, unsupported=HASH_AB_REASON),
+                     signature=HASH_AB, note=HASH_AB_NOTE),
     "nano_7": Family("iPod nano (7th generation)", video=True, photos=True, artwork=True,
-                     signature=HASH_AB, unsupported=HASH_AB_REASON),
+                     signature=HASH_AB, note=HASH_AB_NOTE),
     "video_1": Family("iPod (5th generation)", video=True, photos=True, artwork=True),
     "video_2": Family("iPod (5.5th generation)", video=True, photos=True, artwork=True),
     "video": Family("iPod (5th generation)", video=True, photos=True, artwork=True),
@@ -199,14 +199,29 @@ def identify(model_number: str = "", usb_product: str = "") -> Identity:
     return Identity(key, FAMILIES[key])
 
 
-def stand_in_model_number(usb_product: str) -> str | None:
+def identify_device(model_number: str = "", usb_product: str = "") -> Identity:
+    """identify(), except that a nano 6th or 7th generation is told by its USB
+    product ID: its SysInfo may name a nano 5th generation (the stand-in
+    libgpod is given to write its song list)."""
+    key = USB_PRODUCTS.get((usb_product or "").lower())
+    if key in ("nano_6", "nano_7"):
+        return Identity(key, FAMILIES[key])
+    return identify(model_number, usb_product)
+
+
+def stand_in_model_number(usb_product: str = "", family_key: str = "") -> str | None:
     """A model number of the iPod's family, for an iPod whose SysInfo doesn't
     say which model it is: libgpod needs one to know it must sign the song
-    list (classics, nano 3rd–5th generation). None if not needed or unknown."""
-    key = USB_PRODUCTS.get((usb_product or "").lower())
-    if key is None or FAMILIES[key].signature not in (HASH58, HASH72):
+    list (classics, nano 3rd–7th generation). None if not needed or unknown.
+
+    A nano 6th or 7th generation gets a nano 5th generation's: libgpod writes its
+    song list just the same way (compressed, with the SQLite databases), but
+    signs it with hash72, which it can make; LuxTunes then signs it again
+    with hashAB (sync.py, hashab.py)."""
+    key = family_key or USB_PRODUCTS.get((usb_product or "").lower())
+    if key is None or key not in FAMILIES or FAMILIES[key].signature not in (HASH58, HASH72, HASH_AB):
         return None
-    wanted = {"classic": "classic_1"}.get(key, key)
+    wanted = {"classic": "classic_1", "nano_6": "nano_5", "nano_7": "nano_5"}.get(key, key)
     for number, (_, _, generation) in sorted(model_table().items()):
         if GENERATIONS.get(generation) == wanted:
             return "x" + number

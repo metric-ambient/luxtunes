@@ -81,12 +81,13 @@ Made for Linux Mint, and it runs on most recent Linux systems.
 
 ### Devices
 
-- **iPods:** classic, mini, shuffle, nano 1st–5th generation and the original models. Sync
+- **iPods:** classic, mini, shuffle, nano 1st–7th generation and the original models. Sync
   music, podcasts, audiobooks, and, on models that show them, videos and photos. Play
   counts and ratings come back from the iPod, and missing album artwork is put back at the
   next sync. An iPod synced with another computer? LuxTunes offers to add its songs that
-  aren't in your library, with their play counts and ratings. (The iPod nano 6th/7th
-  generation and the iPod touch can't be supported.)
+  aren't in your library, with their play counts and ratings. Before syncing a nano 6th or
+  7th generation, LuxTunes keeps a copy of its song list in case it needs to be put back.
+  (The iPod touch can't be supported.)
 - **Android phones,** over a USB cable: songs, videos, podcasts, audiobooks, artwork,
   lyrics, playlists and your equalizer go into one `LuxTunes` folder on the phone, which
   any music player can use. With the companion
@@ -186,6 +187,7 @@ music.
 | Tags | [mutagen](https://mutagen.readthedocs.io/) |
 | Equalizer | [NumPy](https://numpy.org/) |
 | iPod | [libgpod](https://sourceforge.net/projects/gtkpod/) |
+| iPod nano 6th/7th generation signature | a Python translation of [hashab](https://github.com/dstaley/hashab) by Dylan Staley |
 | CDs | cdparanoia and FFmpeg; names from [MusicBrainz](https://musicbrainz.org/) |
 | Lyrics | [LRCLIB](https://lrclib.net/), only when you ask |
 | Android app | [luxtunes-mobile](https://github.com/metric-ambient/luxtunes-mobile), a separate project |
@@ -203,6 +205,15 @@ docs/              the LuxTunes folder format on Android devices (read by the An
 tests/
     fixtures/      small FAKE test data only, never real music or real library files
 ```
+
+## Credits
+
+Syncing the iPod nano 6th and 7th generation is possible thanks to Dylan Staley's
+[hashab](https://github.com/dstaley/hashab), an open implementation of the
+signature these nanos check on their song list, reverse-engineered from the nano's
+firmware and released under the Unlicense. LuxTunes' `core/ipod/hashab.py` is a Python
+translation of it, and its lookup tables are copied from it unchanged. hashab in turn
+uses the EDON-R hash from Aleksey Kravchenko's [RHash](https://github.com/rhash/RHash).
 
 ## License
 

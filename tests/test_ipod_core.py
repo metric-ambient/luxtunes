@@ -346,7 +346,14 @@ def test_models_are_told_apart_by_usb_product_without_libgpod():
     assert nano1.name == "iPod nano (1st generation)"
     assert nano1.family.photos and not nano1.family.video and not nano1.family.unsupported
     assert models.identify("", "1262").family.signature == models.HASH58      # nano 3G
-    assert models.identify("", "1266").family.unsupported                       # nano 6G
+    assert not models.identify("", "1266").family.unsupported                   # nano 6G: with hashAB
+    assert models.identify("", "1266").family.signature == models.HASH_AB
+    assert not models.identify("", "1267").family.unsupported                   # nano 7G: with hashAB
+    assert models.stand_in_model_number(family_key="nano_7") == \
+        models.stand_in_model_number(family_key="nano_6")                        # both a nano 5G
+    # libgpod writes a nano 6G as a 5G, so its SysInfo may name one: USB says otherwise.
+    assert models.identify_device("xC525", "1266").family_key == "nano_6"
+    assert models.identify_device("", "120a").family_key == "nano_1"
     assert models.identify("", "1300").family.name == "iPod shuffle (1st generation)"
     assert not models.identify("", "1300").family.photos
     unknown = models.identify("", "")
@@ -449,3 +456,15 @@ def test_songs_missing_artwork_on_the_ipod_get_it_back(tmp_path, monkeypatch):
     restored = ipod_sync.restore_missing_artwork(
         fake, {1: "missing", 2: "has", 3: "none"}, songs, lambda *a, **k: None)
     assert restored == 1 and fake.given == {"missing": b"art of " + str(tmp_path / "a.mp3").encode()}
+
+
+def test_photo_space_is_estimated_before_a_sync(tmp_path):
+    from luxtunes.core.ipod import photos
+    assert photos.thumbnail_bytes("nano_7") == 480 * 864 * 2 + 80 * 80 * 2     # its own sizes
+    assert photos.thumbnail_bytes("classic") == 720 * 480 * 3 // 2 + 320 * 240 * 2 + 64 * 64 * 2
+    assert photos.thumbnail_bytes("touch") == 0                                 # unknown
+    (tmp_path / "a.jpg").write_bytes(b"x" * 1000)
+    (tmp_path / "b.png").write_bytes(b"x" * 500)
+    albums = [(None, [str(tmp_path / "a.jpg"), str(tmp_path / "b.png"), str(tmp_path / "gone.jpg")])]
+    assert photos.files_size(albums) == 1500
+    assert not photos.ours_on(str(tmp_path))

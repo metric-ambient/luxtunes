@@ -1609,7 +1609,7 @@ def test_the_ipod_page_shows_only_what_the_model_can_do(window, tmp_path):
     page.picture.grab()                                                            # draws
     assert page.model_note.text().startswith("This iPod doesn't play videos")
     assert page.sync_button.isEnabled()
-    ipod.identity = models.identify("", "1267")                  # nano 7th: can't be synced
+    ipod.identity = models.Identity("touch", models.FAMILIES["touch"])   # can't be synced
     page.set_device(window.conn, ipod, page.record)
     assert not page.sync_button.isEnabled() and "can't sync" in page.model_note.text()
     del window._ipods[ipod.key]

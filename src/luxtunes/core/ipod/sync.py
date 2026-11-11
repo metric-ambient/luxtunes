@@ -106,6 +106,89 @@ def dbid_of(track: dict) -> int:
 
 # ---- The iPod's FireWire GUID (needed for the 6G/7G signature) ---------------------
 
+# ---- iPod nano 6th/7th generation: hashAB ----------------------------------------------
+#
+# libgpod can't make hashAB, so it's told the nano is a 5th generation (same
+# song list, signed with hash72, which libgpod makes from a HashInfo file), and
+# LuxTunes then re-signs the song list and Locations.itdb.cbk with hashAB.
+
+def _write_hash_info(db: gpod.Database, ipod: IPod) -> bytes:
+    """A HashInfo file for libgpod's hash72 (its values don't matter: the
+    signature is replaced). Returns the FireWire GUID as the 8 bytes hashAB uses."""
+    from luxtunes.core.ipod import hashab
+    text = db.sysinfo("FirewireGuid") or ipod.firewire_guid or usb_details(ipod.device)[1]
+    if not text:
+        raise gpod.GpodError("The iPod's FireWire ID couldn't be read, so its song list can't "
+                             "be signed.")
+    guid = hashab.device_id(text)
+    info = b"HASHv0" + (guid + bytes(20))[:20] + os.urandom(12) + os.urandom(16)
+    (ipod.control / "Device").mkdir(parents=True, exist_ok=True)
+    (ipod.control / "Device" / "HashInfo").write_bytes(info)
+    return guid
+
+
+def finish_nano_library(ipod: IPod, nano) -> None:
+    """Bring libgpod's library up to what a nano 6th/7th generation reads, as
+    iTunes leaves it: run the nano's post-process SQL and set the versions.
+    nano: its hash_ab_nanos.Nano."""
+    import sqlite3
+    from luxtunes.core.ipod import hash_ab_nanos
+    itlp = ipod.control / "iTunes" / "iTunes Library.itlp"
+    try:
+        db = sqlite3.connect(itlp / "Library.itdb", isolation_level=None)
+        try:
+            for name in ("Dynamic.itdb", "Extras.itdb", "Genius.itdb", "Locations.itdb"):
+                db.execute(f"ATTACH DATABASE ? AS '{name}'", (str(itlp / name),))
+            db.execute("BEGIN")
+            for name, sql in nano.sql():
+                try:
+                    db.execute(sql)
+                except sqlite3.OperationalError as error:   # e.g. a column libgpod already has
+                    log.debug("nano post-process %s: %s", name, error)
+            for table, column in nano.missing_columns:
+                try:
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
+                except sqlite3.OperationalError:
+                    pass
+            for sql in hash_ab_nanos.LIBGPOD_EXTRAS:
+                db.execute(sql)
+            db.execute("UPDATE version_info SET major = ?, minor = ?", nano.library_version)
+            db.execute("COMMIT")
+        finally:
+            db.close()
+        for name, version in nano.user_versions.items():
+            other = sqlite3.connect(itlp / name, isolation_level=None)
+            try:
+                other.execute(f"PRAGMA user_version = {int(version)}")
+            finally:
+                other.close()
+        cdb = ipod.control / "iTunes" / "iTunesCDB"
+        data = bytearray(cdb.read_bytes())
+        data[0x10:0x14] = nano.song_list_version.to_bytes(4, "little")
+        cdb.write_bytes(bytes(data))
+    except (OSError, sqlite3.Error) as error:
+        raise gpod.GpodError(f"The iPod nano's library couldn't be finished: {error}") from error
+
+
+def sign_with_hash_ab(ipod: IPod, guid: bytes) -> None:
+    """Sign what libgpod wrote as the nano 6th/7th generation checks it."""
+    from luxtunes.core.ipod import hashab
+    itunes = ipod.control / "iTunes"
+    try:
+        cdb = itunes / "iTunesCDB"
+        cdb.write_bytes(hashab.sign_song_list(cdb.read_bytes(), guid))
+        locations = itunes / "iTunes Library.itlp" / "Locations.itdb"
+        (itunes / "iTunes Library.itlp" / "Locations.itdb.cbk").write_bytes(
+            hashab.locations_checksum(locations.read_bytes(), guid))
+        empty = itunes / "iTunesDB"                   # iTunes leaves none on these nanos
+        if empty.exists() and empty.stat().st_size == 0:
+            empty.unlink()
+        (ipod.control / "Device" / "HashInfo").unlink(missing_ok=True)
+    except (OSError, ValueError) as error:
+        raise gpod.GpodError(f"The song list couldn't be signed for this iPod nano: {error}") \
+            from error
+
+
 def prepare_device_info(db: gpod.Database, ipod: IPod) -> None:
     """Make sure libgpod knows the FireWire GUID and the iPod's model, so it
     signs the song list on iPods that check one (classics, nano 3rd–5th
@@ -119,8 +202,9 @@ def prepare_device_info(db: gpod.Database, ipod: IPod) -> None:
             db.write_sysinfo()
         except gpod.GpodError as error:
             log.warning("couldn't save SysInfo: %s", error)
-    if not db.sysinfo("ModelNumStr"):
-        stand_in = models.stand_in_model_number(product)
+    hash_ab = ipod.identity.family.signature == models.HASH_AB
+    if not db.sysinfo("ModelNumStr") or hash_ab:      # (a nano 6G/7G is always written as a 5G)
+        stand_in = models.stand_in_model_number(product, ipod.identity.family_key)
         if stand_in:
             db.set_sysinfo("ModelNumStr", stand_in)
 
@@ -196,11 +280,18 @@ def fill_track(t: "gpod.Itdb_Track", song: dict) -> None:
     t.type2 = 1 if "mpeg" in kind else 0
 
 
-def restore_missing_artwork(db, kept: dict, library_by_dbid: dict, tell) -> int:
+def restore_missing_artwork(db, kept: dict, library_by_dbid: dict, tell,
+                            sizes: set[int] | None = None) -> int:
     """Give songs on the iPod without artwork their file's artwork. Songs the
-    library knows have none (artwork_count 0) aren't read. Returns how many."""
+    library knows have none (artwork_count 0) aren't read. With `sizes` (the
+    iPod's artwork format ids), songs missing any of them are redone too.
+    Returns how many."""
+    def lacking(pointer):
+        if not db.has_artwork(pointer):
+            return True
+        return bool(sizes) and not sizes <= db.artwork_formats(pointer)
     missing = [(dbid, pointer) for dbid, pointer in kept.items()
-               if library_by_dbid[dbid].get("artwork_count") != 0 and not db.has_artwork(pointer)]
+               if library_by_dbid[dbid].get("artwork_count") != 0 and lacking(pointer)]
     restored = 0
     for i, (dbid, pointer) in enumerate(missing):
         tell("Checking album artwork…", i, len(missing), can_stop=False)
@@ -238,6 +329,23 @@ def _convert_for_ipod(path: str, kbps: int, folder: str, report: SyncReport,
     return target
 
 
+ROOM_TO_SPARE = 32 * 1024 * 1024      # for the database and artwork
+
+
+def needs_room(mountpoint: str, songs: list) -> bool:
+    """The songs' files (before any conversion) won't fit in the iPod's free space."""
+    needed = ROOM_TO_SPARE
+    for song in songs:
+        path = find_file(song.get("location"))
+        if path:
+            try:
+                needed += os.path.getsize(path)
+            except OSError:
+                pass
+    space = os.statvfs(mountpoint)
+    return needed > space.f_bavail * space.f_frsize
+
+
 def unlisted_song_files(mountpoint: str, listed: list) -> list[str]:
     """Song files in the iPod's music folders (iPod_Control/Music/F00…F99)
     that its database doesn't list. Nothing else on the iPod is looked at.
@@ -268,8 +376,9 @@ def unlisted_song_files(mountpoint: str, listed: list) -> list[str]:
 def _sync_photos(ipod: IPod, settings, report: SyncReport, progress) -> None:
     from luxtunes.core.ipod import photos
     try:
+        extended = database_options(ipod)["sysinfo_extended"]   # a nano 6G/7G's photo sizes
         if not settings.sync_photos:
-            if photos.remove_all(ipod.mountpoint):
+            if photos.remove_all(ipod.mountpoint, extended):
                 log.info("removed LuxTunes' photos from %s", ipod.mountpoint)
             return
         albums = photos.chosen_albums(settings.photos_folder, settings.photos_mode,
@@ -281,7 +390,7 @@ def _sync_photos(ipod: IPod, settings, report: SyncReport, progress) -> None:
             return progress("Adding photos…", done, total) is not False
 
         report.photos, problems = photos.sync(ipod.mountpoint, albums, settings.full_resolution,
-                                              step)
+                                              step, extended)
         report.problems += problems
     except (gpod.GpodError, OSError) as error:
         report.problems.append(f"Photos: {error}")
@@ -315,7 +424,49 @@ def set_aside_play_counts(ipod: IPod) -> list[Path]:
     return moved
 
 
+BACKUPS_KEPT = 3
+
+
+def back_up_song_list(ipod: IPod, root: Path | None = None) -> Path | None:
+    """Copy the iPod's song list (iPod_Control/iTunes, not the songs) to
+    ~/.local/share/luxtunes/iPod backups/<iPod>/<date>, keeping the last few.
+    Copying that folder back onto the iPod undoes a sync."""
+    import shutil
+    from luxtunes.core.paths import data_home
+    source = ipod.control / "iTunes"
+    if not source.is_dir():
+        return None
+    folder = (root or data_home() / "luxtunes" / "iPod backups") / ipod.key
+    target = folder / datetime.now().strftime("%Y-%m-%d %H%M%S")
+    try:
+        shutil.copytree(source, target)
+    except OSError as error:
+        log.warning("couldn't back up the iPod's song list: %s", error)
+        return None
+    for old in sorted(p for p in folder.iterdir() if p.is_dir())[:-BACKUPS_KEPT]:
+        shutil.rmtree(old, ignore_errors=True)
+    log.info("backed up the iPod's song list to %s", target)
+    return target
+
+
 # ---- The sync ---------------------------------------------------------------------------
+
+def database_options(ipod: IPod) -> dict:
+    """How gpod.Database should open this iPod: the model to tell libgpod when
+    SysInfo names none, and for a nano 6th/7th generation, its own details
+    (artwork sizes...) in place of the 5th generation's."""
+    hash_ab = ipod.identity.family.signature == models.HASH_AB
+    hint = extended = None
+    if not ipod.model_number or hash_ab:
+        hint = models.stand_in_model_number(usb_details(ipod.device)[0], ipod.identity.family_key)
+    if hash_ab:
+        from luxtunes.core.ipod import hash_ab_nanos, hashab
+        guid = ipod.firewire_guid or usb_details(ipod.device)[1]
+        if guid:
+            extended = hash_ab_nanos.NANOS[ipod.identity.family_key].sysinfo_extended(
+                hashab.device_id(guid).hex().upper())
+    return {"model_hint": hint, "sysinfo_extended": extended}
+
 
 def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
          confirm=None) -> SyncReport:
@@ -337,10 +488,15 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
             raise SyncCancelled()
 
     tell("Reading the iPod…")
-    hint = None
-    if not ipod.model_number:
-        hint = models.stand_in_model_number(usb_details(ipod.device)[0])
-    with gpod.Database(ipod.mountpoint, model_hint=hint) as db:
+    hash_ab = ipod.identity.family.signature == models.HASH_AB
+    options = database_options(ipod)
+    nano = art_sizes = None
+    if hash_ab:
+        from luxtunes.core.ipod import hash_ab_nanos
+        nano = hash_ab_nanos.NANOS[ipod.identity.family_key]
+        if options["sysinfo_extended"]:
+            art_sizes = nano.art_sizes
+    with gpod.Database(ipod.mountpoint, **options) as db:
         prepare_device_info(db, ipod)
         settings = record.settings
         all_tracks = db.tracks()
@@ -383,6 +539,9 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
             report.cancelled = True
             return report
 
+        if ipod.identity.family.signature == models.HASH_AB:
+            back_up_song_list(ipod)      # a way back, should the nano not read the new one
+
         # 1. Plays, skips and ratings from the iPod into the library.
         first_sync = record.last_sync is None
         report.stats = stats.merge(conn, read_ipod_stats(db, ratings_too=not first_sync))
@@ -410,7 +569,40 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
         # 3b. Album artwork the iPod is missing for songs already on it (e.g.
         # lost by an earlier sync): added again from the song's file.
         if ipod.supports_artwork:
-            report.artwork_restored = restore_missing_artwork(db, kept, library_by_dbid, tell)
+            report.artwork_restored = restore_missing_artwork(db, kept, library_by_dbid, tell,
+                                                              art_sizes)
+
+        def save_database():
+            try:
+                if hash_ab:
+                    guid = _write_hash_info(db, ipod)   # libgpod signs with hash72 first…
+                db.write()
+                if hash_ab:
+                    finish_nano_library(ipod, nano)
+                    sign_with_hash_ab(ipod, guid)       # …then it's signed as the nano wants
+            except gpod.GpodError as error:
+                if ipod.identity.family.signature == models.HASH72:
+                    raise gpod.GpodError(
+                        f"{error}. This iPod nano needs to have been synced with iTunes once, "
+                        "so LuxTunes can reuse its signature.") from error
+                raise
+
+        def delete_files(paths):
+            for path in paths:
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+                except OSError as error:
+                    log.warning("couldn't delete %s from the iPod: %s", path, error)
+
+        # 3c. If the new songs won't fit while the removed ones' files are still
+        # there, save the database without them first, then delete their files.
+        if doomed_files and needs_room(ipod.mountpoint, to_add):
+            tell("Making room on the iPod…", can_stop=False)
+            save_database()
+            delete_files(doomed_files)
+            doomed_files = []
 
         # 4. Copy new songs (converted on the way when the settings say so).
         added = {}
@@ -482,29 +674,16 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
                     db.add_to_playlist(playlist, pointer)
                 report.playlists += 1
 
-        # 6. Name, then save (libgpod signs the database for 6G/7G).
+        # 6. Name, then save (libgpod signs the database: hash58, hash72 or hashAB).
         if record.pending_name:
             db.set_name(record.pending_name)
         tell("Updating the iPod's database…", can_stop=False)
-        try:
-            db.write()
-        except gpod.GpodError as error:
-            if ipod.identity.family.signature == models.HASH72:
-                raise gpod.GpodError(
-                    f"{error}. This iPod nano needs to have been synced with iTunes once, so "
-                    "LuxTunes can reuse its signature.") from error
-            raise
+        save_database()
         name = db.name()
 
         # 6b. Now the removed songs' files, and any song file the database
         # doesn't list (left by a sync that was cut off, e.g. LuxTunes killed).
-        for path in doomed_files:
-            try:
-                os.remove(path)
-            except FileNotFoundError:
-                pass
-            except OSError as error:
-                log.warning("couldn't delete %s from the iPod: %s", path, error)
+        delete_files(doomed_files)
         listed = [db.file_of(t) for t in db.tracks()]
         orphans = unlisted_song_files(ipod.mountpoint, listed)
         for path in orphans:

@@ -101,9 +101,11 @@ def read_songs(db) -> list[IPodSong]:
     return songs
 
 
-def read_ipod(mountpoint: str, model_hint: str | None = None) -> list[IPodSong]:
+def read_ipod(mountpoint: str, model_hint: str | None = None,
+              sysinfo_extended: bytes | None = None) -> list[IPodSong]:
     from luxtunes.core.ipod import gpod
-    with gpod.Database(mountpoint, model_hint=model_hint) as db:
+    with gpod.Database(mountpoint, model_hint=model_hint,
+                       sysinfo_extended=sysinfo_extended) as db:
         return read_songs(db)
 
 
