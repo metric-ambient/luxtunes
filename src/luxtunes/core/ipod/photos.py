@@ -152,8 +152,11 @@ def files_size(albums) -> int:
 
 
 def ours_on(mountpoint: str) -> bool:
-    """The iPod has photos LuxTunes put there."""
-    return _read_marker(mountpoint) is not None
+    """The iPod has photos LuxTunes put there (False without libgpod)."""
+    try:
+        return _read_marker(mountpoint) is not None
+    except gpod.GpodError:
+        return False
 
 
 def as_jpeg(path: str, folder: str) -> str | None:

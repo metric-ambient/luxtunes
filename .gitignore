@@ -41,6 +41,9 @@ iPod_Control/
 # Files Claude made for you during development
 Claude outputs/
 
+# The maintainer's release script (only used on the maintainer's computer)
+packaging/release.sh
+
 # Personal notes (remove this line if you want them in the repo)
 LuxTunes scratchpad.odt
 .~lock.LuxTunes scratchpad.odt#
