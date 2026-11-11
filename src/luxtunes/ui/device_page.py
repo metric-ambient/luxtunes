@@ -304,7 +304,7 @@ class DevicePage(QWidget):
         self.settings = SyncSettings()
         self._space = None
         self._loading = False
-        self._photo_count_cache: dict[tuple, int] = {}
+        self._photo_count_cache: dict[tuple, tuple[int, int]] = {}   # -> (photos, file bytes)
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setSingleShot(True)
         self._refresh_timer.setInterval(150)
@@ -1072,14 +1072,36 @@ class DevicePage(QWidget):
             self._update_photo_count()
             self._changed()
 
-    def _update_photo_count(self):
+    def _chosen_photos(self) -> tuple[int, int]:
+        """(how many photos are chosen, their files' size), counted once per choice."""
         s = self.settings
         key = (s.photos_folder, s.photos_mode, tuple(sorted(s.photo_folders)))
         if key not in self._photo_count_cache:
             from luxtunes.core.ipod import photos
             albums = photos.chosen_albums(s.photos_folder, s.photos_mode, s.photo_folders)
-            self._photo_count_cache[key] = photos.count(albums)
-        total = self._photo_count_cache[key]
+            self._photo_count_cache[key] = (photos.count(albums), photos.files_size(albums))
+        return self._photo_count_cache[key]
+
+    def _planned_photo_space(self) -> int:
+        """About the space photos will take after the sync: the chosen photos'
+        thumbnails (and full-resolution copies); none if LuxTunes will take its
+        photos off. What's there now if LuxTunes can't tell."""
+        space = self._space.photos
+        if self.is_android or self.ipod is None or not getattr(self.ipod, "supports_photos", False):
+            return space
+        from luxtunes.core.ipod import photos
+        s = self.settings
+        if not s.sync_photos:
+            return 0 if photos.ours_on(self.ipod.mountpoint) else space
+        per_photo = photos.thumbnail_bytes(self.ipod.identity.family_key)
+        if not per_photo:
+            return space
+        count, files = self._chosen_photos()
+        return count * per_photo + (files if s.full_resolution else 0)
+
+    def _update_photo_count(self):
+        s = self.settings
+        total = self._chosen_photos()[0]
         self.photo_count.setText(f"{total:,} photo{'s' if total != 1 else ''}"
                                  if s.sync_photos else "")
         # Say why when nothing would go: no folders ticked, or no photos found.
@@ -1262,7 +1284,7 @@ class DevicePage(QWidget):
             return None
         free = None
         if self._space is not None:
-            free = self._space.capacity - self._space.other - self._space.photos
+            free = self._space.capacity - self._space.other - self._planned_photo_space()
         kbps_for = None
         if self.is_android:
             from luxtunes.core.android import sync as android_sync
@@ -1299,8 +1321,9 @@ class DevicePage(QWidget):
         self.book_count.setText(f"{books:,} audiobook{'s' if books != 1 else ''}"
                                 if self.settings.sync_books else "")
         self._update_photo_count()
-        free = space.capacity - plan.music_bytes - plan.video_bytes - space.photos - space.other
-        parts = [("Audio", plan.music_bytes), ("Video", plan.video_bytes), ("Photos", space.photos),
+        photo_space = self._planned_photo_space()
+        free = space.capacity - plan.music_bytes - plan.video_bytes - photo_space - space.other
+        parts = [("Audio", plan.music_bytes), ("Video", plan.video_bytes), ("Photos", photo_space),
                  ("Other", space.other), ("Free", max(0, free))]
         self.capacity_bar.set_parts(space.capacity, parts)
         if free < 0:

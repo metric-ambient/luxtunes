@@ -77,8 +77,8 @@ class IPod:
 
     @property
     def needs_hash(self) -> bool:
-        """Classics, nano 3rd–5th generation check a signature on their song list."""
-        return self.identity.family.signature in (models.HASH58, models.HASH72)
+        """Classics, nano 3rd–6th generation check a signature on their song list."""
+        return self.identity.family.signature in (models.HASH58, models.HASH72, models.HASH_AB)
 
 
 # ---- Finding iPods ----------------------------------------------------------------
@@ -148,7 +148,7 @@ def read_ipod(mountpoint: str, device: str = "", filesystem: str = "") -> IPod:
     ipod.sysinfo = info
     ipod.usb_product, usb_serial = usb_details(device)
     ipod.model_number = info.get("ModelNumStr", "")
-    ipod.identity = models.identify(ipod.model_number, ipod.usb_product)
+    ipod.identity = models.identify_device(ipod.model_number, ipod.usb_product)
     if ipod.identity.capacity_gb is None:
         # It doesn't say which model it is: name its size from its disk.
         try:

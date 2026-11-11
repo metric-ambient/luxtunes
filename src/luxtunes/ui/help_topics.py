@@ -207,8 +207,10 @@ while the equalizer is on.</li>
 (Music, Movies, Podcasts, Photos…), then click <b>Sync</b>. The Music tab offers the
 entire library with all playlists, the entire library with chosen playlists, or chosen
 playlists, artists, albums and genres.</li>
-<li>Works with iPod classic, mini, shuffle and nano 1st–5th generation, and the
-original iPods. iPod nano 6th/7th generation and iPod touch can't be synced.</li>
+<li>Works with iPod classic, mini, shuffle and nano 1st–7th generation, and the
+original iPods. iPod touch can't be synced.</li>
+<li>Before syncing an iPod nano 6th or 7th generation, LuxTunes keeps a copy of its song
+list (in <i>~/.local/share/luxtunes/iPod backups</i>), in case it needs to be put back.</li>
 <li>Play counts and ratings from the iPod come back to your library.</li>
 <li><b>An iPod synced with another computer?</b> When it's plugged in, LuxTunes offers to
 add the songs on it that aren't in your library: they're copied into your library with

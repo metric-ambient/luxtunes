@@ -101,6 +101,32 @@ def test_unselected_songs_leave_the_ipod_but_not_the_library(tmp_path):
     assert all((tmp_path / f"{i}.mp3").exists() for i in range(3))
 
 
+def test_a_full_ipod_makes_room_before_copying(tmp_path, monkeypatch):
+    mount, conn = fake_ipod(tmp_path), small_library(tmp_path)
+    pid = "SELECT persistent_id FROM playlists WHERE id = ?"
+    mix = conn.execute(pid, (1,)).fetchone()[0]                    # Robbers and Wasteland
+    do_sync(conn, mount, music_mode="selected", playlists=[mix])
+    music = mount / "iPod_Control/Music"
+    old_files = {p for p in music.rglob("*.mp3")}
+    assert len(old_files) == 2
+    monkeypatch.setattr(sync, "needs_room", lambda mountpoint, songs: True)
+    copy_file = gpod.Database.copy_file
+    seen = []
+
+    def copy_and_look(self, track, path):
+        seen.append(any(p.exists() for p in old_files))
+        copy_file(self, track, path)
+    monkeypatch.setattr(gpod.Database, "copy_file", copy_and_look)
+    other = library.create_playlist(conn, "Other")
+    library.add_to_playlist(conn, other, [2])                      # Chocolate only
+    report = do_sync(conn, mount, music_mode="selected",
+                     playlists=[conn.execute(pid, (other,)).fetchone()[0]])
+    assert (report.added, report.removed) == (1, 2) and not report.problems
+    assert seen == [False]                                          # gone before the copy
+    with gpod.Database(str(mount)) as ipod_db:
+        assert [gpod.get_str(t.contents, "title") for t in ipod_db.tracks()] == ["Chocolate"]
+
+
 def test_you_see_which_songs_come_off_and_why(tmp_path):
     mount, conn = fake_ipod(tmp_path), small_library(tmp_path)
     do_sync(conn, mount)
@@ -292,9 +318,58 @@ def test_an_ipod_luxtunes_cant_write_to_is_refused_up_front(tmp_path):
     from luxtunes.core.ipod import models
     mount, conn = fake_ipod(tmp_path), small_library(tmp_path)
     ipod = device.read_ipod(str(mount), "", "vfat")
-    ipod.identity = models.identify("", "1266")                  # nano 6th generation
+    ipod.identity = models.Identity("touch", models.FAMILIES["touch"])
     record = settings.load_device(conn, ipod.key, ipod.name)
-    with pytest.raises(gpod.GpodError, match="signature"):
+    with pytest.raises(gpod.GpodError, match="iPod touch"):
         sync.sync(conn, ipod, record)
     with gpod.Database(str(mount)) as ipod_db:
         assert ipod_db.tracks() == []                            # nothing was touched
+
+
+def test_a_nano_6th_generation_is_signed_with_hash_ab(tmp_path, monkeypatch):
+    sync_a_hash_ab_nano(tmp_path, monkeypatch, "1266", 25, (1, 74, 1104), 0x4A)
+
+
+def test_a_nano_7th_generation_is_signed_with_hash_ab(tmp_path, monkeypatch):
+    sync_a_hash_ab_nano(tmp_path, monkeypatch, "1267", 26, (1, 109, 1109), 0x6D)
+
+
+def sync_a_hash_ab_nano(tmp_path, monkeypatch, usb_product, user_version, versions,
+                        song_list_version):
+    from luxtunes.core.ipod import hashab, models
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))   # (where the song list is backed up)
+    mount = tmp_path / "IPOD"
+    (mount / "iPod_Control" / "Device").mkdir(parents=True)
+    (mount / "iPod_Control" / "Device" / "SysInfo").write_text("FirewireGuid: 0x000A27001387CE50\n")
+    nano5 = models.stand_in_model_number(usb_product)
+    assert nano5 and models.identify(nano5).family_key == "nano_5"
+    gpod.init_ipod(str(mount), "xB147", "Test nano")           # (an empty iPod to start from)
+    conn = small_library(tmp_path)
+    ipod = device.read_ipod(str(mount), "", "vfat")
+    ipod.identity = models.identify("", usb_product)             # as its USB product says
+    record = settings.load_device(conn, ipod.key, ipod.name)
+    report = sync.sync(conn, ipod, record)
+    assert report.added == 3 and not report.problems
+    itunes = mount / "iPod_Control" / "iTunes"
+    guid = hashab.device_id("000A27001387CE50")
+    assert hashab.song_list_is_signed((itunes / "iTunesCDB").read_bytes(), guid)
+    locations = (itunes / "iTunes Library.itlp" / "Locations.itdb").read_bytes()
+    cbk = (itunes / "iTunes Library.itlp" / "Locations.itdb.cbk").read_bytes()
+    assert cbk == hashab.locations_checksum(locations, guid, hashab.random_part(cbk[:57]))
+    assert not (itunes / "iTunesDB").exists()
+    assert not (mount / "iPod_Control" / "Device" / "HashInfo").exists()
+    assert not (mount / "iPod_Control" / "Device" / "SysInfoExtended").exists()
+    import sqlite3
+    library_db = sqlite3.connect(itunes / "iTunes Library.itlp" / "Library.itdb")
+    assert library_db.execute("PRAGMA user_version").fetchone()[0] == user_version
+    assert library_db.execute("SELECT major, minor, device_update_level FROM version_info"
+                              ).fetchone() == versions
+    assert library_db.execute("SELECT COUNT(*) FROM item WHERE track_artist_pid > 0"
+                              ).fetchone()[0] == 3
+    library_db.close()
+    assert (itunes / "iTunesCDB").read_bytes()[0x10] == song_list_version
+    with gpod.Database(str(mount)) as ipod_db:                   # libgpod still reads it
+        assert sorted(gpod.get_str(t.contents, "title") for t in ipod_db.tracks()) == \
+            ["Chocolate", "Robbers", "Wasteland"]
+    backups = list((tmp_path / "data" / "luxtunes" / "iPod backups" / ipod.key).iterdir())
+    assert len(backups) == 1 and (backups[0] / "iTunesDB").exists()   # the song list as it was

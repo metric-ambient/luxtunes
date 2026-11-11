@@ -90,6 +90,9 @@ def run(db_path: str | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s",
                         datefmt="%H:%M:%S")
     _record_crashes(db_path)
+    # Qt's note that the desktop portal already knows the app: harmless, and every launch.
+    rules = os.environ.get("QT_LOGGING_RULES", "")
+    os.environ["QT_LOGGING_RULES"] = ";".join(filter(None, (rules, "qt.qpa.services=false")))
     app = QApplication(sys.argv)
     app.setApplicationName("LuxTunes")
     app.setOrganizationName("LuxTunes")

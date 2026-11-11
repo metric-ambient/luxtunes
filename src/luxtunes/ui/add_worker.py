@@ -67,11 +67,12 @@ class IPodCheckWorker(QThread):
         self.model_hint = model_hint
 
     def run(self):
-        from luxtunes.core.ipod import import_songs
+        from luxtunes.core.ipod import import_songs, sync
         conn = None
         songs, protected = [], 0
         try:
-            everything = import_songs.read_ipod(self.ipod.mountpoint, self.model_hint)
+            extended = sync.database_options(self.ipod)["sysinfo_extended"]   # nano 6G/7G
+            everything = import_songs.read_ipod(self.ipod.mountpoint, self.model_hint, extended)
             conn = db.connect(self.db_path)
             songs = import_songs.new_songs(conn, everything)
             protected = import_songs.protected_count(everything)

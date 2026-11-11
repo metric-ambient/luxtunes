@@ -18,6 +18,10 @@ import contextlib
 import ctypes
 import ctypes.util
 import logging
+import os
+import re
+import sys
+import tempfile
 from ctypes import (
     POINTER, Structure, byref, c_char_p, c_float, c_int, c_int16, c_int32, c_uint8, c_uint16,
     c_uint32, c_uint64, c_void_p,
@@ -179,6 +183,7 @@ class GpodError(Exception):
 
 _lib = None
 _glib = None
+_THUMB_TYPE_IPOD = 4             # ITDB_THUMB_TYPE_IPOD
 _has_thumbnails = None          # itdb_track_has_thumbnails, where libgpod has it
 
 
@@ -346,20 +351,88 @@ def _model_known(mountpoint: str, model: str | None):
             log.warning("couldn't put the iPod's SysInfo back: %s", error)
 
 
+# Lines that aren't libgpod's (other threads' log lines, Qt's): shown as usual.
+_NOT_LIBGPOD = re.compile(r"^(\d\d:\d\d:\d\d |qt\.|Traceback|  File )")
+
+
+@contextlib.contextmanager
+def _libgpod_output():
+    """While inside: what libgpod prints to the terminal (its progress, and
+    warnings about things it copes with) goes to LuxTunes' log as debug lines.
+    Its real failures come back as errors, so nothing is lost."""
+    try:
+        libc = ctypes.CDLL(None)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        libc.fflush(None)
+        saved = os.dup(1), os.dup(2)
+    except (OSError, AttributeError, ValueError):
+        yield                                   # no usable terminal: leave it alone
+        return
+    with tempfile.TemporaryFile() as capture:
+        os.dup2(capture.fileno(), 1)
+        os.dup2(capture.fileno(), 2)
+        try:
+            yield
+        finally:
+            libc.fflush(None)
+            os.dup2(saved[0], 1)
+            os.dup2(saved[1], 2)
+            os.close(saved[0])
+            os.close(saved[1])
+            capture.seek(0)
+            for line in capture.read().decode("utf-8", "replace").splitlines():
+                if _NOT_LIBGPOD.match(line):
+                    print(line, file=sys.stderr)
+                elif line.strip():
+                    log.debug("libgpod: %s", line.strip())
+
+
+@contextlib.contextmanager
+def _file_for_a_while(path: Path, data: bytes | None):
+    """While inside: `path` holds `data`. Afterwards it's as it was."""
+    if data is None:
+        yield
+        return
+    try:
+        before = path.read_bytes() if path.exists() else None
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    except OSError as error:
+        log.warning("couldn't write %s: %s", path.name, error)
+        yield
+        return
+    try:
+        yield
+    finally:
+        try:
+            if before is None:
+                path.unlink()
+            else:
+                path.write_bytes(before)
+        except OSError as error:
+            log.warning("couldn't put %s back: %s", path.name, error)
+
+
 class Database:
     """An iPod's iTunesDB, opened with libgpod. Use as a context manager."""
 
-    def __init__(self, mountpoint: str, model_hint: str | None = None):
+    def __init__(self, mountpoint: str, model_hint: str | None = None,
+                 sysinfo_extended: bytes | None = None):
         """model_hint: a model number for an iPod whose SysInfo doesn't name one.
         libgpod only reads the existing album artwork when it knows the model
         while it reads the database; without it, saving would keep only the
         artwork added in this sync. So the hint is put in SysInfo just while
-        the database is read, and SysInfo is put back as it was straight after."""
+        the database is read, and SysInfo is put back as it was straight after.
+        sysinfo_extended: the same for SysInfoExtended (libgpod reads it only
+        then, and keeps what it read, e.g. the iPod's artwork sizes)."""
         lib = _load()
         self.mountpoint = mountpoint
         error = POINTER(GError)()
-        with _model_known(mountpoint, model_hint):
-            self.db = lib.itdb_parse(mountpoint.encode(), byref(error))
+        extended = Path(mountpoint) / "iPod_Control" / "Device" / "SysInfoExtended"
+        with _model_known(mountpoint, model_hint), _file_for_a_while(extended, sysinfo_extended):
+            with _libgpod_output():
+                self.db = lib.itdb_parse(mountpoint.encode(), byref(error))
         if not self.db:
             _raise(error, "couldn't read the iPod's database")
 
@@ -436,6 +509,27 @@ class Database:
         artwork = track.contents.artwork            # Itdb_Artwork: its first field is the thumbnail
         return bool(artwork) and bool(ctypes.cast(artwork, POINTER(c_void_p))[0])
 
+    def artwork_formats(self, track) -> set[int]:
+        """The artwork sizes (format ids) the iPod has for this track."""
+        artwork = track.contents.artwork
+        if not artwork:
+            return set()
+        thumb = ctypes.cast(artwork, POINTER(c_void_p))[0]       # Itdb_Artwork.thumbnail
+        if not thumb:
+            return set()
+        header = ctypes.cast(thumb, POINTER(ctypes.c_int))           # Itdb_Thumb: data_type, rotation
+        if header[0] != _THUMB_TYPE_IPOD:
+            return set()
+        items = ctypes.cast(thumb + 8, POINTER(c_void_p))[0]         # Itdb_Thumb_Ipod.thumbs
+        formats = set()
+        for item in glist(ctypes.cast(items, POINTER(GList))):
+            if not item:
+                continue
+            format_pointer = ctypes.cast(item, POINTER(c_void_p))[0]  # Itdb_Thumb_Ipod_Item.format
+            if format_pointer:
+                formats.add(ctypes.cast(format_pointer, POINTER(ctypes.c_int))[0])
+        return formats
+
     def set_artwork(self, track, data: bytes) -> bool:
         buffer = ctypes.create_string_buffer(data, len(data))
         return bool(_lib.itdb_track_set_thumbnails_from_data(track, buffer, len(data)))
@@ -477,7 +571,9 @@ class Database:
 
     def write(self) -> None:
         error = POINTER(GError)()
-        if not _lib.itdb_write(self.db, byref(error)):
+        with _libgpod_output():
+            written = _lib.itdb_write(self.db, byref(error))
+        if not written:
             _raise(error, "couldn't save the iPod's database")
 
 
