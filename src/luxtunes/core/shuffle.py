@@ -7,10 +7,12 @@ albums), and an artist about 6 times. So:
 
   1. A fair shuffle of the whole list (Fisher–Yates), seeded afresh each
      time, so no song has a set place and no two shuffles start alike.
-  2. Freshness, by album, as odds rather than a rule: songs from albums you
-     played or skipped anything from in ALBUM_DAYS are less likely to come up
-     early (WEIGHTS), without being left out. (Leaving them out entirely made
-     a heavy listener's shuffles draw on a small corner of the library.)
+  2. Freshness, as odds rather than a rule: a song is less likely to come up
+     early the more of its album you played or skipped in ALBUM_DAYS (down to
+     MIN_WEIGHT for an album heard right through, or a song heard itself),
+     without being left out. Counting a share, not "any song", matters: when
+     one play marked a whole album, most albums were marked after a few weeks
+     and every shuffle opened with the same few untouched albums and singles.
      Songs you played or skipped yourself in RECENT_DAYS, or this session,
      come after everything else.
   3. Albums and artists are spaced out (_spread): an album doesn't come back
@@ -39,9 +41,8 @@ ALBUM_GAP_MAX = 150     # …up to this many
 LOOK_AHEAD = 400        # how far ahead to look for a song that fits
 EVEN = 0.8              # a big artist/album waits at most this share of its even spacing
 RECENT_DAYS = 2         # a song played or skipped this recently waits until last
-ALBUM_DAYS = 14         # an album with any song played or skipped this recently…
-WEIGHTS = {1: 0.2}      # …is less likely to come up early (1 in 5 the odds of the rest)
-HEARD = 2               # freshness_tiers' value for a song heard itself: it waits until last
+ALBUM_DAYS = 14         # songs played or skipped this recently make their album less likely early:
+MIN_WEIGHT = 0.2        # an album heard right through has 1 in 5 the odds of one not heard
 
 
 def fresh_rng() -> random.Random:
@@ -49,24 +50,24 @@ def fresh_rng() -> random.Random:
 
 
 def spread_shuffle(items: list, key=lambda item: item, rng: random.Random | None = None,
-                   album=None, recent=None, tier=None) -> list:
+                   album=None, recent=None, weight=None) -> list:
     """Return a new list with `items` shuffled. key(item): the artist;
     album(item): the album (optional); recent(item): True for songs heard
-    recently, which go to the back (optional); tier(item): freshness_tiers'
-    value (optional): 1 comes up early less often (WEIGHTS), HEARD goes last."""
+    recently, which go to the back (optional); weight(item): freshness()'s
+    value (optional): how likely early (0–1], or None to go last."""
     rng = rng or fresh_rng()
     order = list(items)
     rng.shuffle(order)
-    if tier is None and recent is not None:
-        tier = lambda item: HEARD if recent(item) else 0
+    if weight is None and recent is not None:
+        weight = lambda item: None if recent(item) else 1.0
     held = 0
-    if tier is not None:
+    if weight is not None:
         # A weighted shuffle: an item of weight w comes before one of weight 1
-        # with odds w : 1. Songs just heard (HEARD) go after all the others.
+        # with odds w : 1. Songs just heard (None) go after all the others.
         ranked = []
         for item in order:
-            level = tier(item)
-            ranked.append(((level >= HEARD, -rng.random() ** (1 / WEIGHTS.get(level, 1.0))), item))
+            w = weight(item)
+            ranked.append(((w is None, -rng.random() ** (1 / (w or 1.0))), item))
         ranked.sort(key=lambda pair: pair[0])
         order = [item for _, item in ranked]
         held = sum(1 for (heard, _), _ in ranked if heard)
@@ -83,12 +84,12 @@ def _when(text) -> datetime | None:
         return None
 
 
-def freshness_tiers(tracks: list[dict], heard_ids=frozenset(),
-                    now: datetime | None = None) -> list[int]:
-    """For each track: 0 if neither it nor anything from its album was played
-    or skipped lately, 1 if another song from its album was (within ALBUM_DAYS),
-    2 if the song itself was (within RECENT_DAYS, or this session). So a new
-    shuffle leans towards albums you haven't been hearing, not just songs."""
+def freshness(tracks: list[dict], heard_ids=frozenset(),
+              now: datetime | None = None) -> list[float | None]:
+    """For each track, how likely it is to come up early in a new shuffle:
+    None if it was played or skipped within RECENT_DAYS (or this session): it
+    goes last; MIN_WEIGHT if it was itself within ALBUM_DAYS; otherwise 1,
+    lowered by the share of its album (in `tracks`) heard within ALBUM_DAYS."""
     now = now or datetime.now(timezone.utc)
     song_since, album_since = now - timedelta(days=RECENT_DAYS), now - timedelta(days=ALBUM_DAYS)
     heard_at = []
@@ -97,20 +98,25 @@ def freshness_tiers(tracks: list[dict], heard_ids=frozenset(),
         if track.get("id") in heard_ids:
             times.append(now)
         heard_at.append(max(times) if times else None)
-    album_heard: dict = {}
+    size: Counter = Counter()
+    heard: Counter = Counter()
     for track, at in zip(tracks, heard_at):
         name = album_key(track)
-        if name and at is not None and (name not in album_heard or at > album_heard[name]):
-            album_heard[name] = at
-    tiers = []
+        if name:
+            size[name] += 1
+            if at is not None and at >= album_since:
+                heard[name] += 1
+    weights = []
     for track, at in zip(tracks, heard_at):
+        name = album_key(track)
         if at is not None and at >= song_since:
-            tiers.append(2)
-        elif album_heard.get(album_key(track), album_since - timedelta(days=1)) >= album_since:
-            tiers.append(1)
+            weights.append(None)
+        elif at is not None and at >= album_since:
+            weights.append(MIN_WEIGHT)
         else:
-            tiers.append(0)
-    return tiers
+            share = heard[name] / size[name] if name else 0.0
+            weights.append(1.0 - (1.0 - MIN_WEIGHT) * share)
+    return weights
 
 
 def gaps(items: list, artist, album) -> tuple[int, int]:
@@ -140,8 +146,11 @@ def _spread(order: list, artist, album, held: int = 0) -> None:
     total = len(entries)
     artist_count = Counter(who for _, who, _ in entries)
     album_count = Counter(what for _, _, what in entries)
-    artist_wait = {who: min(artist_gap, int(total * EVEN / n) - 1) for who, n in artist_count.items()}
-    album_wait = {what: min(album_gap, int(total * EVEN / n) - 1) for what, n in album_count.items()}
+    # (An artist or album with most of the list's songs waits 0: it can repeat.)
+    artist_wait = {who: max(0, min(artist_gap, int(total * EVEN / n) - 1))
+                   for who, n in artist_count.items()}
+    album_wait = {what: max(0, min(album_gap, int(total * EVEN / n) - 1))
+                  for what, n in album_count.items()}
     split = len(entries) - held
     queues = [entries[:split], entries[split:]]
     last_artist: dict = {}
