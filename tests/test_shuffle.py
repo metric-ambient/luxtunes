@@ -1,6 +1,7 @@
 """Tests for the spread shuffle."""
 
 import random
+from collections import Counter
 
 from luxtunes.core.shuffle import spread_shuffle
 
@@ -102,11 +103,11 @@ def test_where_a_shuffle_starts_isnt_fixed():
 
 def test_albums_heard_lately_wait_their_turn():
     from datetime import datetime, timezone
-    from luxtunes.core.shuffle import freshness_tiers
+    from luxtunes.core.shuffle import freshness
     now = datetime(2026, 10, 29, 12, tzinfo=timezone.utc)
     tracks = [
         {"id": 1, "artist": "A", "album": "One", "play_date": "2026-10-29T08:00:00Z"},   # just played
-        {"id": 2, "artist": "A", "album": "One"},                 # its album was just heard
+        {"id": 2, "artist": "A", "album": "One"},                 # half its album heard lately
         {"id": 3, "artist": "B", "album": "Two", "skip_date": "2026-10-20T08:00:00Z"},  # skipped lately
         {"id": 4, "artist": "B", "album": "Two"},
         {"id": 5, "artist": "C", "album": "Three", "play_date": "2026-09-01T08:00:00Z"},  # long ago
@@ -114,21 +115,61 @@ def test_albums_heard_lately_wait_their_turn():
         {"id": 7, "artist": "D", "album": "Four"},                # heard this session
         {"id": 8, "artist": "E", "album": ""},                    # no album: only itself counts
     ]
-    assert freshness_tiers(tracks, heard_ids={7}, now=now) == [2, 1, 1, 1, 0, 1, 2, 0]
+    weights = freshness(tracks, heard_ids={7}, now=now)
+    assert [None if w is None else round(w, 2) for w in weights] == \
+        [None, 0.6, 0.2, 0.6, 1.0, 0.6, None, 1.0]
 
 
-def test_a_new_shuffle_starts_with_albums_not_heard_lately():
-    from luxtunes.core.shuffle import freshness_tiers
+def test_one_song_heard_barely_holds_back_its_album():
+    from luxtunes.core.shuffle import freshness
+    album = [{"id": i, "artist": "A", "album": "Big"} for i in range(15)]
+    album[0]["play_date"] = "2000-01-01T00:00:00Z"      # long ago: doesn't count
+    from datetime import datetime, timedelta, timezone
+    now = datetime(2026, 10, 29, 12, tzinfo=timezone.utc)
+    album[2]["play_date"] = (now - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    weights = freshness(album, now=now)
+    assert weights[2] == 0.2                            # the song itself was heard
+    assert all(0.9 < w < 1 for i, w in enumerate(weights) if i != 2)   # the rest: hardly
+
+
+def test_a_new_shuffle_doesnt_favour_a_few_albums():
+    # Two weeks of shuffled listening touch one song on most albums. Songs from
+    # the untouched albums used to fill the start of every shuffle (a play
+    # marked its whole album); now they're only a little more likely there.
+    from luxtunes.core.shuffle import freshness
+    rng = random.Random(7)
+    songs = [{"id": i, "artist": f"a{i // 60}", "album": f"b{i // 12}"} for i in range(2400)]
+    for album in range(200):
+        if album % 5:                                   # 4 in 5 albums: one song heard lately
+            songs[album * 12 + rng.randrange(12)]["play_date"] = "2099-01-01T00:00:00Z"
+    weights = freshness(songs)
+    untouched = {s["id"] for s in songs if (s["id"] // 12) % 5 == 0}
+    front = Counter()
+    for _ in range(60):
+        order = spread_shuffle(songs, key=lambda s: s["artist"], album=lambda s: s["album"],
+                               weight=lambda s: weights[s["id"]])
+        front.update(s["id"] in untouched for s in order[:100])
+    share = front[True] / (front[True] + front[False])
+    assert 0.15 < share < 0.3                           # a fifth of the songs: about a fifth
+
+
+def test_songs_just_heard_go_last_in_a_new_shuffle():
+    from luxtunes.core.shuffle import freshness
     songs = [{"id": i, "artist": f"a{i // 40}", "album": f"b{i // 10}",
               "play_date": "2099-01-01T00:00:00Z" if i % 10 == 0 and i < 600 else None}
              for i in range(1000)]                 # one song of each of the first 60 albums
-    tiers = dict(zip((s["id"] for s in songs), freshness_tiers(songs)))
+    weights = dict(zip((s["id"] for s in songs), freshness(songs)))
     order = spread_shuffle(songs, key=lambda s: s["artist"], album=lambda s: s["album"],
-                           tier=lambda s: tiers[s["id"]])
+                           weight=lambda s: weights[s["id"]])
     assert sorted(s["id"] for s in order) == list(range(1000))
     just_heard = {s["id"] for s in songs if s["play_date"]}
     assert not just_heard & {s["id"] for s in order[:900]}           # songs just heard: last
-    # Albums heard lately aren't left out, but come up far less: they're 57% of
-    # the rest, and about a fifth of the start.
-    lately = sum(int(s["album"][1:]) < 60 for s in order[:200])
-    assert 10 < lately < 80
+
+
+def test_one_artist_with_several_albums_shuffles():
+    # A soundtrack playlist: one artist, three albums (used to divide by zero).
+    songs = [("Monument Valley", f"Soundtrack {i % 3}") for i in range(96)]
+    for _ in range(20):
+        order = spread_shuffle(list(range(96)), key=lambda i: songs[i][0].casefold(),
+                               album=lambda i: songs[i][1])
+        assert sorted(order) == list(range(96))
