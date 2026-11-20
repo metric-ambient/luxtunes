@@ -11,6 +11,36 @@ def data_home() -> Path:
     return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
 
 
+def cache_home() -> Path:
+    """~/.cache, or $XDG_CACHE_HOME: files LuxTunes can always make again."""
+    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+
+
+def make_private(path: Path) -> None:
+    """Only you can read it: folders 700, files 600 (as far as the disk allows)."""
+    try:
+        path.chmod(0o700 if path.is_dir() else 0o600)
+    except OSError:
+        pass                    # e.g. a FAT drive, which has no permissions
+
+
+def trim_log(path: Path, most: int = 1024 * 1024, keep: int = 256 * 1024) -> None:
+    """A log over `most` bytes is cut back to its newest `keep` bytes."""
+    try:
+        if path.stat().st_size <= most:
+            return
+        with open(path, "rb") as handle:
+            handle.seek(-keep, os.SEEK_END)
+            tail = handle.read()
+    except OSError:
+        return
+    tail = tail[tail.find(b"\n") + 1:]          # start at a whole line
+    try:
+        path.write_bytes(b"(older entries removed)\n" + tail)
+    except OSError:
+        pass
+
+
 def resolve_case_insensitive(path: Path) -> Path:
     """Find `path` on disk even if folder/file capitalisation differs.
 

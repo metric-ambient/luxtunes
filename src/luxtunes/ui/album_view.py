@@ -38,11 +38,14 @@ class AlbumCellDelegate(QStyledItemDelegate):
         painter.fillRect(rect, palette.color(QPalette.ColorRole.Base))   # never highlighted
 
         art_rect = QRect(rect.x() + PAD, rect.y() + PAD, ART_SIZE, ART_SIZE)
-        pixmap = ART_CACHE.get(track, ART_SIZE)
+        view = option.widget
+        pixmap = ART_CACHE.get(track, ART_SIZE, notify=view.viewport() if view else None)
         if pixmap is not None:
             x = art_rect.x() + (ART_SIZE - pixmap.width()) // 2
             y = art_rect.y() + (ART_SIZE - pixmap.height()) // 2
             painter.drawPixmap(x, y, pixmap)
+        elif ART_CACHE.loading(track, ART_SIZE):        # still being read
+            painter.fillRect(art_rect, palette.color(QPalette.ColorRole.AlternateBase))
         else:
             painter.fillRect(art_rect, palette.color(QPalette.ColorRole.AlternateBase))
             painter.setPen(palette.color(QPalette.ColorRole.PlaceholderText))
@@ -55,8 +58,7 @@ class AlbumCellDelegate(QStyledItemDelegate):
         line = option.fontMetrics.height() + 2
 
         album = track.get("album") or "Unknown Album"
-        artist = ("Various Artists" if track.get("compilation")
-                  else track.get("album_artist") or track.get("artist") or "Unknown Artist")
+        artist = albums.album_subtitle(track)
         painter.setFont(bold)
         painter.setPen(palette.color(QPalette.ColorRole.Text))
         painter.drawText(QRect(text_x, rect.y() + PAD, width, line),

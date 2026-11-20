@@ -893,3 +893,30 @@ def test_edits_the_phone_makes_while_syncing_wait_for_the_next_sync():
                                                                 "year": 1999}]
     changed = json.dumps({"version": 2, "edited_tracks": [{"id": NEW_ID, "album": "B"}]})
     assert changes.emptied(merged, changed)["edited_tracks"] == [{"id": NEW_ID, "album": "B"}]
+
+
+def test_a_songs_equalizer_preset_set_on_the_phone(tmp_path):
+    from luxtunes.core import equalizer
+    conn = small_library(tmp_path)
+    conn.execute("UPDATE tracks SET equalizer = 'Rock' WHERE name = 'Chocolate'")
+    conn.commit()
+    phone = fake_phone(tmp_path)
+    root = _phone_root(tmp_path)
+    run(conn, phone)
+    assert equalizer.load(conn).find("jazz") is not None          # a built-in preset
+    robbers, chocolate = _pid(conn, "Robbers"), _pid(conn, "Chocolate")
+    _changes(root, conn, edited=[{"id": robbers, "equalizer": "JAZZ"},
+                                 {"id": chocolate, "equalizer": ""}])
+    report = run(conn, phone)
+    eq = dict(conn.execute("SELECT name, equalizer FROM tracks").fetchall())
+    assert eq["Robbers"] == "Jazz" and eq["Chocolate"] is None    # LuxTunes' spelling; cleared
+    assert not report.problems, report.problems
+    with _db(root) as out:
+        assert out.execute("SELECT equalizer FROM tracks WHERE id = ?", (robbers,)).fetchone() == \
+            ("Jazz",)
+    _changes(root, conn, edited=[{"id": robbers, "equalizer": "Deleted Meanwhile"},
+                                 {"id": chocolate, "equalizer": 3}])
+    report = run(conn, phone)
+    assert conn.execute("SELECT equalizer FROM tracks WHERE name = 'Robbers'").fetchone()[0] is None
+    assert len(report.problems) == 1                              # 3 isn't a name
+    assert "edited_tracks" not in json.loads((root / "changes.json").read_text())

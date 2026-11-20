@@ -225,7 +225,7 @@ class CoverFlow(QWidget):
                           QPointF(right_x, middle + right_h / 2), QPointF(left_x, middle + left_h / 2)])
 
         album = self.albums[index]
-        pixmap = ART_CACHE.get(album.get("art_track"), ART_LOAD_SIZE)
+        pixmap = ART_CACHE.get(album.get("art_track"), ART_LOAD_SIZE, notify=self)
         source = QRectF(0, 0, pixmap.width(), pixmap.height()) if pixmap else QRectF(0, 0, 100, 100)
         source_quad = QPolygonF([source.topLeft(), source.topRight(),
                                  source.bottomRight(), source.bottomLeft()])

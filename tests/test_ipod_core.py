@@ -361,7 +361,7 @@ def test_models_are_told_apart_by_usb_product_without_libgpod():
     # Built in for the classics, so they're named even without libgpod.
     classic = models.identify("xC297", "")
     assert classic.name == "iPod classic (7th generation)" and classic.capacity_label == "160 GB"
-    assert models.stand_in_model_number("120a") is None          # no signature: nothing needed
+    assert models.stand_in_model_number("1300") is None          # a shuffle: no artwork, no signature
 
 
 def test_libgpod_knows_every_model_number():
@@ -377,6 +377,9 @@ def test_libgpod_knows_every_model_number():
     # A nano 3G whose SysInfo doesn't say its model still gets signed.
     stand_in = models.stand_in_model_number("1262")
     assert stand_in and models.identify(stand_in, "").family_key == "nano_3"
+    # An iPod 5G/5.5G with an empty SysInfo: libgpod reads its artwork only with a model.
+    stand_in = models.stand_in_model_number("1209", "video")
+    assert stand_in and models.identify(stand_in, "").family_key == "video_1"
 
 
 def test_an_ipod_without_video_gets_no_movies(tmp_path):

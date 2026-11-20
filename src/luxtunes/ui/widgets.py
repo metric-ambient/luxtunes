@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from luxtunes.core import library
-from luxtunes.ui.formatting import format_duration
+from luxtunes.ui.formatting import format_duration, name_with_featured
 from luxtunes.ui.track_model import TRACK_IDS_MIME, TrackRole, track_ids_from_mime
 
 
@@ -350,7 +350,7 @@ class NowPlayingDisplay(QFrame):
     # ---- Now Playing ---------------------------------------------------------------
 
     def show_track(self, track: dict):
-        self.title.setText(track.get("name") or "")
+        self.title.setText(name_with_featured(track))
         parts = [t for t in (track.get("artist"), track.get("album")) if t]
         self.subtitle.setText(" — ".join(parts))
         self.update_position(0, track.get("total_time") or 0)

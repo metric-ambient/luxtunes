@@ -301,6 +301,10 @@ def _import_phone_songs(conn, root: Path, merged, manifest: dict, record, report
 def _phone_value(key: str, value):
     """A value from the phone's Get Info as Get Info here would take it
     (ValueError if it can't be used)."""
+    if key == phone_changes.EDITED_PRESET:
+        if not isinstance(value, str):
+            raise ValueError("not a preset name")
+        return value
     if key in phone_changes.EDITED_TEXT:
         if not isinstance(value, str):
             raise ValueError("not text")
@@ -327,6 +331,8 @@ def _apply_phone_edits(conn, merged, report) -> None:
         report.problems.append("Song details edited on the phone were for a different "
                                "LuxTunes library, so they weren't applied.")
         return
+    from luxtunes.core import equalizer
+    presets = equalizer.load(conn)        # the phone's own presets are taken first
     for edit in merged.edited:
         row = conn.execute("SELECT id, name FROM tracks WHERE upper(persistent_id) = ?",
                            (edit.id,)).fetchone()
@@ -341,6 +347,13 @@ def _apply_phone_edits(conn, merged, report) -> None:
             except (ValueError, KeyError) as error:
                 report.problems.append(f"“{row[1]}”: the {key.replace('_', ' ')} edited on the "
                                        f"phone wasn't used ({error}).")
+        if fields.get("equalizer"):
+            # The phone's Set EQ…: the preset's name as LuxTunes spells it. A
+            # preset that's gone (deleted here meanwhile) clears the song's own.
+            preset = presets.find(fields["equalizer"])
+            if preset is None:
+                log.info("a song's equalizer preset from the phone no longer exists; cleared")
+            fields["equalizer"] = preset.name if preset else None
         # update_track_fields cleans again; values already clean stay the same.
         if fields and library.update_track_fields(conn, row[0], fields):
             report.edited.append(row[0])
@@ -471,7 +484,9 @@ TRACK_COLUMNS = (
     # LuxTunes 0.8.0: Sound Check's loudness correction in dB (NULL: not known yet)
     "loudness",
     # LuxTunes 0.8.5: timed lyrics (LRC) for highlighting the line being sung (NULL: none)
-    "synced_lyrics")
+    "synced_lyrics",
+    # LuxTunes 0.9.0: featured artists, "Ann, Bo" (NULL: none), shown "Song (ft. Ann, Bo)"
+    "featured_artist")
 
 # The equalizer's bands as equalizer_presets columns.
 EQ_COLUMNS = ("band_32", "band_64", "band_125", "band_250", "band_500", "band_1k", "band_2k",
@@ -648,12 +663,14 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
     report.problems += merged.problems
     _log_phone_changes(conn, root, merged)
     _import_phone_songs(conn, root, merged, manifest, record, report, tell)
+    # The equalizer first: a song's preset set on the phone (edits) may be one
+    # the phone has just made.
+    _apply_phone_equalizer(conn, merged, report)
     _apply_phone_edits(conn, merged, report)
     report.stats = stats.merge(conn, merged.tracks)
     log.info("from the phone: %d plays, %d skips, %d ratings added to the library",
              report.stats.plays, report.stats.skips, report.stats.ratings)
     _apply_phone_playlists(conn, root, merged, manifest, record, report, confirm_playlists)
-    _apply_phone_equalizer(conn, merged, report)
     _empty_changes(root, merged)
 
     # 2. What should be there.

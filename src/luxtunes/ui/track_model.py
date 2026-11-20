@@ -82,6 +82,9 @@ COLUMNS = [
     # Only shown in Album List view (always first there):
     Column("album_group", "Album by Artist", 240),
     Column("album_track", "#", 32, True),
+    # Added since: always at the end, so column layouts saved before still line up
+    # (see NEW_COLUMNS in main_window).
+    Column("featured_artist", "Featured Artist", 150, heading="ft. Artist"),
 ]
 COLUMN_INDEX = {c.key: i for i, c in enumerate(COLUMNS)}
 ENABLED_COLUMN = COLUMN_INDEX["enabled"]
@@ -127,7 +130,8 @@ _TOOLTIP = Qt.ItemDataRole.ToolTipRole.value
 _ANSWERED = {_DISPLAY, _EDIT, _TRACK, _CHECK, _ALIGN, _BACKGROUND, _DECORATION, _TOOLTIP}
 _DRAWN = ("enabled", "rating", "album_group")       # a checkbox / stars / album cell instead
 # Cells whose text comes from other fields too ("3 of 12", Album List's "#").
-_SOURCES = {"track_number": ("track_number", "track_count"),
+_SOURCES = {"name": ("name", "featured_artist"),
+            "track_number": ("track_number", "track_count"),
             "disc_number": ("disc_number", "disc_count"), "album_track": ("track_number",)}
 
 

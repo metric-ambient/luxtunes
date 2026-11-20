@@ -138,8 +138,10 @@ def transfer_kbps(song: dict, settings: SyncSettings) -> int | None:
     location = (song.get("location") or "").lower()
     if location.endswith((".m4p", ".aa", ".aax")):
         return None
-    if not location.endswith(IPOD_AUDIO_EXTENSIONS):
-        return settings.convert_kbps if settings.convert else UNPLAYABLE_KBPS
+    if not location.endswith(IPOD_AUDIO_EXTENSIONS):          # e.g. FLAC, Ogg, Opus
+        from luxtunes.core.convert import capped_kbps
+        # Never above what a lossy original (Ogg, Opus) had.
+        return capped_kbps(song, settings.convert_kbps if settings.convert else UNPLAYABLE_KBPS)
     if not settings.convert:
         return None
     lossless = location.endswith((".wav", ".aif", ".aiff")) or \

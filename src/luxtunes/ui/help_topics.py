@@ -182,7 +182,9 @@ Preferences → General (for example <i>Ask to Import CD</i>).</li>
 <ul>
 <li>Right-click songs → <b>Create MP3 Version</b> (320 kbps) or <b>Create AAC Version</b>
 (256 kbps). Each format offers the other: an MP3 gets an AAC version, an AAC file an MP3
-one, and FLAC, WAV, AIFF, Apple Lossless and others both. Videos → <b>Create iPod
+one, and FLAC, WAV, AIFF, Apple Lossless and others both. From an MP3, AAC, Ogg or Opus
+file the new version is never made at a higher bit rate than the original (a 128 kbps
+MP3 makes a 128 kbps AAC): re-encoding can't bring back quality. Videos → <b>Create iPod
 Version</b>. The new file is made beside the original. (Needs FFmpeg:
 <code>sudo apt install ffmpeg</code>.)</li>
 <li><b>Delete original after conversion</b> (Preferences → Advanced, off unless you turn

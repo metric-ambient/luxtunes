@@ -4,8 +4,11 @@ and audiobooks) and Create iPod Version (for movies and TV shows).
 Every audio file can get both, except into its own format: an MP3 only gets
 Create AAC Version, an AAC file only Create MP3 Version; FLAC, WAV, AIFF,
 Apple Lossless, Ogg and Opus get both. FFmpeg (the `ffmpeg` command,
-`sudo apt install ffmpeg`) encodes a 320 kbps MP3 or a 256 kbps AAC (.m4a)
-next to the original. LuxTunes then writes the tags itself (from the library,
+`sudo apt install ffmpeg`) encodes an MP3 or an AAC (.m4a) next to the
+original: 320 kbps MP3 / 256 kbps AAC from lossless files, and from a lossy
+one (MP3, AAC, Ogg, Opus) no more than the original's own bit rate, since
+re-encoding can't add back what it lost (a 128 kbps MP3 makes a 128 kbps AAC,
+not a 256 kbps one that only looks better). LuxTunes then writes the tags itself (from the library,
 plus the original's lyrics and artwork), exactly as Get Info would, and adds
 the new file to the library. The original is never changed.
 
@@ -32,6 +35,7 @@ from pathlib import Path
 
 from luxtunes.core import add_files, library, organize
 from luxtunes.core.db import get_setting, set_setting
+from luxtunes.core.encoders import AAC_BIT_RATES, MP3_BIT_RATES
 from luxtunes.core.tags import TAG_FIELDS, TagError, read_details, write_tags
 
 KEY_DELETE_ORIGINAL = "delete_original_after_conversion"
@@ -99,6 +103,33 @@ def audio_format(track: dict) -> str | None:
     return "other"
 
 
+LOSSY_EXTENSIONS = (".mp3", ".m4a", ".m4b", ".aac", ".ogg", ".oga", ".opus")
+
+
+def is_lossy(track: dict) -> bool:
+    """MP3, AAC, Ogg Vorbis or Opus (not FLAC, WAV, AIFF or Apple Lossless)."""
+    location = (track.get("location") or "").lower()
+    return location.endswith(LOSSY_EXTENSIONS) and \
+        "lossless" not in (track.get("kind") or "").lower()
+
+
+def capped_kbps(track: dict, most: int, rates=AAC_BIT_RATES) -> int:
+    """The bit rate to re-encode a song at: `most`, but never more than a
+    lossy original had (rounded to the nearest standard rate at or above it,
+    allowing a few kbps for VBR averages: 125 → 128)."""
+    source = track.get("bit_rate") or 0
+    if not is_lossy(track) or source <= 0:
+        return most
+    return min(most, next((r for r in rates if r >= source * 0.97), most))
+
+
+def bit_rate_for(track: dict, to: str = "mp3") -> int:
+    """The kbps Create MP3 / AAC Version uses for this song."""
+    if to == "aac":
+        return capped_kbps(track, int(AAC_BIT_RATE.rstrip("k")), AAC_BIT_RATES)
+    return capped_kbps(track, int(BIT_RATE.rstrip("k")), MP3_BIT_RATES)
+
+
 def can_convert(track: dict, to: str = "mp3") -> bool:
     """Create MP3 / AAC Version is offered: an audio file not already in that format."""
     found = audio_format(track)
@@ -123,14 +154,16 @@ def mp3_target(source: str) -> Path:
 
 
 def command(ffmpeg: str, source: str, target: str, sample_rate: int | None,
-            to: str = "mp3") -> list[str]:
+            to: str = "mp3", kbps: int | None = None) -> list[str]:
     """The FFmpeg command: audio only, no tags copied (LuxTunes writes them);
-    MP3 at 320 kbps CBR, or AAC-LC at 256 kbps that iPods play cleanly."""
+    MP3 CBR (320 kbps unless `kbps`), or AAC-LC that iPods play cleanly
+    (256 kbps unless `kbps`; see bit_rate_for)."""
     cmd = [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
            "-i", source, "-map", "0:a:0", "-map_metadata", "-1", "-vn"]
     if to == "aac":
-        return cmd + [*IPOD_AAC, "-b:a", AAC_BIT_RATE, "-movflags", "+faststart", target]
-    cmd += ["-codec:a", "libmp3lame", "-b:a", BIT_RATE]
+        rate = f"{kbps}k" if kbps else AAC_BIT_RATE
+        return cmd + [*IPOD_AAC, "-b:a", rate, "-movflags", "+faststart", target]
+    cmd += ["-codec:a", "libmp3lame", "-b:a", f"{kbps}k" if kbps else BIT_RATE]
     if sample_rate and sample_rate > MP3_MAX_SAMPLE_RATE:
         cmd += ["-ar", "44100"]
     return cmd + [target]

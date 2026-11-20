@@ -170,10 +170,17 @@ def reset_plays(conn: sqlite3.Connection, track_ids: list[int]) -> dict:
 
 def delete_tracks(conn: sqlite3.Connection, track_ids: list[int]) -> None:
     """Remove songs from the library (and from every playlist). Files are untouched."""
+    ids = list(track_ids)
     with conn:
-        conn.executemany("DELETE FROM tracks WHERE id = ?", [(i,) for i in track_ids])
-        # Close the gaps left in playlists.
-        for (playlist_id,) in conn.execute("SELECT id FROM playlists").fetchall():
+        touched = set()
+        for start in range(0, len(ids), 500):  # SQLite limits how many ?s one query can have
+            chunk = ids[start:start + 500]
+            touched.update(r[0] for r in conn.execute(
+                f"SELECT DISTINCT playlist_id FROM playlist_items "
+                f"WHERE track_id IN ({','.join('?' * len(chunk))})", chunk))
+        conn.executemany("DELETE FROM tracks WHERE id = ?", [(i,) for i in ids])
+        # Close the gaps left in the playlists that held them.
+        for playlist_id in sorted(touched):
             _renumber(conn, playlist_id)
 
 
@@ -259,7 +266,7 @@ def load_tracks_by_ids(conn: sqlite3.Connection, track_ids: list[int]) -> list[d
 EDITABLE_TEXT_FIELDS = {
     "name", "artist", "album_artist", "album", "genre", "composer", "grouping",
     "comments", "sort_name", "sort_artist", "sort_album_artist", "sort_album",
-    "sort_composer", "lyrics", "show", "episode_id", "description",
+    "sort_composer", "lyrics", "show", "episode_id", "description", "featured_artist",
 }
 EDITABLE_NUMBER_FIELDS = {"year", "bpm", "track_number", "track_count", "disc_number", "disc_count",
                           "season", "episode_number"}

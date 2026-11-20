@@ -109,3 +109,20 @@ def test_errors(tmp_path):
         tags.write_tags(str(junk), {"name": "x"})
     with pytest.raises(ValueError):
         tags.write_tags(make_mp3(tmp_path / "s.mp3"), {"play_count": 3})
+
+
+def test_featured_artist_round_trip(tmp_path):
+    import subprocess
+    import shutil
+    files = [make_mp3(tmp_path / "a.mp3"), make_flac(tmp_path / "a.flac")]
+    if shutil.which("ffmpeg"):
+        m4a = tmp_path / "a.m4a"
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i",
+                        "anullsrc=r=44100:cl=stereo", "-t", "0.2", "-c:a", "aac", str(m4a)],
+                       check=True)
+        files.append(str(m4a))
+    for path in files:
+        tags.write_tags(path, {"name": "Song", "featured_artist": "Ann, Bo & Cy"})
+        assert tags.read_fields(path)["featured_artist"] == "Ann, Bo & Cy", path
+        tags.write_tags(path, {"featured_artist": None})
+        assert tags.read_fields(path).get("featured_artist") is None, path

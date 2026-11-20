@@ -79,11 +79,15 @@ class TileDelegate(QStyledItemDelegate):
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        pixmap = ART_CACHE.get(group.get("art_track"), ART)
+        view = option.widget
+        art_track = group.get("art_track")
+        pixmap = ART_CACHE.get(art_track, ART, notify=view.viewport() if view else None)
         if pixmap is not None:
             x = art.x() + (ART - pixmap.width()) // 2
             y = art.y() + (ART - pixmap.height())       # sit on the same baseline
             painter.drawPixmap(x, y, pixmap)
+        elif ART_CACHE.loading(art_track, ART):         # still being read: a blank square
+            painter.fillRect(art, QColor(theme.grid_colors["grid_empty_art"]))
         else:
             painter.fillRect(art, QColor(theme.grid_colors["grid_empty_art"]))
             painter.setPen(QColor("#9a9a9a"))
@@ -216,6 +220,11 @@ class GridView(QWidget):
         self.grouping = self._chosen.get(section, keys[0])
         self._make_tabs(keys)
 
+    @property
+    def tracks(self) -> list[dict]:
+        """The songs the tiles were made from."""
+        return self._tracks
+
     def grouping_noun(self) -> str:
         """"album", "artist", "category"... (for the status bar)."""
         return self.NOUNS[self.grouping]
@@ -223,9 +232,22 @@ class GridView(QWidget):
     def all_label(self) -> str:
         return f"All {self.TAB_TITLES[self.grouping]}"
 
-    def set_tracks(self, tracks: list[dict]):
+    def set_tracks(self, tracks: list[dict], keep_place: bool = False):
+        """Show these songs' tiles. keep_place: the same screen refreshed (an
+        edit, say), so stay scrolled where it was with the same tile selected."""
         self._tracks = tracks
+        scroll = self.list.verticalScrollBar().value()
+        current = self.list.currentIndex()
+        selected = current.data(GroupRole)["key"] if keep_place and current.isValid() else None
         self.model.set_groups(grid_groups(tracks, self.grouping))
+        if not keep_place:
+            return
+        if selected is not None:
+            row = next((i for i, g in enumerate(self.model.groups) if g["key"] == selected), -1)
+            if row >= 0:
+                self.list.setCurrentIndex(self.model.index(row))
+        self.list.doItemsLayout()                 # so the old scroll position exists again
+        self.list.verticalScrollBar().setValue(scroll)
 
     def set_grouping(self, grouping: str):
         self.grouping = grouping

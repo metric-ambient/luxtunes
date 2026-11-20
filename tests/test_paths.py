@@ -27,3 +27,17 @@ def test_file_addresses_keep_commas_inside_one_path():
     from luxtunes.core.paths import file_uri
     uri = file_uri("/mnt/Drive 8TB/Music/01 - The Lion, the Witch and the Wardrobe.m4b")
     assert uri.startswith("file:///mnt/Drive%208TB/") and "," not in uri and "%2C" in uri
+
+
+def test_a_big_log_keeps_its_newest_part(tmp_path):
+    from luxtunes.core.paths import trim_log
+    log = tmp_path / "crash.log"
+    log.write_bytes(b"".join(b"line %06d\n" % i for i in range(200_000)))     # about 2.2 MB
+    trim_log(log)
+    text = log.read_bytes()
+    assert len(text) <= 256 * 1024 + 100
+    assert text.startswith(b"(older entries removed)\nline ") and text.endswith(b"line 199999\n")
+    small = tmp_path / "small.log"
+    small.write_bytes(b"one crash\n")
+    trim_log(small)
+    assert small.read_bytes() == b"one crash\n"                                 # left alone

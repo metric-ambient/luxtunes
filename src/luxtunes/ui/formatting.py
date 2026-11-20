@@ -74,7 +74,7 @@ DATE_KEYS = {"date_added", "play_date", "skip_date", "date_modified", "release_d
 TEXT_KEYS = {
     "genre", "kind", "composer", "comments", "grouping", "category", "description",
     "show", "episode_id", "equalizer", "sort_name", "sort_artist", "sort_album_artist",
-    "sort_album", "sort_composer", "sort_show", "album_artist",
+    "sort_album", "sort_composer", "sort_show", "album_artist", "featured_artist",
 }
 
 
@@ -94,9 +94,24 @@ def _n_of_m(number, count) -> str:
     return f"{number} of {count}" if count else str(number)
 
 
+def featured_names(text: str | None) -> list[str]:
+    """"Ann, Bo; Cy" -> ["Ann", "Bo", "Cy"]. Names are split at commas and
+    semicolons only, so "Simon & Garfunkel" stays one name."""
+    return [n.strip() for n in (text or "").replace(";", ",").split(",") if n.strip()]
+
+
+def name_with_featured(track: dict) -> str:
+    """A song's name followed by its featured artists: "Song (ft. Ann, Bo)"."""
+    name = track.get("name") or ""
+    names = featured_names(track.get("featured_artist"))
+    return f"{name} (ft. {', '.join(names)})" if names else name
+
+
 def display_value(track: dict, key: str) -> str:
     """The text shown in a column for a track."""
     value = track.get(key)
+    if key == "name":
+        return name_with_featured(track)
     if key == "total_time":
         return format_duration(value)
     if key in DATE_KEYS:
@@ -132,13 +147,31 @@ def _album_key(t: dict) -> tuple:
     )
 
 
+# Preferences → General → "Group compilations when browsing" (on by default).
+GROUP_COMPILATIONS = True
+
+
+def set_group_compilations(on: bool) -> None:
+    global GROUP_COMPILATIONS
+    GROUP_COMPILATIONS = bool(on)
+
+
+def browse_artist(t: dict) -> str:
+    """The artist a song is filed under when sorting or browsing by artist:
+    its Album Artist (so an album with guest artists stays together). A
+    compilation's songs stay together under the compilation's Album Artist,
+    or "Various Artists"; with "Group compilations when browsing" off, each
+    of its songs goes under its own artist instead."""
+    if t.get("compilation"):
+        if not GROUP_COMPILATIONS:
+            return t.get("sort_artist") or t.get("artist") or ""
+        return t.get("sort_album_artist") or t.get("album_artist") or "Various Artists"
+    return (t.get("sort_album_artist") or t.get("album_artist")
+            or t.get("sort_artist") or t.get("artist") or "")
+
+
 def _artist_key(t: dict) -> tuple:
-    # Album artist first, so an album with guest artists stays together.
-    artist = (
-        t.get("sort_album_artist") or t.get("album_artist")
-        or t.get("sort_artist") or t.get("artist")
-    )
-    return (sort_text(artist),) + _album_key(t)
+    return (sort_text(browse_artist(t)),) + _album_key(t)
 
 
 def sort_key(key: str):
@@ -164,11 +197,12 @@ def sort_key(key: str):
 
 # ---- Search --------------------------------------------------------------
 
-SEARCH_FIELDS = ("name", "artist", "album_artist", "album", "composer", "genre")
+SEARCH_FIELDS = ("name", "artist", "album_artist", "album", "composer", "genre", "featured_artist")
 
 
 # The search box's menu: All, or just one kind of tag.
-SEARCH_SCOPES = {"all": SEARCH_FIELDS, "artist": ("artist", "album_artist"), "album": ("album",),
+SEARCH_SCOPES = {"all": SEARCH_FIELDS, "artist": ("artist", "album_artist", "featured_artist"),
+                 "album": ("album",),
                  "composer": ("composer",), "name": ("name",)}
 
 

@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QStyle, QToolButton, QVBoxLayout, QWidget
 
-from luxtunes.ui.formatting import format_duration
+from luxtunes.ui.formatting import format_duration, name_with_featured
 from luxtunes.ui.widgets import JumpSlider, ScrollingLabel, themed_icon
 
 
@@ -117,7 +117,7 @@ class MiniPlayer(QWidget):
             self.setWindowTitle("LuxTunes Mini Player")
             self.update_position(0, 0)
             return
-        name = track.get("name") or ""
+        name = name_with_featured(track)
         self.title.setText(name)
         self.subtitle.setText(" — ".join(p for p in (track.get("artist"), track.get("album")) if p))
         self.setWindowTitle(" - ".join(p for p in (name, track.get("artist")) if p) or "LuxTunes")

@@ -1,0 +1,10 @@
+# Exact versions for the release build (.github/workflows/release.yml uses
+# this with pip's -c). Pinned so a new release of any of these can't change
+# what goes into LuxTunes without you choosing it. To move one up, change its
+# number here, run the tests and build, then release.
+PySide6==6.11.1
+mutagen==1.48.1
+numpy==2.5.4
+pytest==9.1.1
+build==1.6.1
+pyinstaller==6.22.3

@@ -200,3 +200,19 @@ def test_searching_one_kind_of_tag():
     assert "brand new" in formatting.search_text(song)
     assert "brand new" not in formatting.search_text(song, "artist")
     assert formatting.search_text(song, "album") == "brand new eyes"
+
+
+def test_deleting_songs_closes_the_gaps_in_their_playlists(tmp_path):
+    conn = db.connect(tmp_path / "library.db")
+    for i in range(5):
+        conn.execute("INSERT INTO tracks (persistent_id, name) VALUES (?, ?)", (f"{i:016X}", f"S{i}"))
+    conn.commit()
+    mix = library.create_playlist(conn, "Mix")
+    library.add_to_playlist(conn, mix, [1, 2, 3, 4])
+    other = library.create_playlist(conn, "Other")
+    library.add_to_playlist(conn, other, [5, 4])
+    library.delete_tracks(conn, [2, 4])
+    rows = lambda p: conn.execute("SELECT position, track_id FROM playlist_items WHERE playlist_id = ? "
+                                  "ORDER BY position", (p,)).fetchall()
+    assert [tuple(r) for r in rows(mix)] == [(0, 1), (1, 3)]
+    assert [tuple(r) for r in rows(other)] == [(0, 5)]

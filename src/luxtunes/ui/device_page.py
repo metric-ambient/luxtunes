@@ -303,6 +303,7 @@ class DevicePage(QWidget):
         self.record: DeviceRecord | None = None
         self.settings = SyncSettings()
         self._space = None
+        self._spaces: dict[str, ipod_device.Space] = {}   # last measured, by iPod
         self._loading = False
         self._photo_count_cache: dict[tuple, tuple[int, int]] = {}   # -> (photos, file bytes)
         self._refresh_timer = QTimer(self)
@@ -389,7 +390,7 @@ class DevicePage(QWidget):
         if self.is_android:
             self._measure_phone()
         else:
-            self._space = ipod_device.space(ipod)
+            self._measure_ipod(ipod)
         self._loading = True
         try:
             self._fill_summary()
@@ -468,6 +469,33 @@ class DevicePage(QWidget):
         self.summary_values["Capacity"].setText(ipod_device.format_gb(capacity) if capacity
                                                 else "Unknown")
         self._changed()
+
+    def _measure_ipod(self, ipod):
+        """Adding up the iPod's files over USB takes a while, so it happens on
+        another thread. Until it's done the page shows the last measure, or
+        an empty bar the first time."""
+        from luxtunes.ui import background
+        self._space = self._spaces.get(ipod.key)
+
+        def measured(space):
+            if isinstance(space, Exception):
+                return                          # (unplugged meanwhile, ...)
+            self._spaces[ipod.key] = space
+            if self.ipod is ipod:               # still the iPod on show
+                self._space = space
+                self._fill_summary()
+                self._refresh_plan()
+        background.run(lambda: ipod_device.space(ipod), measured, self)
+
+    def _capacity(self) -> int:
+        """The device's size, even before its contents are measured."""
+        if self._space is not None:
+            return self._space.capacity
+        try:
+            import shutil
+            return shutil.disk_usage(self.ipod.mountpoint).total
+        except (OSError, AttributeError):
+            return 0
 
     def _measure_phone(self):
         from luxtunes.core.android import device as android_device
@@ -659,7 +687,7 @@ class DevicePage(QWidget):
         self.picture.update()
         values = {
             "Name": self.record.name or ipod.name,
-            "Capacity": ipod_device.format_gb(self._space.capacity),
+            "Capacity": ipod_device.format_gb(self._capacity()),
             "Software Version": ipod.software_version or "Unknown",
             "Serial Number": ipod.serial or "Unknown",
             "Model": self._model_text(ipod),
@@ -1295,7 +1323,12 @@ class DevicePage(QWidget):
                                                                       True))
 
     def _refresh_plan(self):
-        if self.conn is None or self._space is None:
+        if self.conn is None:
+            return
+        if self._space is None:                 # still measuring the iPod
+            self.capacity_bar.set_parts(self._capacity(), [])
+            self.warning.setText("Measuring what's on the iPod…")
+            self.warning.show()
             return
         space = self._space
         if self.settings.manual:

@@ -25,7 +25,12 @@ TAG_FIELDS = (
     "sort_album", "sort_composer",
     # Movies and TV shows (written into MP4 / M4V files only):
     "show", "season", "episode_id", "episode_number", "description",
+    # No standard tag exists for this; written as a custom "FEATURED ARTIST" tag
+    # (ID3 TXXX, MP4 freeform, Vorbis comment), the way tag editors store custom fields.
+    "featured_artist",
 )
+FEATURED = "FEATURED ARTIST"
+MP4_FEATURED = "----:com.apple.iTunes:FEATURED ARTIST"
 VIDEO_TEXT = {"show": "tvsh", "episode_id": "tven", "description": "desc"}
 VIDEO_NUMBERS = {"season": "tvsn", "episode_number": "tves"}
 UNCHANGED = object()   # "leave lyrics / artwork as they are"
@@ -231,6 +236,10 @@ def _fill_id3(tags, fields, lyrics, artworks):
         put("TBPM", TBPM(encoding=3, text=[str(fields["bpm"])]) if fields["bpm"] else None)
     if "compilation" in fields:
         put("TCMP", TCMP(encoding=3, text=["1"]) if fields["compilation"] else None)
+    if "featured_artist" in fields:
+        from mutagen.id3 import TXXX
+        put(f"TXXX:{FEATURED}", TXXX(encoding=3, desc=FEATURED, text=[fields["featured_artist"]])
+            if fields["featured_artist"] else None)
     if "comments" in fields:
         # Replace only the plain comment; other comment frames hold player data (iTunNORM,
         # iTunSMPB, ...) in COMM frames with a description, and those stay.
@@ -280,6 +289,10 @@ def _write_mp4(audio, fields, lyrics, artworks):
         put("tmpo", [int(fields["bpm"])] if fields["bpm"] else None)
     if "compilation" in fields:
         put("cpil", True if fields["compilation"] else None)
+    if "featured_artist" in fields:
+        from mutagen.mp4 import MP4FreeForm
+        value = fields["featured_artist"]
+        put(MP4_FEATURED, [MP4FreeForm(str(value).encode("utf-8"))] if value else None)
     for key, atom in VIDEO_TEXT.items():
         if key in fields:
             put(atom, [str(fields[key])] if fields[key] not in (None, "") else None)
@@ -316,6 +329,11 @@ def _write_vorbis(audio, fields, lyrics, artworks):
             tags["COMPILATION"] = ["1"]
         else:
             remove("COMPILATION")
+    if "featured_artist" in fields:
+        if fields["featured_artist"]:
+            tags[FEATURED] = [str(fields["featured_artist"])]
+        else:
+            remove(FEATURED)
     if lyrics is not UNCHANGED:
         remove("UNSYNCEDLYRICS")
         if lyrics:
@@ -432,6 +450,8 @@ def read_fields(path: str) -> dict:
         if tags.get("tmpo"):
             fields["bpm"] = int(tags["tmpo"][0]) or None
         fields["compilation"] = int(bool(tags.get("cpil")))
+        if tags.get(MP4_FEATURED):
+            fields["featured_artist"] = bytes(tags[MP4_FEATURED][0]).decode("utf-8", "replace").strip()
         for key, atom in VIDEO_TEXT.items():
             if atom in tags:
                 fields[key] = _first(tags[atom])
@@ -457,6 +477,9 @@ def read_fields(path: str) -> dict:
             bpm = _first(tags["TBPM"]).split(".")[0]
             fields["bpm"] = int(bpm) if bpm.isdigit() else None
         fields["compilation"] = int(_first(tags.get("TCMP")) == "1")
+        featured = tags.getall(f"TXXX:{FEATURED}")
+        if featured:
+            fields["featured_artist"] = _first(featured[0])
         comments = [c for c in tags.getall("COMM") if not c.desc]
         if comments:
             fields["comments"] = _first(comments[0])
@@ -475,6 +498,8 @@ def read_fields(path: str) -> dict:
         bpm = str(fields.pop("bpm", "") or "").split(".")[0]
         fields["bpm"] = int(bpm) if bpm.isdigit() else None
         fields["compilation"] = int(_first(tags.get("COMPILATION")) == "1")
+        if tags.get(FEATURED):
+            fields["featured_artist"] = _first(tags[FEATURED])
         lyrics = _first(tags.get("LYRICS") or tags.get("UNSYNCEDLYRICS"))
         artworks = len(getattr(audio, "pictures", []))
 

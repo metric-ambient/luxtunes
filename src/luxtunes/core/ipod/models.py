@@ -211,17 +211,25 @@ def identify_device(model_number: str = "", usb_product: str = "") -> Identity:
 
 def stand_in_model_number(usb_product: str = "", family_key: str = "") -> str | None:
     """A model number of the iPod's family, for an iPod whose SysInfo doesn't
-    say which model it is: libgpod needs one to know it must sign the song
-    list (classics, nano 3rd–7th generation). None if not needed or unknown.
+    say which model it is. libgpod needs one to know it must sign the song
+    list (classics, nano 3rd–7th generation), and to read the album artwork
+    already on any iPod that shows artwork: without it libgpod reads none, so
+    every sync had to put all of it back (an iPod 5.5G with an empty SysInfo
+    re-did 7,600 songs' artwork each time). None if not needed or unknown.
+    A 5th/5.5th generation that doesn't say which gets a 5th generation's
+    (their artwork sizes are the same).
 
     A nano 6th or 7th generation gets a nano 5th generation's: libgpod writes its
     song list just the same way (compressed, with the SQLite databases), but
     signs it with hash72, which it can make; LuxTunes then signs it again
     with hashAB (sync.py, hashab.py)."""
     key = family_key or USB_PRODUCTS.get((usb_product or "").lower())
-    if key is None or key not in FAMILIES or FAMILIES[key].signature not in (HASH58, HASH72, HASH_AB):
+    family = FAMILIES.get(key) if key else None
+    if family is None or family.unsupported or \
+            not (family.signature in (HASH58, HASH72, HASH_AB) or family.artwork):
         return None
-    wanted = {"classic": "classic_1", "nano_6": "nano_5", "nano_7": "nano_5"}.get(key, key)
+    wanted = {"classic": "classic_1", "nano_6": "nano_5", "nano_7": "nano_5",
+              "video": "video_1"}.get(key, key)
     for number, (_, _, generation) in sorted(model_table().items()):
         if GENERATIONS.get(generation) == wanted:
             return "x" + number

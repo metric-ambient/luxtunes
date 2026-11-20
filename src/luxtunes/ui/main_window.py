@@ -64,7 +64,7 @@ from luxtunes.core.paths import file_uri, find_file, nearest_existing_folder
 from luxtunes.importer.itunes_xml import import_library
 from luxtunes.ui import formatting, theme
 from luxtunes.ui.player import REPEAT_ALL, REPEAT_OFF, REPEAT_ONE, Player
-from luxtunes.core.albums import albums_in_order
+from luxtunes.core.albums import albums_in_order, featured_on
 from luxtunes.ui.about import AboutDialog
 from luxtunes.ui.album_view import TrackTableView
 from luxtunes.ui.art_cache import ART_CACHE
@@ -81,6 +81,7 @@ from luxtunes.core.ipod import device as ipod_device
 from luxtunes.core.ipod import settings as ipod_settings
 from luxtunes.ui.equalizer_window import EqualizerWindow
 from luxtunes.ui.get_info import InfoDialog, MultiInfoDialog
+from luxtunes.ui.featured_panel import FeaturedPanel
 from luxtunes.ui.grid_view import GridView
 from luxtunes.ui.view_icons import view_icons
 from luxtunes.ui.playlist_window import PlaylistWindow
@@ -117,6 +118,9 @@ log = logging.getLogger(__name__)
 
 # Bump if COLUMNS changes, so saved column layouts from older versions are ignored.
 HEADER_LAYOUT_VERSION = 3  # 2: all columns added; 3: Album List columns
+# Columns added since layout version 3. They go at the end of COLUMNS (so a
+# layout saved before still lines up) and start hidden in such a layout.
+NEW_COLUMNS = ("featured_artist",)
 
 VIEW_MODES = ("list", "album", "grid", "coverflow")
 VIEW_TIPS = ("List", "Album List", "Grid", "Cover Flow")
@@ -185,11 +189,15 @@ class MainWindow(QMainWindow):
         # section and List / Album List: "music/list", "movie/album"... Playlists
         # and Up Next use Music's.
         self._header_states: dict[str, object] = {}
+        self._known_columns = {c.key for c in COLUMNS}   # what the saved layouts knew about
+        self._layouts_updated: set[str] = set()
         self._deferred_tag_jobs: list = []      # edits for songs playing now (see _start_tag_writes)
         self._column_group = "music"
         self._scroll_memory: dict[str, tuple[int, int]] = {}   # screen -> (list, grid) scroll
         self._automatic_sort = False
         self._drilled = False            # a Grid tile is open
+        self._drill_key = None           # which one: (grouping, group key)
+        self._grid_source = None         # the screen the Grid tiles were made for
         self._syncing = False            # Cover Flow <-> song list update in progress
         self._views_refresh_pending = False
         self._playlist_windows: list[PlaylistWindow] = []
@@ -207,6 +215,9 @@ class MainWindow(QMainWindow):
         self._phone_tries: dict[str, int] = {}  # phone address -> times we tried to open it
         self._mount_tries: dict[str, int] = {}  # iPod partition -> times we tried to mount it
         self._mount_ejected: set[str] = set()   # ejected here: left alone until replugged
+        self._mounting: set[str] = set()        # iPods and phones being opened right now
+        self._probing = False                   # a device check is running in the background
+        self._looked_now = 0                    # counts checks done on the spot (not in the background)
         self._sync_worker = None                # the iPod sync running in the background
         self._closing_after_sync = False        # closing was asked for during a sync
         self._discs: dict[str, cd.Disc] = {}    # audio CDs in the drives, by "cd:/dev/sr0"
@@ -239,12 +250,14 @@ class MainWindow(QMainWindow):
         # Song edits whose files couldn't be updated last time (file missing,
         # drive not mounted, ...): try again shortly after the window appears.
         QTimer.singleShot(2000, self._write_pending_tags)
-        # Look for iPods now and every 2 seconds (just a glance at what's mounted).
+        # Look for iPods, phones and CDs now and every 2 seconds. The looking
+        # happens on another thread (a sleeping disk can take a while to answer);
+        # what's found is acted on here.
         self._device_timer = QTimer(self)
-        self._device_timer.timeout.connect(self._scan_devices)
+        self._device_timer.timeout.connect(self._device_tick)
         self._device_timer.timeout.connect(self._update_device_actions)
         self._device_timer.start(2000)
-        QTimer.singleShot(0, self._scan_devices)
+        QTimer.singleShot(0, self._device_tick)
         self._update_device_actions()
         QTimer.singleShot(800, self._offer_desktop_integration)
 
@@ -337,6 +350,10 @@ class MainWindow(QMainWindow):
         self._search_icon = self.search.addAction(QIcon(), QLineEdit.ActionPosition.LeadingPosition)
         self._search_icon.triggered.connect(
             lambda: self._search_menu.exec(self.search.mapToGlobal(QPoint(0, self.search.height()))))
+        # Hidden on an iPod's, phone's or CD's page; keeps its room so the bar doesn't shift.
+        policy = self.search.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)
+        self.search.setSizePolicy(policy)
         bar.addWidget(self.search)
 
         # ---- Left panel: sidebar + album art + small buttons --------------
@@ -443,6 +460,9 @@ class MainWindow(QMainWindow):
         songs_layout.setSpacing(0)
         songs_layout.addWidget(self.drill_bar)
         songs_layout.addWidget(self.songs_split, 1)
+        self.featured = FeaturedPanel()          # an opened artist: songs it's featured on
+        self.featured.play.connect(self._play_featured)
+        songs_layout.addWidget(self.featured)
 
         self.grid = GridView()
         self.views = QStackedWidget()
@@ -748,6 +768,13 @@ class MainWindow(QMainWindow):
             )
 
     def show_source(self, source):
+        # Showing the same screen again (after an edit, a sync, a new
+        # playlist...) keeps its search and the open Grid tile; only moving
+        # to another screen starts fresh.
+        again = source == self._current_source and source[0] != "device"
+        keep_search = self.search.text() if again else ""
+        keep_drill = self._drill_key if again and self._drilled else None
+        drill_scroll = self.table.verticalScrollBar().value()
         self._remember_scroll()
         self._current_source = source
         self._end_duplicates()
@@ -756,7 +783,7 @@ class MainWindow(QMainWindow):
             return
         if self._showing_device_page():     # back from an iPod's or a CD's page
             self.views.setCurrentIndex(1 if self.view_mode == "grid" else 0)
-            self.search.setEnabled(True)
+            self.search.show()
         if self._drilled:
             self._leave_drill(show_grid=self.view_mode == "grid")
         kind, value = source
@@ -804,12 +831,28 @@ class MainWindow(QMainWindow):
         header.viewport().update()
         self.model.set_now_playing(self.player.current["id"] if self.player.current else None)
         self.search.blockSignals(True)
-        self.search.clear()
+        self.search.setText(keep_search)
         self.search.blockSignals(False)
+        if keep_search:
+            self.model.set_filter(keep_search)
         self.table.scrollToTop()
         self._restore_scroll()
+        if keep_drill is not None:
+            self._reopen_grid_group(keep_drill, drill_scroll)
         self._update_summary()
         self._update_play_button()
+
+    def _reopen_grid_group(self, drill_key, scroll: int):
+        """Open the same Grid tile again after its screen was reloaded."""
+        grouping, key = drill_key
+        if self.view_mode != "grid" or self.grid.grouping != grouping:
+            return
+        self.grid.set_tracks(self.model.visible_tracks(), keep_place=True)
+        self._grid_source = self._current_source
+        group = next((g for g in self.grid.model.groups if g["key"] == key), None)
+        if group is not None:
+            self._open_grid_group(group)
+            self.table.verticalScrollBar().setValue(scroll)
 
     # ---- Each screen remembers its sort and where it was scrolled to ----------------
     # A screen is a Library section, a playlist or Up Next. Sorts are kept in the
@@ -1460,6 +1503,7 @@ class MainWindow(QMainWindow):
         try:
             if saved is not None:
                 header.restoreState(saved)
+                self._hide_new_columns(self._header_key())
             elif layout == "album":
                 self._default_album_layout()
             else:
@@ -1475,6 +1519,18 @@ class MainWindow(QMainWindow):
             self.table.setColumnHidden(i, layout != "album")
         self.table.setColumnHidden(ENABLED_COLUMN, not appearance(self.settings)["show_list_checkboxes"])
         self.table.set_album_mode(layout == "album")
+
+    def _hide_new_columns(self, layout_key: str):
+        """A column layout saved before a column existed: that column starts
+        hidden (once; after that the layout remembers it like any other)."""
+        if layout_key in self._layouts_updated:
+            return
+        self._layouts_updated.add(layout_key)
+        for key in NEW_COLUMNS:
+            if key not in self._known_columns:
+                index = COLUMN_INDEX[key]
+                self.table.setColumnHidden(index, True)
+                self.table.setColumnWidth(index, COLUMNS[index].width)
 
     def _default_album_layout(self):
         header = self.table.horizontalHeader()
@@ -1497,8 +1553,18 @@ class MainWindow(QMainWindow):
         if self.view_mode == "coverflow" and self.cover_flow.isVisible():
             self.cover_flow.set_albums(albums_in_order(self.model.visible_tracks()))
         if self.view_mode == "grid" and not self._drilled:
-            self.grid.set_tracks(self.model.visible_tracks())
+            # The same screen keeps its scroll position and selected tile.
+            same = self._grid_source == self._current_source
+            self.grid.set_tracks(self.model.visible_tracks(), keep_place=same)
+            self._grid_source = self._current_source
         self._update_summary()
+
+    def _play_featured(self, tracks: list[dict], index: int):
+        """Double-clicked a song under "Featured On"."""
+        if tracks:
+            self._playing_source = self._current_source
+            self._play_follows_search = False
+            self.player.play_queue(list(tracks), max(0, index))
 
     def _play_tracks(self, tracks: list[dict]):
         """Play a whole album / artist / genre from the top (Grid, Cover Flow)."""
@@ -1526,10 +1592,16 @@ class MainWindow(QMainWindow):
     def _open_grid_group(self, group: dict):
         """Double-clicked a Grid tile: show just its songs, Album List style."""
         self._drilled = True
+        self._drill_key = (self.grid.grouping, group["key"])
         self.model.set_id_filter({t["id"] for t in group["tracks"]})
         self.drill_back.setText(f"◀ {self.grid.all_label()}")
         self.drill_title.setText(group["title"])
         self.drill_bar.show()
+        featured = []
+        if self.grid.grouping == "artists":
+            featured = featured_on(self.grid.tracks, group["title"],
+                                   {t["id"] for t in group["tracks"]})
+        self.featured.show_songs(featured)
         self.cover_flow.hide()
         self.views.setCurrentIndex(0)
         self._apply_table_layout("album")
@@ -1541,6 +1613,7 @@ class MainWindow(QMainWindow):
     def _leave_drill(self, show_grid: bool):
         self._drilled = False
         self.drill_bar.hide()
+        self.featured.show_songs([])
         self.model.set_id_filter(self._dup_ids)     # back to all (or all duplicates)
         if show_grid:
             self.views.setCurrentIndex(1)
@@ -2021,6 +2094,7 @@ class MainWindow(QMainWindow):
         album_view.ROW_HEIGHT = 23 if large_list else 19
         self.table.verticalHeader().setDefaultSectionSize(album_view.ROW_HEIGHT)
         self.table.setColumnHidden(ENABLED_COLUMN, not look["show_list_checkboxes"])
+        formatting.set_group_compilations(look["group_compilations"])
         if self._table_layout == "album":
             self.table.refresh_album_layout()
         for part in [self.grid, *self.grid.findChildren(QWidget)]:   # repaint in the new colours
@@ -3215,15 +3289,54 @@ class MainWindow(QMainWindow):
         for action in self.view_actions.values():
             action.setEnabled(on_songs)
 
-    def _scan_devices(self):
-        """Notice iPods being plugged in or removed. Cheap: it only reads the
-        list of mounted drives, and reads an iPod's details once, when it appears."""
-        self._scan_cds()
-        self._auto_mount()
-        phones_changed = self._scan_phones()
-        mounted = {mountpoint: (dev, fs) for dev, mountpoint, fs in ipod_device.mounted_filesystems()
-                   if not mountpoint.startswith(("/proc", "/sys", "/dev"))}
-        ipod_mounts = {m for m in mounted if m in self._ipod_mounts or ipod_device.is_ipod(m)}
+    def _probe_state(self) -> dict:
+        """What the background device check needs to know (a copy: it runs on
+        another thread)."""
+        return {"known_discs": set(self._discs), "seen_as_ipods": set(self._ipod_mounts),
+                "known_mountpoints": {ipod.mountpoint for ipod in self._ipods.values()},
+                "phone_names": set(self._phone_names),
+                "phones_waiting": any(not p.storages for p in self._phones.values())}
+
+    def _device_tick(self):
+        """Every 2 seconds: look for devices on another thread, then act on what
+        was found (_probe_done). A check still running (a slow disk) is let finish."""
+        if self._probing:
+            return
+        from luxtunes.core import device_probe
+        from luxtunes.ui import background
+        self._probing = True
+        state, started = self._probe_state(), self._looked_now
+        background.run(lambda: device_probe.everything(**state),
+                       lambda snapshot: self._probe_done(snapshot, started), self)
+
+    def _probe_done(self, snapshot, started: int):
+        self._probing = False
+        if not self._device_timer.isActive():
+            return                                  # closing: nothing more to do
+        if started != self._looked_now:
+            return          # looked again meanwhile (e.g. after an eject): this answer is older
+        if isinstance(snapshot, Exception):
+            log.warning("device check failed: %s", snapshot)
+            return
+        self._scan_devices(snapshot)
+
+    def _scan_devices(self, snapshot=None):
+        """Notice iPods, phones and CDs being plugged in or removed. With a
+        snapshot (device_probe.Snapshot, from the background check), act on it;
+        without one, look now."""
+        from luxtunes.core import device_probe
+        if snapshot is None:
+            self._looked_now += 1
+        self._scan_cds(snapshot)
+        self._auto_mount(snapshot)
+        phones_changed = self._scan_phones(snapshot)
+        if snapshot is None:
+            state = self._probe_state()
+            mounted, ipod_mounts, new_ipods = device_probe.ipods(state["seen_as_ipods"],
+                                                                 state["known_mountpoints"])
+        else:
+            mounted, ipod_mounts, new_ipods = (snapshot.mounted, snapshot.ipod_mounts,
+                                               snapshot.new_ipods)
         if ipod_mounts == self._ipod_mounts:
             if phones_changed:
                 self._forget_missing_source()
@@ -3237,15 +3350,22 @@ class MainWindow(QMainWindow):
                 del self._ipods[key]
                 self._ipods_checked.discard(key)     # plugged in again: offered again
         for mountpoint in ipod_mounts - set(known):
-            dev, fs = mounted[mountpoint]
-            try:
-                ipod = ipod_device.read_ipod(mountpoint, dev, fs)
-            except OSError:
+            if mountpoint in new_ipods:
+                ipod = new_ipods[mountpoint]        # read on the background thread
+            else:                                   # (known when it was read; gone since)
+                dev, fs = mounted[mountpoint]
+                try:
+                    ipod = ipod_device.read_ipod(mountpoint, dev, fs)
+                except OSError:
+                    ipod = None
+            if ipod is None:
                 continue
             self._ipods[ipod.key] = ipod
             ipod_settings.load_device(self.conn, ipod.key, ipod.name, ipod.model_number, ipod.serial)
             self.statusBar().showMessage(f"“{ipod.name}” is connected.", 5000)
-            if ipod.key not in self._ipods_checked:
+            # Read its songs on its own only if it's an Apple device (its USB says so):
+            # any drive with an iPod_Control folder would otherwise go to libgpod.
+            if ipod.key not in self._ipods_checked and ipod.usb_product:
                 self._ipods_checked.add(ipod.key)
                 self._check_ipod_songs(ipod)
         self._forget_missing_source()
@@ -3263,18 +3383,24 @@ class MainWindow(QMainWindow):
         """iPods and phones, by key."""
         return {**self._ipods, **self._phones}
 
-    def _scan_phones(self) -> bool:
+    def _scan_phones(self, snapshot=None) -> bool:
         """Notice Android devices (unlocked, in File transfer mode). True if the
         list changed. A phone's storage shows up only once it's unlocked, so a
         phone without one is looked at again each time."""
-        self._auto_mount_phones()
-        names = android_device.mounted_names()
+        self._auto_mount_phones(snapshot)
         waiting = any(not p.storages for p in self._phones.values())
+        if snapshot is None:
+            names = android_device.mounted_names()
+            found = None
+        else:
+            names, found = snapshot.phone_names, snapshot.phones
         if names == self._phone_names and not waiting:
             return False
+        if found is None:                   # (the background check didn't read them)
+            found = android_device.find_phones()
         self._phone_names = names
         before = {k: sorted(p.storages) for k, p in self._phones.items()}
-        phones = {p.key: p for p in android_device.find_phones()}
+        phones = {p.key: p for p in found}
         if self._sync_worker is not None and self._sync_ipod.key in self._phones \
                 and self._sync_ipod.key in phones:
             phones[self._sync_ipod.key] = self._sync_ipod      # keep the one syncing
@@ -3285,43 +3411,72 @@ class MainWindow(QMainWindow):
         self._phones = phones
         return before != {k: sorted(p.storages) for k, p in phones.items()}
 
-    def _auto_mount_phones(self):
+    def _auto_mount_phones(self, snapshot=None):
         """Open a phone the desktop knows about but didn't open by itself, a few
-        times (it may still be asking whether to allow access)."""
-        waiting = android_device.unmounted_phones()
+        times (it may still be asking whether to allow access). From the
+        background check, the opening happens in the background too."""
+        waiting = android_device.unmounted_phones() if snapshot is None else snapshot.phones_waiting
         for uri in list(self._phone_tries):
             if uri not in waiting:
                 del self._phone_tries[uri]       # unplugged (or open): start afresh next time
         for uri in waiting:
             tries = self._phone_tries.get(uri, 0)
-            if tries < 0 or tries >= self.MOUNT_TRIES:
-                continue                         # ejected here, or given up
+            if tries < 0 or tries >= self.MOUNT_TRIES or uri in self._mounting:
+                continue                         # ejected here, given up, or being opened
             self._phone_tries[uri] = tries + 1
-            android_device.mount(uri)
+            if snapshot is None:
+                android_device.mount(uri)
+            else:
+                self._mount_in_background(uri, lambda u=uri: android_device.mount(u),
+                                          lambda result: None)
 
     MOUNT_TRIES = 5
 
-    def _auto_mount(self):
+    def _auto_mount(self, snapshot=None):
         """Mount a plugged-in iPod that the desktop didn't mount by itself (like
         clicking it in the file manager). Right after it's plugged in the system
         may still be busy with it, so it's tried a few times, one device check
-        (2 s) apart."""
-        if not ipod_device.apple_usb_connected():
+        (2 s) apart. From the background check, mounting happens in the background too."""
+        if snapshot is None:
+            from luxtunes.core import device_probe
+            apple, partitions = device_probe.ipod_candidates()
+        else:
+            apple, partitions = snapshot.apple_usb, snapshot.ipod_partitions
+        if not apple:
             self._mount_tries.clear()
             self._mount_ejected.clear()
             return
-        for partition in ipod_device.unmounted_ipod_partitions():
+        for partition in partitions:
             tries = self._mount_tries.get(partition, 0)
-            if partition in self._mount_ejected or tries >= self.MOUNT_TRIES:
+            if partition in self._mount_ejected or tries >= self.MOUNT_TRIES \
+                    or partition in self._mounting:
                 continue
             self._mount_tries[partition] = tries + 1
-            mountpoint, error = ipod_device.mount(partition)
-            if error is None:
-                # Mounted: if it's later unmounted elsewhere, leave it that way.
-                self._mount_tries[partition] = self.MOUNT_TRIES
-            elif tries + 1 == self.MOUNT_TRIES:
-                self.statusBar().showMessage(
-                    f"Couldn't open the iPod: {error}. Try clicking it in the file manager.", 20000)
+
+            def mounted(result, partition=partition, last=tries + 1 == self.MOUNT_TRIES):
+                error = result if isinstance(result, Exception) else result[1]
+                if error is None:
+                    # Mounted: if it's later unmounted elsewhere, leave it that way.
+                    self._mount_tries[partition] = self.MOUNT_TRIES
+                elif last:
+                    self.statusBar().showMessage(
+                        f"Couldn't open the iPod: {error}. Try clicking it in the file manager.",
+                        20000)
+            if snapshot is None:
+                mounted(ipod_device.mount(partition))
+            else:
+                self._mount_in_background(partition, lambda p=partition: ipod_device.mount(p),
+                                          mounted)
+
+    def _mount_in_background(self, key: str, work, done):
+        """Open an iPod or phone (udisksctl / gio, up to 30 s) off the window's thread."""
+        from luxtunes.ui import background
+        self._mounting.add(key)
+
+        def finished(result):
+            self._mounting.discard(key)
+            done(result)
+        background.run(work, finished, self)
 
     def _device_name(self, ipod) -> str:
         if ipod.key.startswith("android:"):
@@ -3349,7 +3504,7 @@ class MainWindow(QMainWindow):
         self.cover_flow.hide()
         self.device_page.set_device(self.conn, ipod, record)
         self.views.setCurrentWidget(self.device_page)
-        self.search.setEnabled(False)
+        self.search.hide()          # nothing to search on a device's page
         self.summary_label.setText(f"{record.name} — {ipod.model_name or 'iPod'}")
         self._update_device_actions()
 
@@ -3802,20 +3957,23 @@ class MainWindow(QMainWindow):
     # Audio CDs: Import CD
     # ======================================================================
 
-    def _scan_cds(self):
+    def _scan_cds(self, snapshot=None):
         """Notice audio CDs going in and out of the drives (a quick question to
-        each drive), then look up a new disc's names in the background."""
+        each drive), then look up a new disc's names in the background. With a
+        snapshot, use what the background check found."""
+        from luxtunes.core import device_probe
+        drives = device_probe.cds(set(self._discs)) if snapshot is None else snapshot.cds
         changed = False
-        for device in cd.drives():
+        for device, drive in drives.items():
             key = f"cd:{device}"
-            present = cd.audio_disc_present(device)
+            present = drive.present
             if not present and key in self._discs and key != self._import_key:
                 del self._discs[key]                     # ejected (or taken out)
                 self._cd_pending.pop(key, None)
                 self._cd_unreadable.discard(device)
                 changed = True
                 continue
-            if not present and not os.access(device, os.R_OK):
+            if not present and not drive.readable:
                 if device not in self._cd_unreadable:
                     self._cd_unreadable.add(device)
                     self.statusBar().showMessage(
@@ -3825,7 +3983,10 @@ class MainWindow(QMainWindow):
                 continue
             if present and key not in self._discs:
                 try:
-                    disc = cd.blank_disc(device, cd.read_toc(device))
+                    if drive.error is not None:
+                        raise drive.error
+                    toc = drive.toc if drive.toc is not None else cd.read_toc(device)
+                    disc = cd.blank_disc(device, toc)
                 except cd.CdError as error:
                     if device not in self._cd_unreadable:
                         self._cd_unreadable.add(device)
@@ -3972,7 +4133,7 @@ class MainWindow(QMainWindow):
         else:
             self.cd_page.set_status("")
         self.views.setCurrentWidget(self.cd_page)
-        self.search.setEnabled(False)
+        self.search.hide()          # nothing to search on a device's page
         total = sum(t.total_time for t in disc.tracks)
         count = len(disc.tracks)
         self.summary_label.setText(f"{count} song{'s' if count != 1 else ''}, "
@@ -4348,7 +4509,8 @@ class MainWindow(QMainWindow):
             source_track = library.load_track(self.conn, track["id"]) or track
             target = str(convert.target_for(source, to))
             process = subprocess.Popen(
-                convert.command(ffmpeg, source, target, source_track.get("sample_rate"), to),
+                convert.command(ffmpeg, source, target, source_track.get("sample_rate"), to,
+                                convert.bit_rate_for(source_track, to)),
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             while process.poll() is None:        # keep the window responsive meanwhile
                 QApplication.processEvents()
@@ -4572,7 +4734,7 @@ class MainWindow(QMainWindow):
             self._leave_drill(show_grid=False)
         if self._showing_device_page():
             self.views.setCurrentIndex(1 if self.view_mode == "grid" else 0)
-            self.search.setEnabled(True)
+            self.search.show()
         self._end_duplicates()
         tracks = library.load_tracks_by_ids(self.conn, list(problems))
         for track in tracks:
@@ -4931,6 +5093,9 @@ class MainWindow(QMainWindow):
         if s.value("splitter") is not None:
             self.splitter.restoreState(s.value("splitter"))
         if s.value("header_version", 0, type=int) == HEADER_LAYOUT_VERSION:
+            known = s.value("column_keys")
+            self._known_columns = set(str(known).split(",")) if known else \
+                {c.key for c in COLUMNS} - set(NEW_COLUMNS)
             s.beginGroup("columns")
             for group in s.childGroups():
                 for layout in ("list", "album"):
@@ -4945,6 +5110,7 @@ class MainWindow(QMainWindow):
                     self._header_states[f"music/{layout}"] = s.value(f"header_{layout}")
             if self._header_states.get("music/list") is not None:
                 self.table.horizontalHeader().restoreState(self._header_states["music/list"])
+                self._hide_new_columns("music/list")
         if s.value("songs_split") is not None:
             self.songs_split.restoreState(s.value("songs_split"))
 
@@ -5048,6 +5214,7 @@ class MainWindow(QMainWindow):
             if state is not None:
                 s.setValue(f"columns/{key}", state)
         s.setValue("header_version", HEADER_LAYOUT_VERSION)
+        s.setValue("column_keys", ",".join(c.key for c in COLUMNS))
         s.setValue("songs_split", self.songs_split.saveState())
         equalizer.save(self.conn, self.eq_settings)
         if self._mini_player is not None:
