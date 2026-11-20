@@ -18,6 +18,8 @@ import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
 
+from luxtunes.core.paths import make_private
+
 log = logging.getLogger(__name__)
 
 FOLDER = "Backups"
@@ -69,6 +71,7 @@ def restore(conn: sqlite3.Connection, path: Path, today: date | None = None) -> 
     if folder is None:
         raise RestoreError("This library isn't stored in a file.")
     folder.mkdir(parents=True, exist_ok=True)
+    make_private(folder)
     stamp = (today or date.today()).isoformat()
     kept = folder / f"library {stamp} before restore.db"
     n = 2
@@ -77,6 +80,7 @@ def restore(conn: sqlite3.Connection, path: Path, today: date | None = None) -> 
         n += 1
     copy = sqlite3.connect(kept)
     try:
+        make_private(kept)
         conn.backup(copy)
     finally:
         copy.close()
@@ -118,9 +122,11 @@ def weekly(conn: sqlite3.Connection, today: date | None = None) -> Path | None:
     target = folder / f"library {today.isoformat()}.db"
     try:
         folder.mkdir(parents=True, exist_ok=True)
+        make_private(folder)
         partial = target.with_suffix(".db.part")
         copy = sqlite3.connect(partial)
         try:
+            make_private(partial)
             conn.backup(copy)              # consistent even while the library is open
         finally:
             copy.close()

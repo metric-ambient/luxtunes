@@ -49,8 +49,9 @@ def test_grid_albums_sorted_and_tracks_in_album_order():
 
 def test_grid_artists_genres_composers():
     artists = albums.grid_groups(LIBRARY, "artists")
-    assert [g["title"] for g in artists] == ["Alpha", "Bright Harbor", "Slow Orbit", "Zed"]
-    assert artists[1]["subtitle"] == "1 album"
+    # The compilation's songs (by Alpha and Zed) are under Various Artists.
+    assert [g["title"] for g in artists] == ["Bright Harbor", "Slow Orbit", "Various Artists"]
+    assert artists[0]["subtitle"] == "1 album"
     genres = albums.grid_groups(LIBRARY, "genres")
     assert [g["title"] for g in genres] == ["Metal", "Rock", "Unknown Genre"]
     composers = albums.grid_groups(LIBRARY, "composers")
@@ -75,3 +76,48 @@ def test_grid_tabs_for_audiobooks_and_podcasts():
     [unplayed] = albums.grid_groups(episodes, "unplayed")
     assert unplayed["title"] == "The Show" and unplayed["subtitle"] == "1 unplayed episode"
     assert albums.grid_groups(episodes, "podcast_categories")[0]["title"] == "Unknown Category"
+
+
+def test_a_compilation_shows_its_album_artist_if_it_has_one():
+    plain = {"album": "Now 1", "artist": "Alpha", "compilation": 1}
+    credited = {"album": "Lantern Valley I", "artist": "Jo Marsh",
+                "album_artist": "Lantern Valley", "compilation": 1}
+    assert albums.album_subtitle(plain) == "Various Artists"
+    assert albums.album_subtitle(credited) == "Lantern Valley"
+    assert albums.album_subtitle({"artist": "Alpha"}) == "Alpha"
+    assert albums.album_subtitle({}, "Unknown Author") == "Unknown Author"
+
+
+def test_group_compilations_when_browsing():
+    from luxtunes.ui import formatting
+    song = {"album": "Now 1", "artist": "Zed", "compilation": 1, "track_number": 1}
+    credited = dict(song, album_artist="Lantern Valley")
+    plain = {"album": "Solo", "artist": "Zed", "album_artist": "Zed"}
+    try:
+        assert formatting.browse_artist(song) == "Various Artists"
+        assert formatting.browse_artist(credited) == "Lantern Valley"
+        assert albums.grid_artist(song) == "Various Artists"
+        formatting.set_group_compilations(False)
+        assert formatting.browse_artist(credited) == "Zed"       # under its own artist
+        assert albums.grid_artist(credited) == "Zed"
+        assert formatting.browse_artist(plain) == "Zed"
+        rows = sorted([credited, {"artist": "Alpha", "album": "A"}],
+                      key=formatting.sort_key("artist"))
+        assert rows[0]["artist"] == "Alpha"
+    finally:
+        formatting.set_group_compilations(True)
+
+
+def test_featured_on_and_the_name_shown():
+    from luxtunes.ui import formatting
+    songs = [{"id": 1, "name": "Up", "artist": "Mia", "album": "A", "featured_artist": "Ann, Bo"},
+             {"id": 2, "name": "Down", "artist": "Zed", "album": "B", "featured_artist": "ann"},
+             {"id": 3, "name": "Own", "artist": "Ann", "album": "C", "featured_artist": "Ann"},
+             {"id": 4, "name": "Duo", "artist": "Kim", "album": "D",
+              "featured_artist": "Simon & Garfunkel"}]
+    assert [t["id"] for t in albums.featured_on(songs, "Ann", exclude={3})] == [1, 2]
+    assert albums.featured_on(songs, "Simon & Garfunkel")[0]["id"] == 4
+    assert albums.featured_on(songs, "Nobody") == []
+    assert formatting.display_value(songs[0], "name") == "Up (ft. Ann, Bo)"
+    assert formatting.display_value({"name": "Solo"}, "name") == "Solo"
+    assert formatting.featured_names(" a ;b,, c ") == ["a", "b", "c"]

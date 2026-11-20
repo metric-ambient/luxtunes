@@ -5,8 +5,9 @@ own computer.** Play and organize your collection, rip CDs, and sync it to an iP
 Android phone, all without accounts, subscriptions, or anything going online behind your
 back.
 
-> [!WARNING]
-> **About this software.** LuxTunes was written entirely by an AI, Claude Opus 5.5
+> **Disclaimer**
+>
+> LuxTunes was written entirely by an AI, Claude Opus 5.5
 > ("vibe-coded"). For copyright purposes, **metric-ambient is the author** of this software.
 >
 > The code has not been reviewed line by line by a person. It reads and writes your music
@@ -54,7 +55,8 @@ Made for Linux Mint, and it runs on most recent Linux systems.
 - Playlists and live **smart playlists**, plus an **Up Next** queue.
 - **Get Info** for editing details, artwork and lyrics (and show, season and episode for
   movies and TV shows), for one song or many at once. Your edits are written into the
-  files' tags.
+  files' tags. Add **featured artists** and they show after the song's name, "Song (ft.
+  Ann, Bo)", on iPods and the phone too.
 - **Get Track Info Online…** suggests corrections and missing covers from MusicBrainz, and
   **Get Lyrics Online…** fills in lyrics from LRCLIB, both only after you say yes.
 - **Keeps your files tidy:** everything you add is copied (or, if you like, moved) into one
@@ -92,7 +94,8 @@ Made for Linux Mint, and it runs on most recent Linux systems.
   lyrics, playlists and your equalizer go into one `LuxTunes` folder on the phone, which
   any music player can use. With the companion
   [LuxTunes app for Android](https://github.com/metric-ambient/luxtunes-mobile), plays, ratings, playlist changes, equalizer presets,
-  songs added on the phone and details edited there come back at the next sync
+  songs added on the phone, details edited there and a song's own equalizer preset come
+  back at the next sync
   ([how the folder is laid out](docs/android-library-format.md)).
 - Choose to sync everything, everything with only some playlists, or just chosen
   playlists, artists, albums and genres.

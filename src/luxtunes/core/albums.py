@@ -11,6 +11,26 @@ def album_artist_of(track: dict) -> str:
     return track.get("album_artist") or track.get("artist") or ""
 
 
+def album_subtitle(track: dict, fallback: str = "Unknown Artist") -> str:
+    """The artist shown under an album: a compilation shows its Album Artist,
+    or "Various Artists" without one (as iTunes does)."""
+    if track.get("compilation"):
+        return track.get("album_artist") or "Various Artists"
+    return album_artist_of(track) or fallback
+
+
+def grid_artist(track: dict) -> str:
+    """Grid → Artists: who a song is filed under. A compilation's songs go
+    under its Album Artist or "Various Artists" (or, with "Group compilations
+    when browsing" off, their own artist)."""
+    from luxtunes.ui import formatting
+    if track.get("compilation"):
+        if formatting.GROUP_COMPILATIONS:
+            return track.get("album_artist") or "Various Artists"
+        return track.get("artist") or ""
+    return album_artist_of(track)
+
+
 def album_key(track: dict) -> tuple:
     """Two songs belong to the same album if album artist + album match
     (ignoring case). Compilations are grouped by album name alone."""
@@ -50,8 +70,7 @@ def albums_in_order(tracks: list[dict]) -> list[dict]:
             album = albums[key] = {
                 "key": key,
                 "title": track.get("album") or "Unknown Album",
-                "subtitle": "Various Artists" if track.get("compilation")
-                            else (album_artist_of(track) or "Unknown Artist"),
+                "subtitle": album_subtitle(track),
                 "tracks": [],
             }
         album["tracks"].append(track)
@@ -60,6 +79,17 @@ def albums_in_order(tracks: list[dict]) -> list[dict]:
         album["first_track"] = album["tracks"][0]
         album["art_track"] = album["tracks"][0]
     return result
+
+
+def featured_on(tracks: list[dict], artist: str, exclude=frozenset()) -> list[dict]:
+    """The songs among `tracks` that list `artist` as a Featured Artist
+    (ignoring case), in Artist > Album > track order, leaving out the songs
+    whose ids are in `exclude` (the artist's own)."""
+    from luxtunes.ui import formatting
+    wanted = artist.casefold()
+    found = [t for t in tracks if t.get("id") not in exclude and wanted in
+             (n.casefold() for n in formatting.featured_names(t.get("featured_artist")))]
+    return sorted(found, key=formatting.sort_key("artist"))
 
 
 GRID_GROUPINGS = ("albums", "artists", "genres", "composers")
@@ -102,7 +132,7 @@ def grid_groups(tracks: list[dict], by: str) -> list[dict]:
             key = album_key(track)
             title = track.get("album") or (track.get("name") if by == "books" else "") or fallback
         elif by in ("artists", "authors"):
-            name = album_artist_of(track)
+            name = grid_artist(track)
             key, title = name.casefold(), name or ("Unknown Artist" if by == "artists"
                                                    else "Unknown Author")
         elif by in ("genres", "book_categories", "podcast_categories"):
@@ -134,8 +164,7 @@ def grid_groups(tracks: list[dict], by: str) -> list[dict]:
         if by in ("albums", "books"):
             first = group["tracks"][0]
             fallback = "Unknown Artist" if by == "albums" else "Unknown Author"
-            group["subtitle"] = ("Various Artists" if first.get("compilation")
-                                 else album_artist_of(first) or fallback)
+            group["subtitle"] = album_subtitle(first, fallback)
             group["sort"] = (sort_text(group["subtitle"]), sort_text(group["title"]))
         else:
             if podcasts:

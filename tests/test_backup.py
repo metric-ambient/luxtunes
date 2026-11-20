@@ -50,3 +50,14 @@ def test_restoring_a_backup(tmp_path):
     junk.write_text("not a library")
     with pytest.raises(backup.RestoreError):
         backup.check(junk)
+
+
+def test_the_library_and_its_backups_are_yours_only(tmp_path, monkeypatch):
+    import stat
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    conn = db.connect()                                   # the usual place
+    folder = db.default_db_path().parent
+    mode = lambda p: stat.S_IMODE(p.stat().st_mode)
+    assert mode(folder) == 0o700 and mode(db.default_db_path()) == 0o600
+    made = backup.weekly(conn, today=date(2026, 11, 15))
+    assert mode(made) == 0o600 and mode(made.parent) == 0o700

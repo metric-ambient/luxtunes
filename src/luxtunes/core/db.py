@@ -23,7 +23,7 @@ from pathlib import Path
 from luxtunes.core.paths import data_home
 
 # Bump this when the schema changes, and add a step to _migrate().
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS library_info (
@@ -149,10 +149,16 @@ def new_persistent_id() -> str:
 
 def connect(path: str | os.PathLike | None = None) -> sqlite3.Connection:
     """Open (and if needed, create) the library database."""
+    from luxtunes.core.paths import make_private
+    own_folder = not path
     path = Path(path) if path else default_db_path()
     if str(path) != ":memory:":
         path.parent.mkdir(parents=True, exist_ok=True)
+        if own_folder:
+            make_private(path.parent)       # LuxTunes' folder: backups, crash.log, iPod backups
     conn = sqlite3.connect(path)
+    if str(path) != ":memory:":
+        make_private(path)                  # (SQLite gives its -wal/-shm files the same)
     conn.row_factory = sqlite3.Row          # rows behave like dicts: row["name"]
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")  # safer if LuxTunes crashes mid-write
@@ -245,8 +251,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # Timed lyrics (LRC) for highlighting the line being sung.
         if "synced_lyrics" not in {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}:
             conn.execute("ALTER TABLE tracks ADD COLUMN synced_lyrics TEXT")
+    if version < 12:
+        # Featured artists ("a1, a2"), shown after the song's name: "(ft. a1, a2)".
+        if "featured_artist" not in {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}:
+            conn.execute("ALTER TABLE tracks ADD COLUMN featured_artist TEXT")
     # Future schema changes go here:
-    # if version < 12:
+    # if version < 13:
     #     conn.execute("ALTER TABLE tracks ADD COLUMN ...")
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()

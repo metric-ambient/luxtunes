@@ -32,6 +32,7 @@ from luxtunes.core import library
 from luxtunes.core.ipod import gpod, models, plan as ipod_plan, settings as ipod_settings, stats
 from luxtunes.core.ipod.device import IPod, usb_details
 from luxtunes.core.paths import find_file
+from luxtunes.ui.formatting import name_with_featured
 
 log = logging.getLogger(__name__)
 
@@ -224,6 +225,8 @@ def fill_track(t: "gpod.Itdb_Track", song: dict) -> None:
     """Copy one library song's details onto its iPod track."""
     for field_name, key in STRING_MAP.items():
         gpod.set_str(t, field_name, song.get(key))
+    # iPods have no Featured Artist field: it goes after the name, "Song (ft. Ann, Bo)".
+    gpod.set_str(t, "title", name_with_featured(song) or None)
     movie = song.get("media_kind") == "movie"
     tv = song.get("media_kind") == "tvshow"
     t.size = int(song.get("size") or t.size or 0)
@@ -292,6 +295,9 @@ def restore_missing_artwork(db, kept: dict, library_by_dbid: dict, tell,
         return bool(sizes) and not sizes <= db.artwork_formats(pointer)
     missing = [(dbid, pointer) for dbid, pointer in kept.items()
                if library_by_dbid[dbid].get("artwork_count") != 0 and lacking(pointer)]
+    if missing:
+        log.info("artwork: %d of %d songs on the iPod read back without (all) their artwork",
+                 len(missing), len(kept))
     restored = 0
     for i, (dbid, pointer) in enumerate(missing):
         tell("Checking album artwork…", i, len(missing), can_stop=False)
@@ -432,13 +438,16 @@ def back_up_song_list(ipod: IPod, root: Path | None = None) -> Path | None:
     ~/.local/share/luxtunes/iPod backups/<iPod>/<date>, keeping the last few.
     Copying that folder back onto the iPod undoes a sync."""
     import shutil
-    from luxtunes.core.paths import data_home
+    from luxtunes.core.paths import data_home, make_private
     source = ipod.control / "iTunes"
     if not source.is_dir():
         return None
-    folder = (root or data_home() / "luxtunes" / "iPod backups") / ipod.key
+    backups = root or data_home() / "luxtunes" / "iPod backups"
+    folder = backups / ipod.key
     target = folder / datetime.now().strftime("%Y-%m-%d %H%M%S")
     try:
+        folder.mkdir(parents=True, exist_ok=True)
+        make_private(backups)                # only you can open them
         shutil.copytree(source, target)
     except OSError as error:
         log.warning("couldn't back up the iPod's song list: %s", error)

@@ -111,7 +111,10 @@ per star), `rating_computed` (1 if the rating is the album's, not set for this s
 percentage of the playing volume), `equalizer`, `loudness` (Sound Check's correction in
 dB for a −18 LUFS target, at most +6; NULL when not known yet), `synced_lyrics` (timed
 lyrics in LRC form, `[mm:ss.xx]line`, from LuxTunes 0.8.5; NULL when there are none; the
-words match `lyrics`, so a player can highlight the line being sung), `show`, `season`,
+words match `lyrics`, so a player can highlight the line being sung), `featured_artist`
+(from LuxTunes 0.9.0: the song's featured artists as typed, e.g. "Ann, Bo & Cy; Dee",
+split at commas and semicolons only and shown "Song (ft. Ann, Bo & Cy, Dee)"; NULL when
+there are none), `show`, `season`,
 `episode_number`, the `sort_*` names, `enabled`, `bpm`, `kind` (e.g. "MPEG audio file")
 and `purchased`. That's every detail a smart playlist rule can test. Dates are UTC,
 written as `YYYY-MM-DDTHH:MM:SSZ`.
@@ -186,7 +189,8 @@ added on the phone and song details edited there; see below.
 "edited_tracks": [
   {"id": "1A2B3C4D5E6F7081", "album": "Blue (Remastered)", "year": 1971},
   {"id": "00FF00FF00FF00FF", "artist": "Someone", "track_number": 3, "track_count": 10,
-   "compilation": 0}
+   "compilation": 0},
+  {"id": "0A0B0C0D0E0F1011", "equalizer": "Jazz"}
 ]
 ```
 
@@ -194,10 +198,19 @@ added on the phone and song details edited there; see below.
   only the details that changed, merged if it was edited more than once; the latest
   value wins.
 - Text: `name`, `artist`, `album_artist`, `album`, `genre`, `composer`, `grouping`,
-  `comments`; `""` clears it (not allowed for `name`). Whole numbers: `year`,
+  `comments`, `featured_artist` (LuxTunes 0.9.0 and newer); `""` clears it (not allowed
+  for `name`). Whole numbers: `year`,
   `track_number`, `track_count`, `disc_number`, `disc_count` (`0` means none) and
   `compilation` (`0` or `1`). Other keys are ignored.
-- For the same `library_id`, LuxTunes saves them after `added_tracks` and before plays,
+- `equalizer` (LuxTunes 0.9.0 and newer; the phone's Set EQ…): the song's own preset, by
+  name as in `equalizer_presets` (case doesn't matter; LuxTunes stores its own spelling).
+  `""` means None: the song follows the equalizer's main setting. A name that isn't a
+  preset any more (deleted on the computer, say) clears the song's preset instead of
+  failing. The `"equalizer"` section of the same file is applied first, so a preset just
+  made on the phone can be used. It lives only in the library, not the file's tags, and
+  comes back in `tracks.equalizer` in the next `library.db`.
+- For the same `library_id`, LuxTunes saves them after `added_tracks` and the
+  `"equalizer"` section, and before plays,
   ratings and playlists, exactly as Get Info on the computer would: a sort name is
   cleared when its field changes, the details are written into the song's file, and
   `date_modified` is set. The phone's value wins over one changed on the computer since

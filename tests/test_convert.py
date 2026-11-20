@@ -139,3 +139,26 @@ def test_conversion_copies_stay_beside_the_original_and_can_replace_it(tmp_path)
     assert made["play_count"] == 7
     items = [r[0] for r in conn.execute("SELECT track_id FROM playlist_items")]
     assert items == [copy_id]
+
+
+def test_a_lossy_original_is_never_re_encoded_above_its_own_bit_rate():
+    mp3 = {"location": "/x/a.mp3", "kind": "MPEG audio file", "bit_rate": 120}
+    aac = {"location": "/x/a.m4a", "kind": "AAC audio file", "bit_rate": 256}
+    low_aac = {"location": "/x/b.m4a", "kind": "AAC audio file", "bit_rate": 125}
+    flac = {"location": "/x/a.flac", "kind": "FLAC audio file", "bit_rate": 900}
+    alac = {"location": "/x/a.m4a", "kind": "Apple Lossless audio file", "bit_rate": 800}
+    assert convert.bit_rate_for(mp3, "aac") == 128          # not 256
+    assert convert.bit_rate_for(aac, "mp3") == 256          # not 320
+    assert convert.bit_rate_for(low_aac, "mp3") == 128
+    assert convert.bit_rate_for(flac, "mp3") == 320
+    assert convert.bit_rate_for(alac, "mp3") == 320
+    assert convert.bit_rate_for({"location": "/x/a.mp3"}, "aac") == 256   # rate unknown
+    assert "128k" in convert.command("ffmpeg", "a.mp3", "a.m4a", 44100, "aac", 128)
+
+
+def test_an_ogg_for_the_ipod_is_not_inflated():
+    from luxtunes.core.ipod import plan
+    from luxtunes.core.ipod.settings import SyncSettings
+    settings = SyncSettings()
+    assert plan.transfer_kbps({"location": "/x/a.opus", "bit_rate": 96}, settings) == 96
+    assert plan.transfer_kbps({"location": "/x/a.flac", "bit_rate": 900}, settings) == plan.UNPLAYABLE_KBPS

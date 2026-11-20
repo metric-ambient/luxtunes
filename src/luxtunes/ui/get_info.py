@@ -44,6 +44,7 @@ from luxtunes.core import library
 from luxtunes.core.paths import find_file
 from luxtunes.core.tags import UNCHANGED, TagError, read_details
 from luxtunes.ui import formatting
+from luxtunes.ui.tab_memory import remember_tab
 
 IMAGE_FILTER = "Images (*.jpg *.jpeg *.png *.bmp *.gif *.webp);;All files (*)"
 MAX_ART_SIDE = 2000         # pasted/added pictures are scaled down to at most this
@@ -424,7 +425,6 @@ class InfoDialog(QDialog):
         self.tabs.addTab(self.lyrics, "Lyrics")
         self.artwork = ArtworkEditor()
         self.tabs.addTab(self.artwork, "Artwork")
-        self.tabs.setCurrentIndex(1)     # Info, when opened from the list
         self.tabs.currentChanged.connect(lambda _: self._sync_sorting_names())
 
         self.previous_button = QPushButton("Previous")
@@ -447,6 +447,8 @@ class InfoDialog(QDialog):
         layout.addWidget(self.tabs, 1)
         layout.addLayout(buttons)
         self._load()
+        # After _load, so the Video tab is shown or hidden for this song first.
+        remember_tab(self.tabs, "info", "Info")
 
     # ---- Tabs ------------------------------------------------------------------
 
@@ -500,7 +502,10 @@ class InfoDialog(QDialog):
     def _info_tab(self) -> QWidget:
         page = QWidget()
         self.edits = {key: QLineEdit() for key in ("name", "artist", "album_artist", "album",
-                                                   "grouping", "composer")}
+                                                   "grouping", "composer", "featured_artist")}
+        self.edits["featured_artist"].setPlaceholderText("Names, separated by commas")
+        self.edits["featured_artist"].setToolTip(
+            "Shown after the song's name: “Song (ft. Ann, Bo)”.")
         for key in ("year", "track_number", "track_count", "disc_number", "disc_count", "bpm"):
             self.edits[key] = _number_edit(56 if key == "year" else 44)
         self.comments = QPlainTextEdit()
@@ -523,12 +528,13 @@ class InfoDialog(QDialog):
         place("Disc Number", self._pair("disc_number", "disc_count"), 6, 1)
         place("Grouping", self.edits["grouping"], 8, 0)
         place("BPM", self.edits["bpm"], 8, 1)
-        place("Composer", self.edits["composer"], 10, 0, 2)
-        place("Comments", self.comments, 12, 0, 2)
-        place("Genre", self.genre, 14, 0)
-        grid.addWidget(self.compilation, 15, 1)
+        place("Featured Artist", self.edits["featured_artist"], 10, 0, 2)
+        place("Composer", self.edits["composer"], 12, 0, 2)
+        place("Comments", self.comments, 14, 0, 2)
+        place("Genre", self.genre, 16, 0)
+        grid.addWidget(self.compilation, 17, 1)
         grid.setColumnStretch(0, 1)
-        grid.setRowStretch(16, 1)
+        grid.setRowStretch(18, 1)
         return page
 
     def _video_tab(self) -> QWidget:
@@ -798,6 +804,7 @@ class MultiInfoDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(tabs, 1)
         layout.addLayout(buttons)
+        remember_tab(tabs, "multi_info", "Info")
 
     def _common(self, key):
         """The value every selected song shares, or None if they differ."""
@@ -829,12 +836,16 @@ class MultiInfoDialog(QDialog):
         return self._field(key, edit, lambda: edit.text().strip(), edit.textEdited)
 
     def _yes_no(self, key) -> QWidget:
+        """Yes or No. When the songs differ it starts blank, but blank isn't
+        one of the choices (as in iTunes)."""
         combo = QComboBox()
-        combo.addItems(["", "Yes", "No"])
+        combo.addItems(["Yes", "No"])
         common = self._common(key)
         if common != "" and common is not None:
-            combo.setCurrentIndex(1 if common else 2)
-        return self._field(key, combo, lambda: combo.currentIndex() == 1, combo.activated)
+            combo.setCurrentIndex(0 if common else 1)
+        else:
+            combo.setCurrentIndex(-1)                 # mixed: shown blank
+        return self._field(key, combo, lambda: combo.currentIndex() == 0, combo.activated)
 
     def _info_tab(self) -> QWidget:
         page = QWidget()
@@ -869,27 +880,28 @@ class MultiInfoDialog(QDialog):
         self.art_box = ArtworkBox()
         place("Artwork", self._field("artwork", self.art_box, lambda: self.art_box.image,
                                      self.art_box.changed), 8, 1)
+        place("Featured Artist", self._line("featured_artist"), 10, 0)
         comments = QPlainTextEdit()
         comments.setMaximumHeight(60)
         common = self._common("comments")
         if common:
             comments.setPlainText(common)
         place("Comments", self._field("comments", comments, lambda: comments.toPlainText().strip(),
-                                      comments.textChanged), 10, 0)
+                                      comments.textChanged), 12, 0)
         rating = StarRating()
         common = self._common("rating")
         if common:
             rating.setValue(common)
-        place("Rating", self._field("rating", rating, rating.value, rating.changed), 10, 1)
+        place("Rating", self._field("rating", rating, rating.value, rating.changed), 12, 1)
         genre = QComboBox()
         genre.setEditable(True)
         genre.addItems([""] + library.all_genres(self.conn))
         genre.setCurrentText(_text(self._common("genre")))
         place("Genre", self._field("genre", genre, lambda: _combo_text(genre),
-                                   genre.currentTextChanged), 12, 0)
-        place("Part of a compilation", self._yes_no("compilation"), 12, 1)
+                                   genre.currentTextChanged), 14, 0)
+        place("Part of a compilation", self._yes_no("compilation"), 14, 1)
         grid.setColumnStretch(0, 1)
-        grid.setRowStretch(14, 1)
+        grid.setRowStretch(16, 1)
         return page
 
     def _video_tab(self) -> QWidget:

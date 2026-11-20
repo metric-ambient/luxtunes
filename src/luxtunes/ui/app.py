@@ -73,12 +73,16 @@ def _record_crashes(db_path: str | None) -> None:
     import signal
     if db_path == ":memory:":
         return
+    from luxtunes.core.paths import make_private, trim_log
     folder = (Path(db_path).expanduser().parent if db_path else db.default_db_path().parent)
+    path = folder / "crash.log"
     try:
         folder.mkdir(parents=True, exist_ok=True)
-        log = open(folder / "crash.log", "a", encoding="utf-8")   # open for the app's lifetime
+        trim_log(path)
+        log = open(path, "a", encoding="utf-8")   # open for the app's lifetime
     except OSError:
         return
+    make_private(path)
     faulthandler.enable(log, all_threads=True)
     if hasattr(faulthandler, "register") and hasattr(signal, "SIGUSR1"):
         faulthandler.register(signal.SIGUSR1, log, all_threads=True)

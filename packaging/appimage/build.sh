@@ -14,7 +14,9 @@ HERE="$ROOT/packaging/appimage"
 WORK="$ROOT/build/appimage"
 APPDIR="$WORK/LuxTunes.AppDir"
 OUT="$ROOT/dist/LuxTunes-x86_64.AppImage"
-TOOL_URL="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+# appimagetool 1.9.1, checked against its SHA-256 (the build stops if it doesn't match).
+TOOL_URL="https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage"
+TOOL_SHA256="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
 
 rm -rf "$WORK"                      # only this script's own build folder
 mkdir -p "$WORK" "$ROOT/dist"
@@ -56,6 +58,10 @@ ln -s luxtunes.png "$APPDIR/.DirIcon"
 echo "3/3  Packing the AppImage"
 TOOL="$WORK/appimagetool"
 curl -fsSL -o "$TOOL" "$TOOL_URL"
+echo "$TOOL_SHA256  $TOOL" | sha256sum -c --quiet - || {
+    echo "appimagetool's checksum doesn't match: not using it." >&2
+    exit 1
+}
 chmod +x "$TOOL"
 ARCH=x86_64 "$TOOL" --appimage-extract-and-run "$APPDIR" "$OUT"
 echo "Built $OUT"

@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 from luxtunes.core import add_files, cd, convert, encoders, library, organize
+from luxtunes.ui.tab_memory import remember_tab
 
 # Look-and-feel choices, kept in the app's settings (QSettings), with their defaults.
 APPEARANCE = {
@@ -50,6 +51,7 @@ APPEARANCE = {
     "grid_dark": True,              # Grid View: dark / light
     "show_source_icons": True,
     "show_list_checkboxes": True,
+    "group_compilations": True,     # a compilation's songs stay together when sorting/browsing by artist
     "import_done_sound": True,      # play the desktop's notification sound after a CD import
     "sync_done_sound": True,        # ... and after a device sync
     # Playback tab
@@ -100,6 +102,7 @@ class PreferencesDialog(QDialog):
         tabs.addTab(self._general_tab(), "General")
         tabs.addTab(self._playback_tab(), "Playback")
         tabs.addTab(self._advanced_tab(), "Advanced")
+        remember_tab(tabs, "preferences", "General")
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
                                    | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self._save)
@@ -155,6 +158,13 @@ class PreferencesDialog(QDialog):
         grid.addWidget(self.list_checkboxes, 1, 2)
         grid.addWidget(QLabel("Grid View:"), 2, 0, Qt.AlignmentFlag.AlignRight)
         grid.addWidget(self.grid_view, 2, 1)
+        self.group_compilations = QCheckBox("Group compilations when browsing")
+        self.group_compilations.setChecked(look["group_compilations"])
+        self.group_compilations.setToolTip(
+            "On: a compilation's songs stay together under its Album Artist (or Various "
+            "Artists) when you sort or browse by artist.\nOff: each song is listed under "
+            "its own artist.")
+        grid.addWidget(self.group_compilations, 2, 2)
         grid.setColumnStretch(3, 1)
 
         self.insert_action = QComboBox()
@@ -368,4 +378,5 @@ class PreferencesDialog(QDialog):
         s.setValue("prefs/grid_dark", bool(self.grid_view.currentData()))
         s.setValue("prefs/show_source_icons", self.source_icons.isChecked())
         s.setValue("prefs/show_list_checkboxes", self.list_checkboxes.isChecked())
+        s.setValue("prefs/group_compilations", self.group_compilations.isChecked())
         self.accept()

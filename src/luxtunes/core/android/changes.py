@@ -9,7 +9,8 @@ Format version 2 (version 1 files are still read the same way):
      "equalizer": {"on", "preset", "manual": {"preamp", "bands"},
                    "presets": [{"name", "preamp", "bands"}]},   (optional)
      "added_tracks": [{"id", "path", "name", "artist", ..., "date_added"}],  (optional)
-     "edited_tracks": [{"id", "album": "...", "year": 1971, ...}]}  (optional)
+     "edited_tracks": [{"id", "album": "...", "year": 1971, "equalizer": "Jazz", ...}]}
+                                                                         (optional)
 
 added_tracks are songs added on the phone: copied into the library at the
 next sync under the phone's id (see sync._import_phone_songs). edited_tracks
@@ -50,9 +51,11 @@ ADDED_NUMBERS = ("year", "track_number", "track_count", "disc_number", "disc_cou
                  "total_time", "bit_rate", "compilation")
 # What the phone's Get Info can change. Text "" clears it; a number 0 means none.
 EDITED_TEXT = ("name", "artist", "album_artist", "album", "genre", "composer", "grouping",
-               "comments")
+               "comments", "featured_artist")
 EDITED_NUMBERS = ("year", "track_number", "track_count", "disc_number", "disc_count",
                   "compilation")
+# The phone's Set EQ…: the song's own equalizer preset, by name ("" = None).
+EDITED_PRESET = "equalizer"
 
 
 @dataclass
@@ -216,7 +219,7 @@ def _edited(entry, problems: list[str]) -> EditedTrack | None:
         problems.append(f"Song details edited on the phone skipped ({pid or 'no id'}): "
                         "not understood.")
         return None
-    fields = {k: entry[k] for k in (*EDITED_TEXT, *EDITED_NUMBERS) if k in entry}
+    fields = {k: entry[k] for k in (*EDITED_TEXT, *EDITED_NUMBERS, EDITED_PRESET) if k in entry}
     return EditedTrack(pid.upper(), fields, raw=entry)
 
 
