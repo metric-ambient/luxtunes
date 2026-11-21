@@ -59,6 +59,7 @@ from luxtunes import __version__
 from luxtunes.core import (add_files, artwork, cd, convert, encoders, equalizer, library, organize,
                            smart, tag_sync, trash)
 from luxtunes.core import edits
+from luxtunes.core import radio
 from luxtunes.core.tags import UNCHANGED, TagError
 from luxtunes.core.paths import file_uri, find_file, nearest_existing_folder
 from luxtunes.importer.itunes_xml import import_library
@@ -82,6 +83,8 @@ from luxtunes.core.ipod import settings as ipod_settings
 from luxtunes.ui.equalizer_window import EqualizerWindow
 from luxtunes.ui.get_info import InfoDialog, MultiInfoDialog
 from luxtunes.ui.featured_panel import FeaturedPanel
+from luxtunes.ui.radio_ui import OpinionDelegate, RadioBar
+from luxtunes.ui.genre_completer import FIELDS as SUGGESTED, FieldDelegate
 from luxtunes.ui.grid_view import GridView
 from luxtunes.ui.view_icons import view_icons
 from luxtunes.ui.playlist_window import PlaylistWindow
@@ -96,6 +99,8 @@ from luxtunes.ui.track_model import (
     COLUMN_INDEX,
     FIXED_COLUMNS,
     NAME_COLUMN,
+    RADIO_FROM_COLUMN,
+    RADIO_OPINION_COLUMN,
     COLUMNS,
     ENABLED_COLUMN,
     RATING_COLUMN,
@@ -104,6 +109,8 @@ from luxtunes.ui.track_model import (
 from luxtunes.ui.widgets import (
     SOURCE_MOVIES,
     SOURCE_MUSIC,
+    SOURCE_RADIO,
+    SOURCE_RADIO_LIKES,
     SOURCE_UP_NEXT,
     playlist_icon,
     ArtworkPane,
@@ -120,7 +127,7 @@ log = logging.getLogger(__name__)
 HEADER_LAYOUT_VERSION = 3  # 2: all columns added; 3: Album List columns
 # Columns added since layout version 3. They go at the end of COLUMNS (so a
 # layout saved before still lines up) and start hidden in such a layout.
-NEW_COLUMNS = ("featured_artist",)
+NEW_COLUMNS = ("featured_artist", "radio_opinion", "radio_from")
 
 VIEW_MODES = ("list", "album", "grid", "coverflow")
 VIEW_TIPS = ("List", "Album List", "Grid", "Cover Flow")
@@ -393,6 +400,11 @@ class MainWindow(QMainWindow):
         self.table.setItemDelegateForColumn(RATING_COLUMN, RatingDelegate(self.table))
         self.table.setItemDelegateForColumn(
             ALBUM_RATING_COLUMN, RatingDelegate(self.table, key="album_rating", editable=False))
+        self.opinion_delegate = OpinionDelegate(self.table)  # Radio: ♥ and ⊘ in front of each song
+        self.table.setItemDelegateForColumn(RADIO_OPINION_COLUMN, self.opinion_delegate)
+        for field in SUGGESTED:                              # suggestions while editing a cell
+            self.table.setItemDelegateForColumn(COLUMN_INDEX[field], FieldDelegate(
+                field, lambda f=field: library.field_values(self.conn, f), self.table))
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         # Sideways by pixels: only the strip that comes into view is drawn, instead of
         # the whole list again for every column it jumps.
@@ -494,6 +506,8 @@ class MainWindow(QMainWindow):
         right_layout.setSpacing(0)
         right_layout.addWidget(self.views, 1)
         right_layout.addWidget(self.dup_bar)
+        self.radio_bar = RadioBar()              # PLAYING → Radio: Save as Playlist, Refresh...
+        right_layout.addWidget(self.radio_bar)
 
         # ---- Put it together ------------------------------------------------
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -608,6 +622,8 @@ class MainWindow(QMainWindow):
             "Hide Equalizer" if self._eq_window is not None and self._eq_window.isVisible()
             else "Show Equalizer"))
         view_menu.addSeparator()
+        self._action(view_menu, "Radio Mix Likes && Dislikes", self._show_radio_likes)   # && shows "&"
+        view_menu.addSeparator()
         self._action(view_menu, "Pop-Out Player", self._open_art_window)
         self._action(view_menu, "Mini Player", self._open_mini_player, "Ctrl+Shift+M")
         view_menu.addSeparator()
@@ -716,6 +732,12 @@ class MainWindow(QMainWindow):
         self.grid.grouping_changed.connect(self._update_summary)
 
         self.player.track_started.connect(self._on_track_started)
+        self.player.track_started.connect(lambda *_: self._top_up_radio())
+        self.opinion_delegate.clicked.connect(self._on_radio_opinion)
+        self.radio_bar.save_clicked.connect(self._save_radio)
+        self.radio_bar.refresh_clicked.connect(lambda: self._refresh_radio())
+        self.radio_bar.discover_toggled.connect(lambda on: self._refresh_radio(discover=on))
+        self.radio_bar.likes_clicked.connect(self._show_radio_likes)
         self.player.track_finished.connect(self._on_track_finished)
         self.player.track_skipped.connect(self._on_track_skipped)
         self.player.playing_changed.connect(self._on_playing_changed)
@@ -760,7 +782,9 @@ class MainWindow(QMainWindow):
         self.sidebar.populate(playlists, has_movies, theme.section_color(self.dark_action.isChecked()),
                               len(self.player.up_next), devices, has_tv,
                               look["show_podcasts"], look["show_audiobooks"])
-        if not self.sidebar.select_source(self._current_source or SOURCE_MUSIC):
+        if self._current_source == SOURCE_RADIO_LIKES:
+            self.show_source(SOURCE_RADIO_LIKES)        # it has no sidebar item: shown again
+        elif not self.sidebar.select_source(self._current_source or SOURCE_MUSIC):
             self.sidebar.select_source(SOURCE_MUSIC)
         if library.count_tracks(self.conn, "music") == 0:
             self.statusBar().showMessage(
@@ -778,6 +802,7 @@ class MainWindow(QMainWindow):
         self._remember_scroll()
         self._current_source = source
         self._end_duplicates()
+        self.radio_bar.hide()
         if source[0] == "device":
             self._show_device(source[1])
             return
@@ -804,6 +829,20 @@ class MainWindow(QMainWindow):
             sort_column = -1  # queue order
             self.search.setPlaceholderText("Search Up Next")
             self.grid.set_section("music")
+        elif kind == "radio":
+            tracks = radio.tracks(self.conn)
+            sort_column = -1  # the radio's order
+            self.search.setPlaceholderText("Search Radio Mix")
+            self.grid.set_section("music")
+            current = radio.current(self.conn)
+            self.radio_bar.show_radio(current.title if current else None, len(tracks),
+                                      bool(current and current.discover))
+        elif source == SOURCE_RADIO_LIKES:
+            tracks = radio.feedback_tracks(self.conn)
+            sort_column = ARTIST_COLUMN
+            self.search.setPlaceholderText("Search Likes & Dislikes")
+            self.grid.set_section("music")
+            self.radio_bar.show_likes(len(tracks))
         else:
             if not self.conn.execute("SELECT 1 FROM playlists WHERE id = ?", (value,)).fetchone():
                 self.reload_library()                  # deleted meanwhile (e.g. by a sync)
@@ -868,6 +907,10 @@ class MainWindow(QMainWindow):
             return f"library/{value}"
         if kind == "queue":
             return "queue"
+        if source == SOURCE_RADIO:
+            return "radio"
+        if source == SOURCE_RADIO_LIKES:
+            return "radio_likes"
         if kind == "playlist":
             row = self.conn.execute("SELECT persistent_id FROM playlists WHERE id = ?",
                                     (value,)).fetchone()
@@ -1487,8 +1530,11 @@ class MainWindow(QMainWindow):
         self._restore_columns()
 
     def _use_column_group(self, source):
-        """Each Library section has its own columns; playlists and Up Next use Music's."""
-        group = source[1] if source and source[0] == "library" else "music"
+        """Each Library section has its own columns; playlists and Up Next use Music's,
+        Radio and its Likes & Dislikes have their own (with the ♥ ⊘ column)."""
+        group = source[1] if source and source[0] == "library" else \
+            "radio" if source == SOURCE_RADIO else \
+            "radio_likes" if source == SOURCE_RADIO_LIKES else "music"
         if group == self._column_group:
             return
         self._header_states[self._header_key()] = self.table.horizontalHeader().saveState()
@@ -1517,6 +1563,17 @@ class MainWindow(QMainWindow):
             self._automatic_sort = False
         for i in (ALBUM_GROUP_COLUMN, ALBUM_TRACK_COLUMN):   # album columns only in Album List
             self.table.setColumnHidden(i, layout != "album")
+        # ♥ ⊘ only on Radio and its Likes & Dislikes (first, after the checkbox), and
+        # From Radio only on Likes & Dislikes.
+        radio_screen = self._column_group in ("radio", "radio_likes")
+        for i, shown in ((RADIO_OPINION_COLUMN, radio_screen),
+                         (RADIO_FROM_COLUMN, self._column_group == "radio_likes")):
+            if shown and self.table.isColumnHidden(i):
+                self.table.setColumnWidth(i, COLUMNS[i].width)
+                if saved is None and i == RADIO_OPINION_COLUMN:
+                    header.moveSection(header.visualIndex(i),
+                                       header.visualIndex(ENABLED_COLUMN) + 1)
+            self.table.setColumnHidden(i, not shown)
         self.table.setColumnHidden(ENABLED_COLUMN, not appearance(self.settings)["show_list_checkboxes"])
         self.table.set_album_mode(layout == "album")
 
@@ -2299,6 +2356,12 @@ class MainWindow(QMainWindow):
             clear = menu.addAction("Clear Up Next", lambda: self.player.remove_from_up_next(
                 list(range(len(self.player.up_next)))))
             clear.setEnabled(bool(self.player.up_next))
+        elif source == SOURCE_RADIO:
+            current = radio.current(self.conn)
+            for label, slot in (("Save as Playlist", self._save_radio),
+                                ("Refresh", lambda: self._refresh_radio())):
+                menu.addAction(label, slot).setEnabled(current is not None)
+            menu.addAction("Radio Mix Likes && Dislikes", self._show_radio_likes)
         elif source[0] == "device" and source[1].startswith("cd:"):
             key = source[1]
             busy = self._import_key == key
@@ -2691,11 +2754,20 @@ class MainWindow(QMainWindow):
         menu.addAction(f"Play “{play_label}”", play)
         if self._current_source == SOURCE_UP_NEXT:
             menu.addAction("Remove from Queue", lambda: self._delete_tracks(tracks))
-        else:
+        elif self._current_source == SOURCE_RADIO:
+            menu.addAction("Remove from Radio Mix", lambda: self._delete_tracks(tracks))
+        elif self._current_source == SOURCE_RADIO_LIKES:
+            menu.addAction("Set Back to Neutral", lambda: self._delete_tracks(tracks))
+        if self._current_source != SOURCE_UP_NEXT:
             plain = lambda: [{k: v for k, v in t.items() if not k.startswith("_")} for t in tracks]
             # Add to Queue: these play next; Add to End of Queue: after everything queued.
             menu.addAction("Add to Queue", lambda: self.player.add_to_up_next(plain(), first=True))
             menu.addAction("Add to End of Queue", lambda: self.player.add_to_up_next(plain()))
+        if (clicked.get("media_kind") or "music") == "music" and clicked.get("id") is not None:
+            start = menu.addMenu("Start Radio Mix")
+            start.addAction("From This Song", lambda: self._start_radio("song", clicked))
+            start.addAction("From This Album", lambda: self._start_radio("album", clicked))
+            start.addAction("From This Artist", lambda: self._start_radio("artist", clicked))
         menu.addSeparator()
 
         menu.addAction("Get Info", self._get_info)
@@ -2726,9 +2798,10 @@ class MainWindow(QMainWindow):
         menu.addMenu(self._show_in_playlist_menu(menu, clicked))
         menu.addSeparator()
 
-        delete = menu.addAction("Delete", lambda: self._delete_tracks(tracks))
-        playlist = self._current_playlist()
-        delete.setEnabled(not (playlist and playlist["is_smart"]))  # smart lists fill themselves
+        if self._current_source not in (SOURCE_RADIO, SOURCE_RADIO_LIKES):
+            delete = menu.addAction("Delete", lambda: self._delete_tracks(tracks))
+            playlist = self._current_playlist()
+            delete.setEnabled(not (playlist and playlist["is_smart"]))  # smart lists fill themselves
         all_unchecked = all(not t.get("enabled", 1) for t in tracks)
         menu.addAction("Check Selection" if all_unchecked else "Uncheck Selection",
                        lambda: self._set_checked(tracks, all_unchecked))
@@ -3163,6 +3236,14 @@ class MainWindow(QMainWindow):
 
         if self._current_source == SOURCE_UP_NEXT:
             self.player.remove_from_up_next([t["_queue_index"] for t in tracks])
+            return
+        if self._current_source == SOURCE_RADIO:          # off the radio, not out of the library
+            self._remove_from_radio([t["id"] for t in tracks])
+            return
+        if self._current_source == SOURCE_RADIO_LIKES:    # back to neutral
+            for track in tracks:
+                radio.set_opinion(self.conn, track["id"], 0)
+            self.show_source(SOURCE_RADIO_LIKES)
             return
 
         playlist = self._current_playlist()
@@ -4648,6 +4729,95 @@ class MainWindow(QMainWindow):
                 self.player.forget_tracks({original["id"]})
                 convert.replace_original(self.conn, original["id"], copies[original["id"]])
 
+    # ---- Radio (PLAYING → Radio; core/radio.py picks the songs) -------------------------
+
+    def _start_radio(self, kind: str, track: dict):
+        """Right-click → Start Radio → From This Song / Album / Artist: a new radio
+        replaces the old one, is shown, and starts playing."""
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            started = radio.start(self.conn, kind, track)
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._current_source = None                  # a new radio: no search, from the top
+        self.sidebar.select_source(SOURCE_RADIO)
+        if self._current_source != SOURCE_RADIO:     # (Radio was already selected)
+            self.show_source(SOURCE_RADIO)
+        if len(started.track_ids) <= 1:
+            self.statusBar().showMessage(
+                "Not many related songs were found. Giving songs a genre helps Radio Mix find more.", 8000)
+        if self.model.rowCount():
+            self._play_row(0)
+
+    def _radio_changed(self):
+        """The radio's songs changed: what plays next follows, and the list on show."""
+        if self._playing_source == SOURCE_RADIO and self.player.current is not None:
+            self.player.rescope(radio.tracks(self.conn))
+        if self._current_source == SOURCE_RADIO:
+            self.show_source(SOURCE_RADIO)
+
+    def _top_up_radio(self):
+        """Near the end of the radio: more related songs are added, so it keeps going."""
+        if self._playing_source != SOURCE_RADIO or self.player.remaining() > radio.TOP_UP_WHEN:
+            return
+        if radio.extend(self.conn):
+            self._radio_changed()
+
+    def _remove_from_radio(self, track_ids: list[int]):
+        """Off the radio (Delete, Remove from Radio, or ⊘): counts as not
+        interested (a dislike). The song playing is skipped first."""
+        playing = self.player.current
+        for track_id in track_ids:
+            radio.set_opinion(self.conn, track_id, -1)
+        radio.remove(self.conn, track_ids)
+        if playing is not None and playing["id"] in track_ids and self._playing_source == SOURCE_RADIO:
+            self.player.next()                       # counts as a skip
+        self._radio_changed()
+
+    def _on_radio_opinion(self, track: dict, which: str):
+        """♥ or ⊘ clicked. Clicking the one already chosen sets the song back to neutral."""
+        now = track.get("radio_opinion") or 0
+        if which == "like":
+            opinion = 0 if now > 0 else 1
+        else:
+            opinion = 0 if now < 0 else -1
+        radio.set_opinion(self.conn, track["id"], opinion)
+        if self._current_source == SOURCE_RADIO_LIKES:
+            self.show_source(SOURCE_RADIO_LIKES)
+        elif opinion < 0:
+            self._remove_from_radio([track["id"]])   # not interested: skip it, take it off
+        else:
+            self.model.update_track(track["id"], {"radio_opinion": opinion})
+
+    def _save_radio(self):
+        """Save as Playlist: the new playlist is shown, with its name ready to edit
+        (clicking away keeps the radio's name), as a new playlist is."""
+        playlist_id = radio.save_as_playlist(self.conn) if radio.current(self.conn) else None
+        if playlist_id is None:
+            return
+        self._current_source = ("playlist", playlist_id)
+        self.reload_library()
+        self.sidebar.rename_source(("playlist", playlist_id))
+
+    def _refresh_radio(self, discover: bool | None = None):
+        """Refresh (a new mix from the same start), or Discover turned on or off.
+        The song playing carries on."""
+        if radio.current(self.conn) is None:
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            radio.refresh(self.conn, discover)
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._radio_changed()
+
+    def _show_radio_likes(self):
+        """View → Radio Likes & Dislikes (it has no sidebar item)."""
+        self.sidebar.blockSignals(True)
+        self.sidebar.clearSelection()
+        self.sidebar.blockSignals(False)
+        self.show_source(SOURCE_RADIO_LIKES)
+
     # ---- Display Duplicates -------------------------------------------------------
 
     @staticmethod
@@ -4752,6 +4922,7 @@ class MainWindow(QMainWindow):
         self.search.blockSignals(False)
         self.search.setPlaceholderText("Search Missing")
         self._showing_missing = True
+        self.radio_bar.hide()
         self.filter_label.setText("Displaying Missing")
         self.dup_bar.show()
         missing = sum(1 for p in problems.values() if p == "File not found")

@@ -41,6 +41,9 @@ iPod_Control/
 # Files Claude made for you during development
 Claude outputs/
 
+# Raw genre data downloaded by packaging/genres/fetch_genres.py
+genre-data/
+
 # The maintainer's release script (only used on the maintainer's computer)
 packaging/release.sh
 

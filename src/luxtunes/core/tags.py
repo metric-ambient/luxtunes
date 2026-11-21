@@ -372,6 +372,17 @@ def _first(value):
     return str(value).strip()
 
 
+def _joined(values) -> str:
+    """Several genre values as LuxTunes keeps them: "Metalcore; Post-hardcore"."""
+    seen, out = set(), []
+    for value in values or []:
+        text = str(value).strip()
+        if text and text.casefold() not in seen:
+            seen.add(text.casefold())
+            out.append(text)
+    return "; ".join(out)
+
+
 def _split_pair(text: str) -> tuple[int | None, int | None]:
     """'3/12' -> (3, 12); '3' -> (3, None); '' -> (None, None)."""
     def number(part):
@@ -442,6 +453,8 @@ def read_fields(path: str) -> dict:
         for key, atom in MP4_TEXT.items():
             if atom in tags:
                 fields[key] = _first(tags[atom])
+        if tags.get("\xa9gen"):
+            fields["genre"] = _joined(tags["\xa9gen"])
         fields["year"] = _year(_first(tags.get("\xa9day")))
         for key, atom in (("track", "trkn"), ("disc", "disk")):
             if tags.get(atom):
@@ -467,6 +480,8 @@ def read_fields(path: str) -> dict:
         for key, frame_id in ID3_TEXT.items():
             if frame_id in tags:
                 fields[key] = _first(tags[frame_id])
+        if "TCON" in tags:          # several genres, and old numbered ones ("(17)" = Rock)
+            fields["genre"] = _joined(tags["TCON"].genres)
         year = tags.get("TDRC") or tags.get("TYER")
         fields["year"] = _year(_first(year))
         if "TRCK" in tags:
@@ -490,6 +505,8 @@ def read_fields(path: str) -> dict:
         for key, name in VORBIS_TEXT.items():
             if tags.get(name):
                 fields[key] = _first(tags[name])
+        if tags.get("GENRE"):       # one GENRE comment per genre is common in FLAC/Ogg
+            fields["genre"] = _joined(tags["GENRE"])
         fields["year"] = _year(fields.get("year") or "")
         for key in ("track", "disc"):
             number, count = _split_pair(fields.pop(f"{key}_number", "") or "")

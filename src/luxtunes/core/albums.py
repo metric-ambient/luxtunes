@@ -4,6 +4,7 @@ Album List, Grid and Cover Flow views. No Qt here, so it's easy to test.
 
 from __future__ import annotations
 
+from luxtunes.core.genres import split_field
 from luxtunes.ui.formatting import sort_text
 
 
@@ -136,9 +137,13 @@ def grid_groups(tracks: list[dict], by: str) -> list[dict]:
             key, title = name.casefold(), name or ("Unknown Artist" if by == "artists"
                                                    else "Unknown Author")
         elif by in ("genres", "book_categories", "podcast_categories"):
-            name = track.get("genre") or ""
-            key = name.casefold()
-            title = name or ("Unknown Genre" if by == "genres" else "Unknown Category")
+            # A song with several genres ("Metalcore; Post-hardcore") is in each.
+            unknown = "Unknown Genre" if by == "genres" else "Unknown Category"
+            for name in split_field(track.get("genre")) or [""]:
+                key = name.casefold()
+                group = groups.setdefault(key, {"key": key, "title": name or unknown, "tracks": []})
+                group["tracks"].append(track)
+            continue
         elif by in ("podcasts", "unplayed"):
             name = show_of(track)
             key, title = name.casefold(), name or "Unknown Podcast"

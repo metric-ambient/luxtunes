@@ -2337,3 +2337,53 @@ def test_songs_on_an_ipod_from_another_computer_can_be_added(window, tmp_path, m
 def window_unchanged():
     from luxtunes.core.tags import UNCHANGED
     return UNCHANGED
+
+
+def test_radio_screens(window, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+    from luxtunes.core import radio
+    from luxtunes.ui.track_model import RADIO_FROM_COLUMN, RADIO_OPINION_COLUMN
+    from luxtunes.ui.widgets import SOURCE_RADIO, SOURCE_RADIO_LIKES
+    app = QApplication.instance()
+    monkeypatch.setattr(window.player, "play_queue", lambda tracks, start: None)   # no sound
+    window._set_view_mode("list")
+    window.show_source(SOURCE_RADIO)                         # before any radio: empty, bar shown
+    app.processEvents()
+    assert window.radio_bar.isVisible() and not window.radio_bar.save.isEnabled()
+    track = window.conn.execute("SELECT id FROM tracks WHERE media_kind = 'music' LIMIT 1").fetchone()
+    from luxtunes.core import library
+    seed = library.load_track(window.conn, track[0])
+    menu = window._song_menu([seed], seed, seed["name"], lambda: None)
+    assert "Start Radio Mix" in [a.text() for a in menu.actions()]
+    menu.deleteLater()
+    window._start_radio("artist", seed)
+    app.processEvents()
+    assert window._current_source == SOURCE_RADIO and radio.current(window.conn) is not None
+    assert not window.table.isColumnHidden(RADIO_OPINION_COLUMN)
+    assert window.table.isColumnHidden(RADIO_FROM_COLUMN)
+    window.grab()
+    first = window.model.track_at(0)
+    window._on_radio_opinion(first, "like")
+    assert window.model.track_at(0)["radio_opinion"] == 1
+    window._refresh_radio(discover=True)
+    assert window.radio_bar.discover.isChecked()
+    assert window.radio_bar.likes.text() == "Likes && Dislikes…"      # shows as "Likes & Dislikes…"
+    removed = window.model.track_at(window.model.rowCount() - 1)
+    if removed["id"] != first["id"]:
+        window._remove_from_radio([removed["id"]])               # counts as not interested
+    window._save_radio()
+    app.processEvents()
+    assert window._current_source[0] == "playlist"               # the new playlist, name being edited
+    assert window.sidebar.currentItem().text(0).endswith("Radio")
+    window._show_radio_likes()
+    app.processEvents()
+    liked_or_not = 1 if removed["id"] == first["id"] else 2
+    assert window._current_source == SOURCE_RADIO_LIKES and window.model.rowCount() == liked_or_not
+    assert not window.table.isColumnHidden(RADIO_FROM_COLUMN)
+    window.grab()
+    window.table.selectAll()
+    window._delete_selection()                               # back to neutral, not deleted
+    assert window.model.rowCount() == 0 and library.load_track(window.conn, first["id"])
+    window.show_source(("library", "music"))
+    app.processEvents()
+    assert not window.radio_bar.isVisible() and window.table.isColumnHidden(RADIO_OPINION_COLUMN)

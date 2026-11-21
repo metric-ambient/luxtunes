@@ -85,6 +85,10 @@ COLUMNS = [
     # Added since: always at the end, so column layouts saved before still line up
     # (see NEW_COLUMNS in main_window).
     Column("featured_artist", "Featured Artist", 150, heading="ft. Artist"),
+    # Radio: the like / not-interested buttons, and (Radio Likes & Dislikes) the radio
+    # a song was liked or disliked on.
+    Column("radio_opinion", "Like / Not Interested", 50, heading="♥ ⊘"),
+    Column("radio_from", "From Radio", 180),
 ]
 COLUMN_INDEX = {c.key: i for i, c in enumerate(COLUMNS)}
 ENABLED_COLUMN = COLUMN_INDEX["enabled"]
@@ -96,7 +100,11 @@ ALBUM_GROUP_COLUMN = COLUMN_INDEX["album_group"]
 ALBUM_TRACK_COLUMN = COLUMN_INDEX["album_track"]
 ALBUM_VIEW_COLUMNS = {ALBUM_GROUP_COLUMN, ALBUM_TRACK_COLUMN}
 # Columns that can't be hidden (or shown) from the header menu.
-FIXED_COLUMNS = {ENABLED_COLUMN, NAME_COLUMN} | ALBUM_VIEW_COLUMNS
+RADIO_OPINION_COLUMN = COLUMN_INDEX["radio_opinion"]
+RADIO_FROM_COLUMN = COLUMN_INDEX["radio_from"]
+# Only on PLAYING → Radio and View → Radio Likes & Dislikes (shown there by the window).
+RADIO_COLUMNS = {RADIO_OPINION_COLUMN, RADIO_FROM_COLUMN}
+FIXED_COLUMNS = {ENABLED_COLUMN, NAME_COLUMN} | ALBUM_VIEW_COLUMNS | RADIO_COLUMNS
 # Room for the sort arrow: a right-aligned header title would otherwise sit
 # underneath it. Added (as spaces) only to the column that is sorted.
 SORT_ARROW_PAD = "\u2002\u2002\u2002"
@@ -128,7 +136,7 @@ _BACKGROUND = Qt.ItemDataRole.BackgroundRole.value
 _DECORATION = Qt.ItemDataRole.DecorationRole.value
 _TOOLTIP = Qt.ItemDataRole.ToolTipRole.value
 _ANSWERED = {_DISPLAY, _EDIT, _TRACK, _CHECK, _ALIGN, _BACKGROUND, _DECORATION, _TOOLTIP}
-_DRAWN = ("enabled", "rating", "album_group")       # a checkbox / stars / album cell instead
+_DRAWN = ("enabled", "rating", "album_group", "radio_opinion")   # a checkbox / stars / album cell / ♥ ⊘
 # Cells whose text comes from other fields too ("3 of 12", Album List's "#").
 _SOURCES = {"name": ("name", "featured_artist"),
             "track_number": ("track_number", "track_count"),

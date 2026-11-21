@@ -224,6 +224,10 @@ QToolButton#dupButton {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #fdfdfd, stop:1 #d4d7dc);
 }
 QToolButton#dupButton:pressed { background: #c4c8cf; }
+QToolButton#dupButton:checked {          /* Radio's Discover while it's on */
+    color: white; border-color: #1d4c8f;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #6fa3ef, stop:1 #2f6fd0);
+}
 
 QWidget#drillBar {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 $header_top, stop:1 $header_bottom);

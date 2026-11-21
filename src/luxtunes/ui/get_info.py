@@ -40,10 +40,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from luxtunes.core import library
+from luxtunes.core import genres, library
 from luxtunes.core.paths import find_file
 from luxtunes.core.tags import UNCHANGED, TagError, read_details
-from luxtunes.ui import formatting
+from luxtunes.ui import formatting, genre_completer
 from luxtunes.ui.tab_memory import remember_tab
 
 IMAGE_FILTER = "Images (*.jpg *.jpeg *.png *.bmp *.gif *.webp);;All files (*)"
@@ -512,7 +512,18 @@ class InfoDialog(QDialog):
         self.comments.setMaximumHeight(70)
         self.genre = QComboBox()
         self.genre.setEditable(True)
-        self.genre.addItems([""] + library.all_genres(self.conn))
+        library_genres = library.all_genres(self.conn)
+        self.genre.addItems([""] + library_genres)
+        self.genre.setToolTip("Several genres: separate them with commas, "
+                              "e.g. “Metalcore, Post-hardcore”.")
+        genre_completer.attach(self.genre, "genre", library_genres)
+        for field in ("artist", "album_artist", "featured_artist", "album", "composer", "grouping"):
+            genre_completer.attach(self.edits[field], field, library.field_values(self.conn, field))
+        # Genres the catalogue doesn't know can't be matched with related ones.
+        self.genre_hint = QLabel()
+        self.genre_hint.setWordWrap(True)
+        self.genre_hint.setEnabled(False)            # greyed: just a note
+        self.genre.editTextChanged.connect(self._show_genre_hint)
         self.compilation = QCheckBox("Part of a compilation")
 
         grid = QGridLayout(page)
@@ -533,9 +544,18 @@ class InfoDialog(QDialog):
         place("Comments", self.comments, 14, 0, 2)
         place("Genre", self.genre, 16, 0)
         grid.addWidget(self.compilation, 17, 1)
+        grid.addWidget(self.genre_hint, 18, 0, 1, 2)
         grid.setColumnStretch(0, 1)
-        grid.setRowStretch(18, 1)
+        grid.setRowStretch(19, 1)
         return page
+
+    def _show_genre_hint(self, text: str):
+        try:
+            unknown = genres.catalogue().unknown_parts(text)
+        except (OSError, ValueError):
+            unknown = []
+        self.genre_hint.setText(
+            f"Not in LuxTunes' genre list: {', '.join(unknown)}" if unknown else "")
 
     def _video_tab(self) -> QWidget:
         page = QWidget()
@@ -830,6 +850,8 @@ class MultiInfoDialog(QDialog):
 
     def _line(self, key, number=False) -> QWidget:
         edit = _number_edit(60) if number else QLineEdit()
+        if key in genre_completer.FIELDS:                # suggestions from the library
+            genre_completer.attach(edit, key, library.field_values(self.conn, key))
         common = self._common(key)
         if common not in (None, ""):
             edit.setText(str(common))
@@ -895,8 +917,12 @@ class MultiInfoDialog(QDialog):
         place("Rating", self._field("rating", rating, rating.value, rating.changed), 12, 1)
         genre = QComboBox()
         genre.setEditable(True)
-        genre.addItems([""] + library.all_genres(self.conn))
+        library_genres = library.all_genres(self.conn)
+        genre.addItems([""] + library_genres)
         genre.setCurrentText(_text(self._common("genre")))
+        genre.setToolTip("Several genres: separate them with commas, "
+                         "e.g. “Metalcore, Post-hardcore”.")
+        genre_completer.attach(genre, "genre", library_genres)
         place("Genre", self._field("genre", genre, lambda: _combo_text(genre),
                                    genre.currentTextChanged), 14, 0)
         place("Part of a compilation", self._yes_no("compilation"), 14, 1)
