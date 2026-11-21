@@ -126,3 +126,24 @@ def test_featured_artist_round_trip(tmp_path):
         assert tags.read_fields(path)["featured_artist"] == "Ann, Bo & Cy", path
         tags.write_tags(path, {"featured_artist": None})
         assert tags.read_fields(path).get("featured_artist") is None, path
+
+
+def test_several_genres_are_read_as_one_field(tmp_path):
+    from mutagen.flac import FLAC
+    from mutagen.id3 import ID3, TCON
+    mp3 = make_mp3(tmp_path / "g.mp3")
+    id3 = ID3()
+    id3.add(TCON(encoding=3, text=["Metalcore", "Post-hardcore"]))
+    id3.save(mp3, v2_version=4)
+    assert tags.read_fields(mp3)["genre"] == "Metalcore; Post-hardcore"
+    id3.delall("TCON")
+    id3.add(TCON(encoding=3, text=["(17)"]))           # an old numbered genre
+    id3.save(mp3, v2_version=3)
+    assert tags.read_fields(mp3)["genre"] == "Rock"
+    flac = make_flac(tmp_path / "g.flac")
+    audio = FLAC(flac)
+    audio["GENRE"] = ["Ska", "Punk", "ska"]
+    audio.save()
+    assert tags.read_fields(flac)["genre"] == "Ska; Punk"
+    tags.write_tags(flac, {"genre": "Metalcore; Post-hardcore"})
+    assert tags.read_fields(flac)["genre"] == "Metalcore; Post-hardcore"

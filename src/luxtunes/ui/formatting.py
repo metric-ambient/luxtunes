@@ -74,7 +74,7 @@ DATE_KEYS = {"date_added", "play_date", "skip_date", "date_modified", "release_d
 TEXT_KEYS = {
     "genre", "kind", "composer", "comments", "grouping", "category", "description",
     "show", "episode_id", "equalizer", "sort_name", "sort_artist", "sort_album_artist",
-    "sort_album", "sort_composer", "sort_show", "album_artist", "featured_artist",
+    "sort_album", "sort_composer", "sort_show", "album_artist", "featured_artist", "radio_from",
 }
 
 

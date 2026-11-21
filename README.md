@@ -56,7 +56,9 @@ Made for Linux Mint, and it runs on most recent Linux systems.
 - **Get Info** for editing details, artwork and lyrics (and show, season and episode for
   movies and TV shows), for one song or many at once. Your edits are written into the
   files' tags. Add **featured artists** and they show after the song's name, "Song (ft.
-  Ann, Bo)", on iPods and the phone too.
+  Ann, Bo)", on iPods and the phone too. While you type an artist, album or genre, what's
+  already in your library is suggested, and genres come from a built-in list of about 3,300
+  (a song can have several).
 - **Get Track Info Online…** suggests corrections and missing covers from MusicBrainz, and
   **Get Lyrics Online…** fills in lyrics from LRCLIB, both only after you say yes.
 - **Keeps your files tidy:** everything you add is copied (or, if you like, moved) into one
@@ -74,6 +76,10 @@ Made for Linux Mint, and it runs on most recent Linux systems.
 - A **10-band equalizer** with presets, and a preset of its own for any song.
 - **Crossfade**, **gapless playback** and **Sound Check** (every song at about the same
   volume).
+- **Radio Mix:** right-click a song, album or artist to start an endless mix of related songs
+  from your own library, by genre and your listening. Like (♥) or skip for good (⊘) songs,
+  turn on Discover for songs you rarely play, or save a mix as a playlist. Worked out on your
+  computer; nothing goes online.
 - A **shuffle** that leans towards albums you haven't been listening to lately and keeps an
   artist's or album's songs well apart, plus **Up Next** with Add to Queue (play next) and Add
   to End of Queue.

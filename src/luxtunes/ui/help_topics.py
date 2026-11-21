@@ -40,6 +40,26 @@ the list plays and what plays next follows it.</li>
 <li>The song playing has a grey bar behind it, so it's easy to spot.</li>
 </ul>"""),
 
+    ("Radio Mix", "Endless mixes of related songs", """
+<ul>
+<li>Right-click a song → <b>Start Radio Mix</b> → <b>From This Song</b>, <b>From This Album</b>
+or <b>From This Artist</b>. A mix of related songs from your library starts playing, under
+<i>PLAYING → Radio Mix</i> (“Ember Lane Radio”, say). Starting another one replaces it.</li>
+<li>Songs are related by genre (LuxTunes knows how about 3,300 genres connect), helped by
+your own playlists, plays and ratings. Giving songs a genre helps a lot.</li>
+<li>It starts with 50 songs and keeps adding more near the end, so it doesn't stop.</li>
+<li>In front of each song: <b>♥</b> likes it on mixes like this one; <b>⊘</b> (not
+interested) skips it, takes it off the mix and keeps it off mixes like it; taking a song
+off the mix any other way (Delete, Remove from Radio Mix) counts the same. Click ♥ or ⊘
+again to undo.</li>
+<li>Along the bottom: <b>Save as Playlist</b> keeps the mix as a playlist (shown with its
+name ready to edit); <b>Refresh</b> makes a new mix; <b>Discover</b> (lit while it's on)
+prioritizes related songs you rarely or never play; <b>Likes &amp; Dislikes…</b> (also
+View → Radio Mix Likes &amp; Dislikes) lists every song you've liked or disliked, where
+Delete sets one back to neutral.</li>
+<li>Everything is worked out on your computer; nothing goes online.</li>
+</ul>"""),
+
     ("Mini Player and Pop-Out Player", "Smaller ways to see what's playing", """
 <ul>
 <li><b>View → Mini Player</b> (Ctrl+Shift+M) tucks the main window away and shows a small
@@ -127,6 +147,12 @@ instead).</li>
 <li><b>Info</b>: name, artist, album, genre and more; changes are written into the
 file too. <b>Lyrics</b>: type or paste them. <b>Artwork</b>: paste or choose a
 picture.</li>
+<li>While you type an artist, album, composer or grouping, names already in your library
+are suggested. <b>Genre</b> suggests yours first, then LuxTunes' list of about 3,300
+genres. A song can have several genres, separated by commas like featured artists
+(<i>Metalcore, Post-hardcore</i>); Grid → Genres shows it under each. A genre LuxTunes
+doesn't know is fine, but it's noted under the box, since it can't be matched with
+related genres.</li>
 <li><b>Options</b>: Volume Adjustment (it snaps back to None near the middle),
 Equalizer Preset, Media Kind, Start and Stop Time, Remember playback position and
 Skip when shuffling.</li>

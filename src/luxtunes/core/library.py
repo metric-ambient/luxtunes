@@ -411,9 +411,44 @@ def save_bookmark(conn: sqlite3.Connection, track_id: int, position_ms: int) -> 
 
 
 def all_genres(conn: sqlite3.Connection) -> list[str]:
-    """Every genre in the library, A-Z (for Get Info's Genre list)."""
+    """Every genre in the library, A-Z (for Get Info's Genre list). A song
+    with several ("Metalcore; Post-hardcore") adds each of them."""
+    from luxtunes.core.genres import split_field
     rows = conn.execute("SELECT DISTINCT genre FROM tracks WHERE genre IS NOT NULL AND genre != ''")
-    return sorted((r[0] for r in rows), key=str.casefold)
+    found: dict[str, str] = {}
+    for (field,) in rows:
+        for name in split_field(field):
+            found.setdefault(name.casefold(), name)
+    return sorted(found.values(), key=str.casefold)
+
+
+SUGGESTED_FIELDS = ("artist", "album_artist", "featured_artist", "album", "composer",
+                    "grouping", "genre")
+
+
+def field_values(conn: sqlite3.Connection, field: str) -> list[str]:
+    """What the library has in a field, each once (ignoring case), A-Z: what
+    Get Info suggests while typing. Artist, Album Artist and Featured Artist
+    share their names (a featured artist is offered as an artist and back)."""
+    from luxtunes.core.genres import split_field
+    if field not in SUGGESTED_FIELDS:
+        raise KeyError(field)
+    if field == "genre":
+        return all_genres(conn)
+    columns = ("artist", "album_artist", "featured_artist") \
+        if field in ("artist", "album_artist", "featured_artist") else (field,)
+    counts: dict[str, dict[str, int]] = {}         # casefolded -> spelling -> songs
+    for column in columns:
+        for value, songs in conn.execute(f"SELECT {column}, COUNT(*) FROM tracks "
+                                         f"WHERE {column} IS NOT NULL AND {column} != '' "
+                                         f"GROUP BY {column}"):
+            names = split_field(value) if column == "featured_artist" else [str(value).strip()]
+            for name in names:
+                if name:
+                    spellings = counts.setdefault(name.casefold(), {})
+                    spellings[name] = spellings.get(name, 0) + songs
+    # The spelling most songs use ("Ember Lane", not one song's "ember lane").
+    return sorted((max(s, key=lambda n: (s[n], n)) for s in counts.values()), key=str.casefold)
 
 
 def load_track(conn: sqlite3.Connection, track_id: int) -> dict | None:

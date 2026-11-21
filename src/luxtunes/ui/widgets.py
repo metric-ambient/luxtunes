@@ -495,6 +495,8 @@ SOURCE_TV_SHOWS = ("library", "tvshow")
 SOURCE_PODCASTS = ("library", "podcast")
 SOURCE_AUDIOBOOKS = ("library", "audiobook")
 SOURCE_UP_NEXT = ("queue", "up_next")
+SOURCE_RADIO = ("radio", "current")              # PLAYING → Radio
+SOURCE_RADIO_LIKES = ("view", "radio_feedback")  # View → Radio Likes & Dislikes (no sidebar item)
 
 
 def device_icon() -> QIcon:
@@ -510,6 +512,50 @@ def phone_icon() -> QIcon:
 def cd_icon() -> QIcon:
     return themed_icon(["media-optical-audio", "media-optical-cd-audio", "media-optical"],
                        QStyle.StandardPixmap.SP_DriveCDIcon)
+
+
+def radio_icon() -> QIcon:
+    """PLAYING → Radio Mix: two joined notes inside a circular arrow (a mix of
+    songs that keeps going), drawn here in the text colour. Not a radio, a
+    Wi-Fi signal or sparkles: nothing about it goes online or is "AI"."""
+    import math
+    from PySide6.QtGui import QBrush, QPainter, QPixmap, QPolygonF
+    size = 64
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    colour = QApplication.palette().color(QPalette.ColorRole.WindowText)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    # The loop: a circle of radius 26 round the middle, open at the top right
+    # (Qt's angles go anticlockwise from 3 o'clock, in 16ths of a degree).
+    painter.setPen(QPen(colour, 4))
+    painter.drawArc(QRectF(6, 6, 52, 52), 20 * 16, -310 * 16)
+    # Its arrowhead, pointing clockwise where the loop ends.
+    angle = math.radians(-70)
+    x, y = 32 + 26 * math.cos(angle), 32 + 26 * math.sin(angle)
+    along = (math.cos(angle + math.pi / 2), math.sin(angle + math.pi / 2))
+    out = (math.cos(angle), math.sin(angle))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QBrush(colour))
+    painter.drawPolygon(QPolygonF([QPointF(x + along[0] * 8, y + along[1] * 8),
+                                   QPointF(x + out[0] * 6, y + out[1] * 6),
+                                   QPointF(x - out[0] * 6, y - out[1] * 6)]))
+    # Two notes joined by a beam, in the middle of the loop.
+    heads = (QPointF(24.5, 40.5), QPointF(40.5, 36.5))
+    for head in heads:
+        painter.drawEllipse(head, 4.8, 3.6)
+    stem = QPen(colour, 2.5)
+    stem.setCapStyle(Qt.PenCapStyle.FlatCap)
+    painter.setPen(stem)
+    tops = [QPointF(h.x() + 4.2, h.y() - 16.8) for h in heads]
+    for head, top in zip(heads, tops):
+        painter.drawLine(QPointF(head.x() + 4.2, head.y()), top)
+    beam = QPen(colour, 4.2)
+    beam.setCapStyle(Qt.PenCapStyle.FlatCap)
+    painter.setPen(beam)
+    painter.drawLine(tops[0], tops[1])
+    painter.end()
+    return QIcon(pixmap)
 
 
 def playlist_icon(p: dict) -> QIcon:
@@ -598,8 +644,8 @@ class SidebarDelegate(QStyledItemDelegate):
 
 
 class Sidebar(QTreeWidget):
-    """LIBRARY / QUEUE / DEVICES / PLAYLISTS. Emits the chosen source:
-    ("library", "music"), ("library", "movie"), ("queue", "up_next"),
+    """LIBRARY / PLAYING / DEVICES / PLAYLISTS. Emits the chosen source:
+    ("library", "music"), ("library", "movie"), ("queue", "up_next"), ("radio", "current"),
     ("device", <key>) or ("playlist", <id>)."""
 
     source_selected = Signal(object)
@@ -677,13 +723,14 @@ class Sidebar(QTreeWidget):
                                     "x-office-document"], QStyle.StandardPixmap.SP_FileIcon),
                        droppable=True)
 
-        section = self._section("QUEUE")
+        section = self._section("PLAYING")
         self._up_next_item = self._item(
             section, "Up Next", SOURCE_UP_NEXT,
             themed_icon(["view-media-playlist", "media-playlist-append", "view-list"],
                         QStyle.StandardPixmap.SP_ArrowForward),
             droppable=True)
         self.set_queue_length(queue_length)
+        self._item(section, "Radio Mix", SOURCE_RADIO, radio_icon())
 
         if devices:     # iPods and phones (rename like a playlist) and audio CDs: (key, name)
             section = self._section("DEVICES")

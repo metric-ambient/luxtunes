@@ -208,6 +208,13 @@ class Player(QObject):
         # A song you double-click plays even if it's unchecked.
         self._start_at(first, force_first=True)
 
+    def remaining(self) -> int:
+        """How many songs are still to come in the list being played (not
+        counting Up Next or repeats)."""
+        if not 0 <= self._pos < len(self._order):
+            return 0
+        return len(self._order) - self._pos - 1
+
     def rescope(self, tracks: list[dict]):
         """The list being played changed (e.g. its search was changed or
         cleared): the song playing carries on, then play continues through
