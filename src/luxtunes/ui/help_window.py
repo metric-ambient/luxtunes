@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+from luxtunes.ui import formatting
 from luxtunes.ui.help_topics import GUIDES
 
 
@@ -67,10 +68,10 @@ class HelpWindow(QDialog):
                 self.topics.setCurrentRow(row)
 
     def _filter(self, text: str):
-        words = text.casefold().split()
+        words = formatting.search_words(text)       # "cafe" finds "café"
         first = None
         for row, (title, summary, body) in enumerate(GUIDES):
-            haystack = " ".join((title.casefold(), summary.casefold(), _plain(body)))
+            haystack = formatting.fold(" ".join((title, summary, _plain(body))))
             hidden = any(w not in haystack for w in words)
             self.topics.item(row).setHidden(hidden)
             if not hidden and first is None:

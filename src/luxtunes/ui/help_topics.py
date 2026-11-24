@@ -149,10 +149,22 @@ file too. <b>Lyrics</b>: type or paste them. <b>Artwork</b>: paste or choose a
 picture.</li>
 <li>While you type an artist, album, composer or grouping, names already in your library
 are suggested. <b>Genre</b> suggests yours first, then LuxTunes' list of about 3,300
-genres. A song can have several genres, separated by commas like featured artists
-(<i>Metalcore, Post-hardcore</i>); Grid → Genres shows it under each. A genre LuxTunes
-doesn't know is fine, but it's noted under the box, since it can't be matched with
-related genres.</li>
+genres. A genre LuxTunes doesn't know is fine, but it's noted under the box, since it
+can't be matched with related genres.</li>
+<li><b>Genre</b>, <b>Featured Artist</b> and <b>Artists</b> can hold several names, each
+shown as a pill: type a name and press <b>Enter</b> (or pick a suggestion) to add it,
+click its ✕ to remove it, double-click it (or press Backspace) to change it, and use ▾
+to choose from your library. Grid → Genres shows a song under each of its genres.</li>
+<li><b>Artists</b> is for a song by several artists: the Artist stays as you want it
+shown (<i>Lümen &amp; Grayfield</i>), and Artists lists each of them (<i>Lümen</i>,
+<i>Grayfield</i>), so Grid → Artists and Radio Mix find the song under each. When both
+already have songs of their own, Get Info suggests them. In the song list's Artists and
+Featured Artist columns, names are separated by semicolons (<i>Lümen; Grayfield</i>),
+since a comma can be part of a name.</li>
+<li>In Grid → Artists, a compilation's songs stay together under <i>Various Artists</i>
+(or its Album Artist), and also show under each of their artists who have songs outside
+compilations. An artist who's only ever on compilations doesn't get an entry of their
+own.</li>
 <li><b>Options</b>: Volume Adjustment (it snaps back to None near the middle),
 Equalizer Preset, Media Kind, Start and Stop Time, Remember playback position and
 Skip when shuffling.</li>
@@ -162,7 +174,10 @@ Description.</li>
 fields you change are applied (a whole season's episodes at once, for example).</li>
 <li>Right-click → <b>Get Track Info Online…</b> looks songs up on MusicBrainz (after you
 say yes) and shows every suggested correction, and missing covers, for you to tick
-before anything changes. <b>Get Lyrics Online…</b> fills in missing lyrics.</li>
+before anything changes. A credit like <i>Lümen &amp; Grayfield feat. Ann</i> fills in the
+Artist, each of the Artists and the Featured Artist; genres come from the song, else its
+album. If MusicBrainz is busy, LuxTunes waits a moment and tries again.
+<b>Get Lyrics Online…</b> fills in missing lyrics.</li>
 </ul>"""),
 
     ("Movies, TV Shows, Podcasts, Audiobooks", "The Library sections", """
@@ -248,6 +263,8 @@ later, right-click the iPod → <b>Add Songs to Library…</b>. Songs bought fro
 Store with copy protection can't be played here, so they're left out.</li>
 <li>Songs on the iPod that are missing their album artwork get it back at the next
 sync.</li>
+<li>While it syncs, the iPod's <b>Sync</b> button becomes <b>Stop Sync</b>: it stops after
+the song being copied, and what's already copied stays.</li>
 <li>Click the eject button next to the iPod before unplugging it.</li>
 </ul>"""),
 
@@ -261,6 +278,8 @@ tick, or just chosen playlists, artists, albums and genres.
 Everything goes in one <i>LuxTunes</i> folder that any music player can use.</li>
 <li><b>Delete media not in this selection</b> keeps the phone tidy. LuxTunes only ever
 touches its own folder.</li>
+<li>While it syncs, the phone's <b>Sync</b> button becomes <b>Stop Sync</b>: it stops after
+the song being copied, and what's already copied stays.</li>
 <li>With the LuxTunes app for Android on the phone (luxtunes-mobile on GitHub), plays,
 ratings, playlists and the equalizer come back at the next sync. Songs you add on the phone are copied into your
 library, and details you edit there (names, albums, years…) are saved here too.</li>
@@ -282,8 +301,10 @@ Trash) and lets you delete it for good, after asking again.</li>
 <b>View Options…</b> (Ctrl+J) and a right-click on the column headers choose columns.</li>
 <li>Click a column header to sort by it. Each Library section and playlist keeps its own
 sort, and where you'd scrolled to while LuxTunes is open.</li>
-<li>Type in the search box to filter what's shown. Click the magnifier to search only
-one kind of tag: Artist, Album, Composer or Song (All searches them all). It goes
+<li>Type in the search box to filter what's shown. Accents and capitals don't matter:
+<i>lumen</i> finds <i>Lümen</i> and <i>sigur ros</i> finds <i>Sigur Rós</i>. Click the
+magnifier to search only one kind of tag: Artist (which also covers Album Artist,
+Artists and Featured Artist), Album, Composer or Song (All searches them all). It goes
 back to All each time LuxTunes starts.</li>
 <li>Each Library section (Music, Movies, TV Shows…) keeps its own columns and their
 order; playlists use Music's.</li>

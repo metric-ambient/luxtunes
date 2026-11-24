@@ -88,6 +88,7 @@ def test_lookup_songs(monkeypatch):
     calls = fake_musicbrainz(monkeypatch, {
         "/release?": {"releases": [{"id": "rel-1", "score": 100, "track-count": 3}]},
         "/release/rel-1": RELEASE,
+        "/release-group/rg-1": {"genres": [{"name": "indie pop", "count": 2}]},
     })
     monkeypatch.setattr(musicbrainz, "cover_art", lambda *a, approved: b"\xff\xd8\xffcover")
     songs = [song(1, "The Quay", track_number=2, year=2013, genre="Indie Pop", track_count=3,
@@ -102,7 +103,7 @@ def test_lookup_songs(monkeypatch):
     by_id = {p.track["id"]: {c.field: c.new for c in p.changes} for p in album.songs}
     assert 1 not in by_id                                   # already right: nothing to change
     assert by_id[2]["name"] == "S.T.A.R.S." and by_id[2]["track_number"] == 3
-    assert by_id[2]["year"] == 2013 and by_id[2]["genre"] == "Indie Pop"
+    assert by_id[2]["year"] == 2013 and by_id[2]["genre"] == "Indie pop"
     assert album.artwork == b"\xff\xd8\xffcover" and album.artwork_for == [2]
     assert [s["id"] for s in result.not_found] == [3]
     assert 'release%3A%22The+1987%22+AND+artist%3A%22The+1987%22' in calls[0]
@@ -117,3 +118,45 @@ def test_offline_stops_early(monkeypatch):
     tracks = [song(1, "A", album="One"), song(2, "B", album="Two")]
     result = musicbrainz.lookup_songs(tracks, approved=True)
     assert len(result.problems) == 1 and "Couldn't reach MusicBrainz" in result.problems[0]
+
+
+def test_a_busy_musicbrainz_is_asked_again():
+    import io
+    import urllib.error
+    import pytest
+    from luxtunes.core import cd
+
+    def busy(times, then=b'{"releases": []}'):
+        calls = []
+
+        def get(url):
+            calls.append(url)
+            if len(calls) <= times:
+                raise urllib.error.HTTPError(url, 503, "Service Unavailable", {}, io.BytesIO())
+            return then
+        return get, calls
+
+    waits = []
+    get, calls = busy(2)
+    assert cd.musicbrainz_json(get, "u", sleep=waits.append) == {"releases": []}
+    assert len(calls) == 3 and waits == [2, 5]
+    get, calls = busy(10)
+    with pytest.raises(cd.CdError, match="too busy"):
+        cd.musicbrainz_json(get, "u", sleep=waits.append)
+    assert len(calls) == len(cd.BUSY_WAITS) + 1
+
+
+def test_every_genre_the_album_has_and_a_songs_own_first():
+    from luxtunes.core import cd
+    group = [{"name": "metalcore", "count": 3}, {"name": "post-hardcore", "count": 2},
+             {"name": "rock", "count": 1}, {"name": "rock opera", "count": 1},
+             {"name": "symphonic rock", "count": 1}]
+    edition = [{"name": "metal", "count": 4}]
+    assert cd.genres_text([], group, edition) == \
+        "Metalcore, Post-hardcore, Rock, Rock opera, Symphonic rock"   # the album's, not the edition's
+    assert cd.genres_text([], [], edition) == "Metal"                  # only when the album has none
+    assert cd.genres_text([{"name": "power ballad", "count": 1}], group, edition) == "Power ballad"
+    assert cd.genres_text([], []) == ""
+    same = musicbrainz.changes_for({"genre": "Metal Core, Post Hardcore"},
+                                   {"genre": "Metalcore, Post-hardcore"})
+    assert same == []

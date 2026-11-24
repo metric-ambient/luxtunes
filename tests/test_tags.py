@@ -50,7 +50,7 @@ def test_mp3_round_trip_as_id3v23(tmp_path):
     assert id3["TIT2"].text == ["Lanterns off the Far Coast"]
     assert id3["TRCK"].text == ["1/12"] and id3["TPOS"].text == ["1/1"]
     assert str(id3["TYER"]) == "2023"                       # v2.3 stores the year as TYER
-    assert id3["TCMP"].text == ["1"] and id3["TSO2"].text == ["Planet"]
+    assert id3["TCMP"].text == ["1"] and id3["TSO2"].text == ["Orbit"]
     # The sort frames survive the v2.3 conversion.
     assert id3["TSOT"].text == ["Lanterns"] and id3["TSOP"].text == ["Orbit, Slow"]
     assert id3["TSOA"].text == ["Starfall"]
@@ -122,10 +122,19 @@ def test_featured_artist_round_trip(tmp_path):
                        check=True)
         files.append(str(m4a))
     for path in files:
-        tags.write_tags(path, {"name": "Song", "featured_artist": "Ann, Bo & Cy"})
-        assert tags.read_fields(path)["featured_artist"] == "Ann, Bo & Cy", path
-        tags.write_tags(path, {"featured_artist": None})
-        assert tags.read_fields(path).get("featured_artist") is None, path
+        tags.write_tags(path, {"name": "Song", "featured_artist": "Tyler, the Creator; Bo & Cy",
+                               "artists": "Lümen; Grayfield", "artist": "Lümen & Grayfield"})
+        read = tags.read_fields(path)
+        assert read["featured_artist"] == "Tyler, the Creator; Bo & Cy", path
+        assert read["artists"] == "Lümen; Grayfield", path
+        assert read["artist"] == "Lümen & Grayfield", path
+        tags.write_tags(path, {"featured_artist": None, "artists": ""})
+        read = tags.read_fields(path)
+        assert read.get("featured_artist") is None and read.get("artists") is None, path
+    # MP4 and Vorbis keep one value per name (what other players read); ID3 one text.
+    from mutagen.flac import FLAC
+    tags.write_tags(files[1], {"artists": "Lümen; Grayfield"})
+    assert FLAC(files[1])["ARTISTS"] == ["Lümen", "Grayfield"]
 
 
 def test_several_genres_are_read_as_one_field(tmp_path):

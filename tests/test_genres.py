@@ -71,7 +71,7 @@ def test_get_info_suggests_what_the_library_has(tmp_path):
     from luxtunes.core import db, library
     conn = db.connect(tmp_path / "library.db")
     rows = [("Harbor Lights", "Ember Lane", "Ember Lane", None, "Metalcore, Post-hardcore"),
-            ("Duet", "Mira Vale", None, "Ember Lane, Ann", "metalcore"),
+            ("Duet", "Mira Vale", None, "Ember Lane; Ann", "metalcore"),
             ("Song", "ember lane", None, None, "")]
     for i, (name, artist, album_artist, featured, genre) in enumerate(rows):
         conn.execute("INSERT INTO tracks (persistent_id, name, artist, album_artist, featured_artist, "

@@ -34,7 +34,7 @@ HUB_DISCOUNT = 0.5      # closeness / (number of links) ** this
 def split_field(field: str | None) -> list[str]:
     """A song's genres: "Metalcore, Post-hardcore" -> ["Metalcore", "Post-hardcore"].
     Several genres are kept in the one Genre field, separated by commas or
-    semicolons, as Featured Artist is ("R&B/Soul" stays one: a slash only
+    semicolons ("R&B/Soul" stays one: a slash only
     separates when matching names against the catalogue)."""
     return [part.strip() for part in re.split(r"[;,]", field or "") if part.strip()]
 

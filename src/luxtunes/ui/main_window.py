@@ -127,7 +127,7 @@ log = logging.getLogger(__name__)
 HEADER_LAYOUT_VERSION = 3  # 2: all columns added; 3: Album List columns
 # Columns added since layout version 3. They go at the end of COLUMNS (so a
 # layout saved before still lines up) and start hidden in such a layout.
-NEW_COLUMNS = ("featured_artist", "radio_opinion", "radio_from")
+NEW_COLUMNS = ("featured_artist", "radio_opinion", "radio_from", "artists")
 
 VIEW_MODES = ("list", "album", "grid", "coverflow")
 VIEW_TIPS = ("List", "Album List", "Grid", "Cover Flow")
@@ -755,6 +755,7 @@ class MainWindow(QMainWindow):
         self.sidebar.device_renamed.connect(self._on_device_renamed)
         self.sidebar.eject_requested.connect(self._eject_device)
         self.device_page.sync_requested.connect(self._sync_device)
+        self.device_page.stop_requested.connect(self._stop_sync)
         self.lcd.stop_requested.connect(self._stop_task)
         self.cd_page.import_clicked.connect(self._cd_import_clicked)
         self.cd_page.settings_clicked.connect(self._edit_import_settings)
@@ -2072,7 +2073,9 @@ class MainWindow(QMainWindow):
     def _review_track_info(self, result):
         from luxtunes.ui.track_info_dialog import TrackInfoDialog
         if not result.albums:
-            text = "MusicBrainz had nothing new for these songs."
+            # A lookup that failed isn't "nothing new": say which ones didn't work.
+            text = ("Some of these songs couldn't be looked up:" if result.problems
+                    else "MusicBrainz had nothing new for these songs.")
             if result.problems:
                 text += "\n\n" + "\n".join(result.problems[:5])
             QMessageBox.information(self, "Get Track Info Online", text)

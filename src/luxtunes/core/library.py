@@ -13,6 +13,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from luxtunes.core.db import get_setting, set_setting
+from luxtunes.core import names
 
 # Built-in playlists in an imported iTunes library, identified by "Distinguished Kind".
 KIND_MOVIES = 2
@@ -267,7 +268,10 @@ EDITABLE_TEXT_FIELDS = {
     "name", "artist", "album_artist", "album", "genre", "composer", "grouping",
     "comments", "sort_name", "sort_artist", "sort_album_artist", "sort_album",
     "sort_composer", "lyrics", "show", "episode_id", "description", "featured_artist",
+    "artists",
 }
+# Lists of names, kept as "Lümen; Grayfield" (see core/names.py).
+NAME_LIST_FIELDS = {"artists", "featured_artist"}
 EDITABLE_NUMBER_FIELDS = {"year", "bpm", "track_number", "track_count", "disc_number", "disc_count",
                           "season", "episode_number"}
 # Get Info's Options tab: settings kept in the library only (never in the file).
@@ -316,6 +320,8 @@ def clean_field_value(key: str, value):
         return number
     if key == "lyrics":
         return str(value).replace("\r\n", "\n") if value else None   # keep line breaks
+    if key in NAME_LIST_FIELDS:
+        return names.clean(text)
     if key in EDITABLE_TEXT_FIELDS:
         return text or None
     raise KeyError(f"{key} can't be edited")
@@ -422,33 +428,44 @@ def all_genres(conn: sqlite3.Connection) -> list[str]:
     return sorted(found.values(), key=str.casefold)
 
 
-SUGGESTED_FIELDS = ("artist", "album_artist", "featured_artist", "album", "composer",
-                    "grouping", "genre")
+SUGGESTED_FIELDS = ("artist", "album_artist", "artists", "featured_artist", "album",
+                    "composer", "grouping", "genre")
+ARTIST_FIELDS = ("artist", "album_artist", "artists", "featured_artist")
 
 
 def field_values(conn: sqlite3.Connection, field: str) -> list[str]:
     """What the library has in a field, each once (ignoring case), A-Z: what
-    Get Info suggests while typing. Artist, Album Artist and Featured Artist
-    share their names (a featured artist is offered as an artist and back)."""
-    from luxtunes.core.genres import split_field
+    Get Info suggests while typing. Artist, Album Artist, Artists and Featured
+    Artist share their names (a featured artist is offered as an artist and back)."""
     if field not in SUGGESTED_FIELDS:
         raise KeyError(field)
     if field == "genre":
         return all_genres(conn)
-    columns = ("artist", "album_artist", "featured_artist") \
-        if field in ("artist", "album_artist", "featured_artist") else (field,)
+    columns = ARTIST_FIELDS if field in ARTIST_FIELDS else (field,)
     counts: dict[str, dict[str, int]] = {}         # casefolded -> spelling -> songs
     for column in columns:
         for value, songs in conn.execute(f"SELECT {column}, COUNT(*) FROM tracks "
                                          f"WHERE {column} IS NOT NULL AND {column} != '' "
                                          f"GROUP BY {column}"):
-            names = split_field(value) if column == "featured_artist" else [str(value).strip()]
-            for name in names:
+            found = names.split_names(value) if column in NAME_LIST_FIELDS \
+                else [str(value).strip()]
+            for name in found:
                 if name:
                     spellings = counts.setdefault(name.casefold(), {})
                     spellings[name] = spellings.get(name, 0) + songs
     # The spelling most songs use ("Ember Lane", not one song's "ember lane").
     return sorted((max(s, key=lambda n: (s[n], n)) for s in counts.values()), key=str.casefold)
+
+
+def known_artists(conn: sqlite3.Connection) -> set[str]:
+    """Every artist name in the library, casefolded (for names.suggest_split)."""
+    return {name.casefold() for name in field_values(conn, "artist")}
+
+
+def suggested_artists(conn: sqlite3.Connection, artist: str | None) -> list[str]:
+    """Get Info's suggestion for an empty Artists field: "Lümen & Grayfield" ->
+    ["Lümen", "Grayfield"] when both already have songs of their own; else []."""
+    return names.suggest_split(artist, known_artists(conn))
 
 
 def load_track(conn: sqlite3.Connection, track_id: int) -> dict | None:

@@ -89,6 +89,8 @@ COLUMNS = [
     # a song was liked or disliked on.
     Column("radio_opinion", "Like / Not Interested", 50, heading="♥ ⊘"),
     Column("radio_from", "From Radio", 180),
+    # Each artist of a song by several ("Lümen; Grayfield").
+    Column("artists", "Artists", 180),
 ]
 COLUMN_INDEX = {c.key: i for i, c in enumerate(COLUMNS)}
 ENABLED_COLUMN = COLUMN_INDEX["enabled"]
@@ -187,7 +189,7 @@ class TrackTableModel(QAbstractTableModel):
 
     def set_filter(self, text: str):
         self.beginResetModel()
-        self._words = text.casefold().split()
+        self._words = formatting.search_words(text)
         self._apply()
         self.endResetModel()
 

@@ -1609,6 +1609,14 @@ def test_the_ipod_page_shows_only_what_the_model_can_do(window, tmp_path):
     page.picture.grab()                                                            # draws
     assert page.model_note.text().startswith("This iPod doesn't play videos")
     assert page.sync_button.isEnabled()
+    page.set_syncing(ipod.key)                                   # while it syncs: Stop Sync
+    assert page.sync_button.text() == "Stop Sync" and page.sync_button.isEnabled()
+    stops = []
+    page.stop_requested.connect(lambda: stops.append(True))
+    page.sync_button.click()
+    assert stops and page.sync_button.text() == "Stopping…" and not page.sync_button.isEnabled()
+    page.set_syncing(None)
+    assert page.sync_button.text() == "Sync" and page.sync_button.isEnabled()
     ipod.identity = models.Identity("touch", models.FAMILIES["touch"])   # can't be synced
     page.set_device(window.conn, ipod, page.record)
     assert not page.sync_button.isEnabled() and "can't sync" in page.model_note.text()
@@ -2387,3 +2395,117 @@ def test_radio_screens(window, monkeypatch):
     window.show_source(("library", "music"))
     app.processEvents()
     assert not window.radio_bar.isVisible() and window.table.isColumnHidden(RADIO_OPINION_COLUMN)
+
+
+def test_garbage_is_collected_on_the_window_thread():
+    """Background threads mustn't run Python's collector (it can delete Qt objects
+    from the wrong thread and crash): the window's thread does it on a timer."""
+    import gc
+    from PySide6.QtWidgets import QApplication
+    from luxtunes.ui.app import _collect_garbage_on_main_thread
+    app = QApplication.instance() or QApplication([])
+    try:
+        _collect_garbage_on_main_thread(app)
+        assert not gc.isenabled()
+    finally:
+        gc.enable()
+
+
+def test_pill_boxes_for_several_artists_and_genres(window, tmp_path, monkeypatch):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+
+    from luxtunes.core import library
+    from luxtunes.ui import get_info
+    from luxtunes.ui.pill_box import PillBox
+
+    # The test songs have no files, so saving warns that they couldn't be updated;
+    # a warning would wait for a click.
+    monkeypatch.setattr(get_info.QMessageBox, "warning", lambda *a, **k: None)
+    app = QApplication.instance()
+    box = PillBox("artists", ["Lümen", "Grayfield", "Tyler, the Creator"])
+    box.show()
+    edited = []
+    box.textEdited.connect(edited.append)
+    box.setText("Lümen; Grayfield")
+    assert [p.value for p in box.pills] == ["Lümen", "Grayfield"] and not edited
+    box.edit.setFocus()
+    QTest.keyClicks(box.edit, "Tyler, the Creator")          # a comma is part of a name
+    QTest.keyClick(box.edit, Qt.Key.Key_Return)
+    assert box.text() == "Lümen; Grayfield; Tyler, the Creator" and edited
+    QTest.keyClicks(box.edit, "Ann;Bo")                       # ";" makes a pill
+    assert box.values() == ["Lümen", "Grayfield", "Tyler, the Creator", "Ann", "Bo"]
+    QTest.keyClick(box.edit, Qt.Key.Key_Return)
+    assert box.edit.text() == "" and box.pills[-1].value == "Bo"
+    QTest.keyClick(box.edit, Qt.Key.Key_Backspace)            # Bo comes back to edit
+    assert box.edit.text() == "Bo" and box.pills[-1].value == "Ann"
+    QTest.keyClick(box.edit, Qt.Key.Key_Backspace)            # ...and loses a letter
+    assert box.text().endswith("; Ann; B")
+    box.pills[0].remove_clicked.emit(box.pills[0])
+    assert box.values()[0] == "Grayfield"
+    box._show_all()
+    app.processEvents()
+    box.grab()
+    # A row of pills is added as needed, up to three; more than that scrolls.
+    box.resize(320, box.height())
+    box.setText("Ann")
+    app.processEvents()
+    one_row = box.scroll.height()
+    box.setText("; ".join(f"Artist number {i}" for i in range(4)))
+    app.processEvents()
+    assert box.scroll.height() > one_row
+    box.setText("; ".join(f"Artist number {i}" for i in range(40)))
+    app.processEvents()
+    assert box.scroll.height() < 5 * one_row
+    assert box.scroll.verticalScrollBar().maximum() > 0
+    genre = PillBox("genre", ["Metalcore"])
+    genre.setText("Metalcore; Post-hardcore")
+    QTest.keyClicks(genre.edit, "Pop,")                       # genres: a comma separates
+    assert genre.text() == "Metalcore, Post-hardcore, Pop"
+
+    # Get Info: a song by "Lümen & Grayfield", when both have songs, gets them suggested.
+    conn = window.conn
+    tracks = window.model.visible_tracks()
+    ids = [t["id"] for t in tracks[:3]]
+    for track_id, artist in zip(ids, ["Lümen", "Grayfield", "Lümen & Grayfield"]):
+        # Plain songs: the test library's have an Album Artist or are a compilation,
+        # which Grid → Artists files them under instead.
+        library.update_track_fields(conn, track_id, {"artist": artist, "album_artist": None,
+                                                     "compilation": 0})
+        window._after_edit(track_id)
+    tracks = [library.load_track(conn, i) for i in ids]
+    dialog = get_info.InfoDialog(conn, tracks, 2, window._apply_info, window)
+    dialog.show()
+    app.processEvents()
+    dialog.grab()
+    assert dialog.edits["artists"].values() == ["Lümen", "Grayfield"]
+    # Shown on the Info tab (the dialog may open on another tab: it reopens the last one used).
+    assert not dialog.artists_note.isHidden()
+    dialog.edits["featured_artist"].setText("Ann; Bo")
+    dialog._ok()
+    saved = library.load_track(conn, ids[2])
+    assert saved["artists"] == "Lümen; Grayfield" and saved["featured_artist"] == "Ann; Bo"
+    # Opened again, the saved Artists are shown (not wiped), and only the current
+    # pills are on screen (removed ones are hidden at once, not left behind).
+    again = get_info.InfoDialog(conn, [library.load_track(conn, i) for i in ids], 2,
+                                window._apply_info, window)
+    again.show()
+    app.processEvents()
+    assert again.edits["artists"].values() == ["Lümen", "Grayfield"]
+    assert again.artists_note.isHidden()
+    again._step(-1)                        # a song with no Artists: the box empties
+    assert again.edits["artists"].values() == []
+    from luxtunes.ui.pill_box import Pill
+    shown = [p for p in again.edits["artists"].findChildren(Pill) if not p.isHidden()]
+    assert shown == []
+    again.reject()
+    groups = {g["title"] for g in __import__("luxtunes.core.albums", fromlist=["x"]).grid_groups(
+        [library.load_track(conn, i) for i in ids], "artists")}
+    assert groups == {"Lümen", "Grayfield"}
+
+    multi = get_info.MultiInfoDialog(conn, tracks[:2], window._apply_info, window)
+    multi.show()
+    app.processEvents()
+    multi.grab()
+    assert {"artists", "featured_artist", "genre"} <= set(multi.getters)

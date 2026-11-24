@@ -293,6 +293,7 @@ class CapacityBar(QWidget):
 
 class DevicePage(QWidget):
     sync_requested = Signal()
+    stop_requested = Signal()          # Stop Sync (the Sync button while this device syncs)
     settings_saved = Signal()
 
     def __init__(self, parent=None):
@@ -363,7 +364,7 @@ class DevicePage(QWidget):
             buttons.addWidget(button)
         self.revert_button.clicked.connect(self.revert)
         self.apply_button.clicked.connect(self.apply)
-        self.sync_button.clicked.connect(self.sync_requested.emit)
+        self.sync_button.clicked.connect(self._on_sync_button)
         bottom_row.addLayout(buttons)
 
         layout = QVBoxLayout(self)
@@ -508,8 +509,19 @@ class DevicePage(QWidget):
         """The iPod that's syncing (None: none). Its page can't start another
         sync; another iPod's Sync button stays usable and the main window
         explains that it has to wait."""
+        if key != getattr(self, "_syncing_key", None):
+            self._stopping = False                  # a new sync (or none): not stopping
         self._syncing_key = key
         self._update_buttons()
+
+    def _on_sync_button(self):
+        """Sync, or while this device is syncing, Stop Sync."""
+        if self._syncing_this():
+            self._stopping = True
+            self._update_buttons()
+            self.stop_requested.emit()
+        else:
+            self.sync_requested.emit()
 
     def _syncing_this(self) -> bool:
         key = getattr(self, "_syncing_key", None)
@@ -519,8 +531,11 @@ class DevicePage(QWidget):
         dirty = self.dirty
         syncing = self._syncing_this()
         unsupported = bool(getattr(self.ipod, "unsupported", "")) and not self.is_android
-        self.sync_button.setText("Syncing…" if syncing else "Sync")
-        self.sync_button.setEnabled(not syncing and not unsupported)
+        stopping = syncing and getattr(self, "_stopping", False)
+        self.sync_button.setText("Stopping…" if stopping else "Stop Sync" if syncing else "Sync")
+        self.sync_button.setToolTip("Stop after the song being copied (what's copied so far "
+                                    "stays)" if syncing else "")
+        self.sync_button.setEnabled((syncing and not stopping) or (not syncing and not unsupported))
         self.apply_button.setEnabled(not syncing)
         self.revert_button.setVisible(dirty)
         self.apply_button.setVisible(dirty)
@@ -1373,4 +1388,5 @@ class DevicePage(QWidget):
         syncing = self._syncing_this()
         unsupported = bool(getattr(self.ipod, "unsupported", "")) and not self.is_android
         self.apply_button.setEnabled(not too_big and not syncing)
-        self.sync_button.setEnabled(not too_big and not syncing and not unsupported)
+        if not syncing:                     # while syncing it's Stop Sync (see _update_buttons)
+            self.sync_button.setEnabled(not too_big and not unsupported)

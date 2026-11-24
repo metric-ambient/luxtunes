@@ -23,7 +23,7 @@ from pathlib import Path
 from luxtunes.core.paths import data_home
 
 # Bump this when the schema changes, and add a step to _migrate().
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS library_info (
@@ -266,8 +266,19 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 radio    TEXT,
                 date     TEXT
             )""")
+    if version < 14:
+        # Several artists: the Artists list ("Lümen; Grayfield") next to the Artist
+        # text ("Lümen & Grayfield"). Names in lists are now separated by ";" (a
+        # comma is part of some names), so Featured Artist's "a1, a2" becomes "a1; a2".
+        if "artists" not in {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}:
+            conn.execute("ALTER TABLE tracks ADD COLUMN artists TEXT")
+        from luxtunes.core.names import from_old_featured
+        rows = conn.execute("SELECT id, featured_artist FROM tracks "
+                            "WHERE featured_artist LIKE '%,%'").fetchall()
+        conn.executemany("UPDATE tracks SET featured_artist = ? WHERE id = ?",
+                         [(from_old_featured(text), track_id) for track_id, text in rows])
     # Future schema changes go here:
-    # if version < 14:
+    # if version < 15:
     #     conn.execute("ALTER TABLE tracks ADD COLUMN ...")
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()

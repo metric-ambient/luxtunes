@@ -485,8 +485,11 @@ TRACK_COLUMNS = (
     "loudness",
     # LuxTunes 0.8.5: timed lyrics (LRC) for highlighting the line being sung (NULL: none)
     "synced_lyrics",
-    # LuxTunes 0.9.0: featured artists, "Ann, Bo" (NULL: none), shown "Song (ft. Ann, Bo)"
-    "featured_artist")
+    # LuxTunes 0.9.0: featured artists, "Ann; Bo" (NULL: none), shown "Song (ft. Ann, Bo)";
+    # names are separated by ";" from 0.9.2 (0.9.0 and 0.9.1 used ",")
+    "featured_artist",
+    # LuxTunes 0.9.2: each artist of a song by several, "Lümen; Grayfield" (NULL: just Artist)
+    "artists")
 
 # The equalizer's bands as equalizer_presets columns.
 EQ_COLUMNS = ("band_32", "band_64", "band_125", "band_250", "band_500", "band_1k", "band_2k",

@@ -5,7 +5,10 @@ Kept free of Qt so it can be tested on its own.
 
 from __future__ import annotations
 
+import unicodedata
 from datetime import datetime, timezone
+
+from luxtunes.core import names
 
 _ARTICLES = ("the ", "a ", "an ")
 
@@ -75,6 +78,7 @@ TEXT_KEYS = {
     "genre", "kind", "composer", "comments", "grouping", "category", "description",
     "show", "episode_id", "equalizer", "sort_name", "sort_artist", "sort_album_artist",
     "sort_album", "sort_composer", "sort_show", "album_artist", "featured_artist", "radio_from",
+    "artists",
 }
 
 
@@ -95,16 +99,16 @@ def _n_of_m(number, count) -> str:
 
 
 def featured_names(text: str | None) -> list[str]:
-    """"Ann, Bo; Cy" -> ["Ann", "Bo", "Cy"]. Names are split at commas and
-    semicolons only, so "Simon & Garfunkel" stays one name."""
-    return [n.strip() for n in (text or "").replace(";", ",").split(",") if n.strip()]
+    """"Ann; Bo" -> ["Ann", "Bo"]. Names are split at semicolons only, so
+    "Simon & Garfunkel" and "Tyler, the Creator" stay one name."""
+    return names.split_names(text)
 
 
 def name_with_featured(track: dict) -> str:
     """A song's name followed by its featured artists: "Song (ft. Ann, Bo)"."""
     name = track.get("name") or ""
-    names = featured_names(track.get("featured_artist"))
-    return f"{name} (ft. {', '.join(names)})" if names else name
+    featured = featured_names(track.get("featured_artist"))
+    return f"{name} (ft. {', '.join(featured)})" if featured else name
 
 
 def display_value(track: dict, key: str) -> str:
@@ -197,18 +201,36 @@ def sort_key(key: str):
 
 # ---- Search --------------------------------------------------------------
 
-SEARCH_FIELDS = ("name", "artist", "album_artist", "album", "composer", "genre", "featured_artist")
+SEARCH_FIELDS = ("name", "artist", "album_artist", "album", "composer", "genre", "featured_artist",
+                 "artists")
 
 
 # The search box's menu: All, or just one kind of tag.
-SEARCH_SCOPES = {"all": SEARCH_FIELDS, "artist": ("artist", "album_artist", "featured_artist"),
+SEARCH_SCOPES = {"all": SEARCH_FIELDS, "artist": ("artist", "album_artist", "featured_artist", "artists"),
                  "album": ("album",),
                  "composer": ("composer",), "name": ("name",)}
 
 
+# Letters that don't split into a plain letter plus an accent.
+_PLAIN_LETTERS = str.maketrans({"ø": "o", "æ": "ae", "œ": "oe", "ł": "l", "đ": "d", "ð": "d",
+                                "þ": "th", "ı": "i", "ŋ": "n", "ħ": "h"})
+
+
+def fold(text: str) -> str:
+    """Text as search compares it: no case and no accents, so "Lumen" finds
+    "Lümen", "Beyonce" finds "Beyoncé" and "sigur ros" finds "Sigur Rós"."""
+    text = unicodedata.normalize("NFKD", text.casefold())
+    return "".join(c for c in text if not unicodedata.combining(c)).translate(_PLAIN_LETTERS)
+
+
+def search_words(typed: str) -> list[str]:
+    """What's typed in a search box, as the words to look for."""
+    return fold(typed).split()
+
+
 def search_text(track: dict, scope: str = "all") -> str:
     fields = SEARCH_SCOPES.get(scope, SEARCH_FIELDS)
-    return " ".join(str(track.get(f) or "") for f in fields).casefold()
+    return fold(" ".join(str(track.get(f) or "") for f in fields))
 
 
 def matches(search_blob: str, words: list[str]) -> bool:

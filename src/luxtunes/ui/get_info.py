@@ -44,6 +44,7 @@ from luxtunes.core import genres, library
 from luxtunes.core.paths import find_file
 from luxtunes.core.tags import UNCHANGED, TagError, read_details
 from luxtunes.ui import formatting, genre_completer
+from luxtunes.ui.pill_box import PillBox
 from luxtunes.ui.tab_memory import remember_tab
 
 IMAGE_FILTER = "Images (*.jpg *.jpeg *.png *.bmp *.gif *.webp);;All files (*)"
@@ -141,10 +142,6 @@ def _number_edit(width=48) -> QLineEdit:
 
 def _text(value) -> str:
     return "" if value is None else str(value)
-
-
-def _combo_text(combo: QComboBox) -> str:
-    return combo.currentText().strip()
 
 
 class VolumeSlider(QWidget):
@@ -502,28 +499,32 @@ class InfoDialog(QDialog):
     def _info_tab(self) -> QWidget:
         page = QWidget()
         self.edits = {key: QLineEdit() for key in ("name", "artist", "album_artist", "album",
-                                                   "grouping", "composer", "featured_artist")}
-        self.edits["featured_artist"].setPlaceholderText("Names, separated by commas")
+                                                   "grouping", "composer")}
+        # Several names each: pills (type a name and press Enter, or pick a suggestion).
+        for key in ("artists", "featured_artist"):
+            self.edits[key] = PillBox(key, library.field_values(self.conn, key))
+        self.edits["artists"].setPlaceholderText("Only for a song by several artists")
+        self.edits["artists"].setToolTip(
+            "Each artist of a song by several, e.g. Lümen and Grayfield for “Lümen & Grayfield”.\n"
+            "The song is then listed under each of them when browsing by artist.")
         self.edits["featured_artist"].setToolTip(
             "Shown after the song's name: “Song (ft. Ann, Bo)”.")
+        self.artists_note = QLabel()
+        self.artists_note.setWordWrap(True)
+        self.artists_note.setEnabled(False)          # greyed: just a note
         for key in ("year", "track_number", "track_count", "disc_number", "disc_count", "bpm"):
             self.edits[key] = _number_edit(56 if key == "year" else 44)
         self.comments = QPlainTextEdit()
         self.comments.setMaximumHeight(70)
-        self.genre = QComboBox()
-        self.genre.setEditable(True)
-        library_genres = library.all_genres(self.conn)
-        self.genre.addItems([""] + library_genres)
-        self.genre.setToolTip("Several genres: separate them with commas, "
-                              "e.g. “Metalcore, Post-hardcore”.")
-        genre_completer.attach(self.genre, "genre", library_genres)
-        for field in ("artist", "album_artist", "featured_artist", "album", "composer", "grouping"):
+        self.genre = PillBox("genre", library.all_genres(self.conn))
+        self.genre.setToolTip("Type a genre and press Enter (or a comma) to add another.")
+        for field in ("artist", "album_artist", "album", "composer", "grouping"):
             genre_completer.attach(self.edits[field], field, library.field_values(self.conn, field))
         # Genres the catalogue doesn't know can't be matched with related ones.
         self.genre_hint = QLabel()
         self.genre_hint.setWordWrap(True)
         self.genre_hint.setEnabled(False)            # greyed: just a note
-        self.genre.editTextChanged.connect(self._show_genre_hint)
+        self.genre.textChanged.connect(self._show_genre_hint)
         self.compilation = QCheckBox("Part of a compilation")
 
         grid = QGridLayout(page)
@@ -533,20 +534,22 @@ class InfoDialog(QDialog):
         place("Name", self.edits["name"], 0, 0, 2)
         place("Artist", self.edits["artist"], 2, 0)
         place("Year", self.edits["year"], 2, 1)
-        place("Album Artist", self.edits["album_artist"], 4, 0)
-        place("Track Number", self._pair("track_number", "track_count"), 4, 1)
-        place("Album", self.edits["album"], 6, 0)
-        place("Disc Number", self._pair("disc_number", "disc_count"), 6, 1)
-        place("Grouping", self.edits["grouping"], 8, 0)
-        place("BPM", self.edits["bpm"], 8, 1)
-        place("Featured Artist", self.edits["featured_artist"], 10, 0, 2)
-        place("Composer", self.edits["composer"], 12, 0, 2)
-        place("Comments", self.comments, 14, 0, 2)
-        place("Genre", self.genre, 16, 0)
-        grid.addWidget(self.compilation, 17, 1)
-        grid.addWidget(self.genre_hint, 18, 0, 1, 2)
+        place("Artists", self.edits["artists"], 4, 0, 2)
+        grid.addWidget(self.artists_note, 6, 0, 1, 2)
+        place("Album Artist", self.edits["album_artist"], 7, 0)
+        place("Track Number", self._pair("track_number", "track_count"), 7, 1)
+        place("Album", self.edits["album"], 9, 0)
+        place("Disc Number", self._pair("disc_number", "disc_count"), 9, 1)
+        place("Grouping", self.edits["grouping"], 11, 0)
+        place("BPM", self.edits["bpm"], 11, 1)
+        place("Featured Artist", self.edits["featured_artist"], 13, 0, 2)
+        place("Composer", self.edits["composer"], 15, 0, 2)
+        place("Comments", self.comments, 17, 0, 2)
+        place("Genre", self.genre, 19, 0)
+        grid.addWidget(self.compilation, 20, 1, Qt.AlignmentFlag.AlignTop)
+        grid.addWidget(self.genre_hint, 21, 0, 1, 2)
         grid.setColumnStretch(0, 1)
-        grid.setRowStretch(19, 1)
+        grid.setRowStretch(22, 1)
         return page
 
     def _show_genre_hint(self, text: str):
@@ -673,7 +676,17 @@ class InfoDialog(QDialog):
         for key, edit in self.edits.items():
             edit.setText(_text(track.get(key)))
         self.comments.setPlainText(_text(track.get("comments")))
-        self.genre.setCurrentText(_text(track.get("genre")))
+        self.genre.setText(_text(track.get("genre")))
+        # A song by "Lümen & Grayfield" when both have songs of their own: offer
+        # them as its Artists. OK saves it; clearing the pills doesn't.
+        suggested = [] if track.get("artists") else \
+            library.suggested_artists(self.conn, track.get("artist"))
+        if suggested:                 # (never replace Artists the song already has)
+            self.edits["artists"].setText("; ".join(suggested))
+        self.artists_note.setText("Suggested from the Artist (both have songs of their own). "
+                                  "OK saves it; remove the names to leave them out."
+                                  if suggested else "")
+        self.artists_note.setVisible(bool(suggested))
         self.compilation.setChecked(bool(track.get("compilation")))
         self.volume.setValue(track.get("volume_adjustment") or 0)
         _show_equalizer(self.equalizer, track.get("equalizer"))
@@ -694,6 +707,8 @@ class InfoDialog(QDialog):
         self._sync_sorting_names()
 
         self._original = self._values()
+        if suggested:
+            self._original["artists"] = ""          # not saved yet: OK saves the suggestion
         self._original_artworks = self.artwork.images()
         self._original_rating = self.rating.value()
         self.previous_button.setEnabled(self.index > 0)
@@ -739,7 +754,7 @@ class InfoDialog(QDialog):
         values = {key: edit.text().strip() for key, edit in self.edits.items()}
         values["comments"] = self.comments.toPlainText().strip()
         values["description"] = self.description.toPlainText().strip()
-        values["genre"] = _combo_text(self.genre)
+        values["genre"] = self.genre.text()
         values["compilation"] = self.compilation.isChecked()
         values["volume_adjustment"] = self.volume.value()
         values["equalizer"] = self.equalizer.currentData()
@@ -849,6 +864,11 @@ class MultiInfoDialog(QDialog):
         return row
 
     def _line(self, key, number=False) -> QWidget:
+        if key in ("artists", "featured_artist", "genre"):          # several names: pills
+            box = PillBox(key, library.all_genres(self.conn) if key == "genre"
+                          else library.field_values(self.conn, key))
+            box.setText(_text(self._common(key)))
+            return self._field(key, box, box.text, box.textEdited)
         edit = _number_edit(60) if number else QLineEdit()
         if key in genre_completer.FIELDS:                # suggestions from the library
             genre_completer.attach(edit, key, library.field_values(self.conn, key))
@@ -897,37 +917,31 @@ class MultiInfoDialog(QDialog):
         place("Disc Number", discs, 4, 1)
         place("Grouping", self._line("grouping"), 6, 0)
         place("BPM", self._line("bpm", number=True), 6, 1)
+        # Composer, Artists and Featured Artist stack beside the (tall) artwork, so the
+        # pill boxes can grow into the space next to it instead of adding rows.
         place("Composer", self._line("composer"), 8, 0)
-
+        place("Artists", self._line("artists"), 10, 0)
+        place("Featured Artist", self._line("featured_artist"), 12, 0)
         self.art_box = ArtworkBox()
-        place("Artwork", self._field("artwork", self.art_box, lambda: self.art_box.image,
-                                     self.art_box.changed), 8, 1)
-        place("Featured Artist", self._line("featured_artist"), 10, 0)
+        grid.addWidget(_heading("Artwork"), 8, 1)
+        grid.addWidget(self._field("artwork", self.art_box, lambda: self.art_box.image,
+                                   self.art_box.changed), 9, 1, 5, 1, Qt.AlignmentFlag.AlignTop)
         comments = QPlainTextEdit()
         comments.setMaximumHeight(60)
         common = self._common("comments")
         if common:
             comments.setPlainText(common)
         place("Comments", self._field("comments", comments, lambda: comments.toPlainText().strip(),
-                                      comments.textChanged), 12, 0)
+                                      comments.textChanged), 14, 0)
         rating = StarRating()
         common = self._common("rating")
         if common:
             rating.setValue(common)
-        place("Rating", self._field("rating", rating, rating.value, rating.changed), 12, 1)
-        genre = QComboBox()
-        genre.setEditable(True)
-        library_genres = library.all_genres(self.conn)
-        genre.addItems([""] + library_genres)
-        genre.setCurrentText(_text(self._common("genre")))
-        genre.setToolTip("Several genres: separate them with commas, "
-                         "e.g. “Metalcore, Post-hardcore”.")
-        genre_completer.attach(genre, "genre", library_genres)
-        place("Genre", self._field("genre", genre, lambda: _combo_text(genre),
-                                   genre.currentTextChanged), 14, 0)
-        place("Part of a compilation", self._yes_no("compilation"), 14, 1)
+        place("Rating", self._field("rating", rating, rating.value, rating.changed), 14, 1)
+        place("Genre", self._line("genre"), 16, 0)
+        place("Part of a compilation", self._yes_no("compilation"), 16, 1)
         grid.setColumnStretch(0, 1)
-        grid.setRowStretch(16, 1)
+        grid.setRowStretch(18, 1)
         return page
 
     def _video_tab(self) -> QWidget:

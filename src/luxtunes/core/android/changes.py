@@ -51,7 +51,7 @@ ADDED_NUMBERS = ("year", "track_number", "track_count", "disc_number", "disc_cou
                  "total_time", "bit_rate", "compilation")
 # What the phone's Get Info can change. Text "" clears it; a number 0 means none.
 EDITED_TEXT = ("name", "artist", "album_artist", "album", "genre", "composer", "grouping",
-               "comments", "featured_artist")
+               "comments", "featured_artist", "artists")
 EDITED_NUMBERS = ("year", "track_number", "track_count", "disc_number", "disc_count",
                   "compilation")
 # The phone's Set EQ…: the song's own equalizer preset, by name ("" = None).

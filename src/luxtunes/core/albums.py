@@ -4,6 +4,7 @@ Album List, Grid and Cover Flow views. No Qt here, so it's easy to test.
 
 from __future__ import annotations
 
+from luxtunes.core import names
 from luxtunes.core.genres import split_field
 from luxtunes.ui.formatting import sort_text
 
@@ -30,6 +31,28 @@ def grid_artist(track: dict) -> str:
             return track.get("album_artist") or "Various Artists"
         return track.get("artist") or ""
     return album_artist_of(track)
+
+
+def grid_artists(track: dict) -> list[str]:
+    """Grid → Artists: every artist a song is filed under. A song with an
+    Artists list ("Lümen; Grayfield") is under each of them rather than under
+    "Lümen & Grayfield"; its album's own artist keeps it too ("Lümen", for a
+    Lümen album with one song together with Grayfield)."""
+    from luxtunes.ui import formatting
+    base = grid_artist(track)
+    listed = names.split_names(track.get("artists"))
+    if not listed or track.get("compilation") and formatting.GROUP_COMPILATIONS:
+        return [base]
+    known = {n.casefold() for n in listed}
+    together = base.casefold() == (track.get("artist") or "").casefold() \
+        or names.suggest_split(base, known)
+    return names.split_names("; ".join(([] if together or not base else [base]) + listed))
+
+
+def _grouped_compilation(track: dict) -> bool:
+    """A compilation's song kept together under Various Artists / its Album Artist."""
+    from luxtunes.ui import formatting
+    return bool(track.get("compilation")) and formatting.GROUP_COMPILATIONS
 
 
 def album_key(track: dict) -> tuple:
@@ -127,15 +150,21 @@ def grid_groups(tracks: list[dict], by: str) -> list[dict]:
     if by == "unplayed":
         tracks = [t for t in tracks if not t.get("play_count")]
     groups: dict = {}
+    on_compilations = []         # Artists: compilation songs, for their artists' own entries
     for track in tracks:
         if by in ("albums", "books"):
             fallback = "Unknown Album" if by == "albums" else "Unknown Book"
             key = album_key(track)
             title = track.get("album") or (track.get("name") if by == "books" else "") or fallback
         elif by in ("artists", "authors"):
-            name = grid_artist(track)
-            key, title = name.casefold(), name or ("Unknown Artist" if by == "artists"
-                                                   else "Unknown Author")
+            unknown = "Unknown Artist" if by == "artists" else "Unknown Author"
+            for name in grid_artists(track) if by == "artists" else [grid_artist(track)]:
+                key = name.casefold()
+                group = groups.setdefault(key, {"key": key, "title": name or unknown, "tracks": []})
+                group["tracks"].append(track)
+            if by == "artists" and _grouped_compilation(track):
+                on_compilations.append(track)
+            continue
         elif by in ("genres", "book_categories", "podcast_categories"):
             # A song with several genres ("Metalcore; Post-hardcore") is in each.
             unknown = "Unknown Genre" if by == "genres" else "Unknown Category"
@@ -154,6 +183,18 @@ def grid_groups(tracks: list[dict], by: str) -> list[dict]:
             key, title = name.casefold(), name
         group = groups.setdefault(key, {"key": key, "title": title, "tracks": []})
         group["tracks"].append(track)
+
+    # A grouped compilation's song stays under Various Artists (or the Album Artist),
+    # and is also listed under each of its artists who have songs outside
+    # compilations. An artist only ever on compilations gets no entry of their own,
+    # so a guest on one compilation track doesn't clutter the list.
+    own = {key for key, group in groups.items()
+           if any(not _grouped_compilation(t) for t in group["tracks"])}
+    for track in on_compilations:
+        for name in names.song_artists(track):
+            key = name.casefold()
+            if key in own and all(t is not track for t in groups[key]["tracks"]):
+                groups[key]["tracks"].append(track)
 
     podcasts = by in PODCAST_GROUPINGS
     result = list(groups.values())

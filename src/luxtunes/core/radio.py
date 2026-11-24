@@ -32,7 +32,7 @@ import sqlite3
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
-from luxtunes.core import albums, genres, library
+from luxtunes.core import albums, genres, library, names
 from luxtunes.core.db import get_setting, set_setting
 from luxtunes.core.library import now_utc
 from luxtunes.core.shuffle import album_key, artist_key, fresh_rng, spread_shuffle
@@ -219,6 +219,14 @@ def save_as_playlist(conn: sqlite3.Connection) -> int | None:
 
 # ---- Which songs ---------------------------------------------------------------------
 
+def _who(track: dict) -> set[str]:
+    """Everyone a song is by (casefolded): Artist, Album Artist and each of its Artists."""
+    found = {(track.get(k) or "").strip().casefold() for k in ("artist", "album_artist")}
+    found.update(n.casefold() for n in names.split_names(track.get("artists")))
+    found.discard("")
+    return found
+
+
 def seed_tracks(library_tracks: list[dict], kind: str, seed: dict | None) -> list[dict]:
     """The songs a radio starts from: the song, its album or its artist's songs."""
     if seed is None:
@@ -227,10 +235,9 @@ def seed_tracks(library_tracks: list[dict], kind: str, seed: dict | None) -> lis
         key = albums.album_key(seed)
         found = [t for t in library_tracks if albums.album_key(t) == key]
     elif kind == "artist":
-        name = (seed.get("artist") or seed.get("album_artist") or "").casefold()
-        found = [t for t in library_tracks
-                 if name and name in ((t.get("artist") or "").casefold(),
-                                      (t.get("album_artist") or "").casefold())]
+        # A song by several artists ("Lümen; Grayfield") starts from all of them.
+        wanted = _who(seed)
+        found = [t for t in library_tracks if wanted & _who(t)]
     else:
         found = [seed]
     return found or [seed]
@@ -319,7 +326,7 @@ def scores(conn, library_tracks: list[dict], radio: Radio, seeds: list[dict]) ->
         return 1.0 if closeness >= NEAR else 0.2 + closeness
 
     seed_ids = {t["id"] for t in seeds}
-    seed_artists = {artist_key(t) for t in seeds} | {(t.get("artist") or "").casefold() for t in seeds}
+    seed_artists = {artist_key(t) for t in seeds}.union(*(_who(t) for t in seeds))
     seed_artists.discard("")
     years = [t["year"] for t in seeds if t.get("year")]
     seed_year = sorted(years)[len(years) // 2] if years else None
@@ -335,7 +342,7 @@ def scores(conn, library_tracks: list[dict], radio: Radio, seeds: list[dict]) ->
         track_id = track["id"]
         genre = genre_score(track.get("genre"))
         artist = 1.0 if (artist_key(track) in seed_artists
-                         or (track.get("artist") or "").casefold() in seed_artists) else 0.0
+                         or _who(track) & seed_artists) else 0.0
         shared = together.get(track_id, 0.0)
         if radio.kind == "artist" and track_id in seed_ids:
             artist = 1.0

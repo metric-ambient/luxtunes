@@ -88,6 +88,30 @@ def _record_crashes(db_path: str | None) -> None:
         faulthandler.register(signal.SIGUSR1, log, all_threads=True)
 
 
+def _collect_garbage_on_main_thread(app) -> None:
+    """Python's garbage collector normally runs in whichever thread happens to
+    be making objects at the time. If that's a background thread (writing tags,
+    syncing a phone, reading artwork) and the garbage includes a Qt object, Qt
+    deletes it from the wrong thread and LuxTunes crashes (crash.log: a
+    "Segmentation fault" while "Garbage-collecting" in such a thread). So the
+    automatic collector is turned off and the window's thread collects instead,
+    every half second, just as often as Python would have."""
+    import gc
+    from PySide6.QtCore import QTimer
+    gc.disable()
+    thresholds = gc.get_threshold()
+
+    def collect():
+        counts = gc.get_count()
+        if counts[0] > thresholds[0]:
+            generation = 2 if counts[2] > thresholds[2] else 1 if counts[1] > thresholds[1] else 0
+            gc.collect(generation)
+    timer = QTimer(app)
+    timer.setInterval(500)
+    timer.timeout.connect(collect)
+    timer.start()
+
+
 def run(db_path: str | None = None) -> int:
     # Short status lines in the terminal (e.g. "repeat set to one"), handy for
     # reporting problems. Only a few events are logged, so it stays quiet.
@@ -101,6 +125,7 @@ def run(db_path: str | None = None) -> int:
     app.setApplicationName("LuxTunes")
     app.setOrganizationName("LuxTunes")
     app.setDesktopFileName("luxtunes")
+    _collect_garbage_on_main_thread(app)
     from luxtunes.ui.about import app_icon
     app.setWindowIcon(app_icon())           # the penguin, in the taskbar and title bar
     name = server_name(db_path)

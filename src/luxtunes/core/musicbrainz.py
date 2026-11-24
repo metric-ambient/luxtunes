@@ -24,9 +24,9 @@ import unicodedata
 import urllib.parse
 from dataclasses import dataclass, field
 
-from luxtunes.core import net
-from luxtunes.core.cd import (CdError, Offline, VARIOUS_ARTISTS, _credit, _get, _top_genre,
-                              cover_art, musicbrainz_json)
+from luxtunes.core import names, net
+from luxtunes.core.cd import (CdError, Offline, VARIOUS_ARTISTS, _credit, _get, cover_art,
+                              credit_parts, genres_text, musicbrainz_json)
 
 API = "https://musicbrainz.org/ws/2/"
 REQUEST_GAP = 1.1                      # seconds between requests (MusicBrainz's limit)
@@ -35,7 +35,8 @@ MIN_SCORE = 80                         # how sure a search hit must be (0-100)
 FIELD_LABELS = {"name": "Name", "artist": "Artist", "album_artist": "Album Artist",
                 "album": "Album", "year": "Year", "track_number": "Track Number",
                 "track_count": "Track Count", "disc_number": "Disc Number",
-                "disc_count": "Disc Count", "genre": "Genre", "compilation": "Compilation"}
+                "disc_count": "Disc Count", "genre": "Genre", "compilation": "Compilation",
+                "artists": "Artists", "featured_artist": "Featured Artist"}
 
 
 @dataclass
@@ -157,8 +158,7 @@ def _release_tracks(release: dict) -> list[dict]:
         for info in tracks:
             recording = info.get("recording") or {}
             out.append({"title": info.get("title") or recording.get("title") or "",
-                        "artist": _credit(info.get("artist-credit"))
-                        or _credit(recording.get("artist-credit")),
+                        "credit": info.get("artist-credit") or recording.get("artist-credit"),
                         "number": _int(info.get("position")),
                         "count": len(tracks),
                         "disc": _int(medium.get("position")),
@@ -202,24 +202,53 @@ def changes_for(song: dict, new: dict) -> list[Change]:
             if not value:
                 continue
         same = (str(old).strip() == str(value).strip()) if old not in (None, "") else False
+        if key in ("artists", "featured_artist") and old not in (None, ""):
+            # Names ignoring case; the order of featured artists doesn't matter.
+            olds = [n.casefold() for n in names.split_names(str(old))]
+            news = [n.casefold() for n in names.split_names(str(value))]
+            same = olds == news if key == "artists" else set(olds) == set(news)
+        if key == "genre" and old not in (None, ""):
+            # The same genres written differently ("Indie Pop" / "Indie pop",
+            # "Metal Core, Post Hardcore" / "Metalcore, Post-hardcore") aren't a change.
+            from luxtunes.core.genres import key as genre_key, split_field
+            same = {genre_key(g) for g in split_field(str(old))} == \
+                {genre_key(g) for g in split_field(str(value))}
         if not same:
             out.append(Change(key, old, value))
     return out
 
 
+def _without_featuring(title: str, featured: list[str]) -> str:
+    """"Song (feat. Ann)" -> "Song" when Ann is already a featured artist."""
+    if not featured:
+        return title
+    return re.sub(r"\s*[(\[]\s*(?:feat\.?|ft\.?|featuring)\s[^)\]]*[)\]]\s*$", "",
+                  title, flags=re.IGNORECASE) or title
+
+
 def album_fields(release: dict, track: dict) -> dict:
+    """What a song gets from a release and its track there. A credit like
+    "Lümen & Grayfield feat. Ann" gives Artist "Lümen & Grayfield", Artists
+    Lümen; Grayfield (only for two or more) and Featured Artist Ann."""
     credits = release.get("artist-credit") or []
-    album_artist = _credit(credits)
+    album_artist = credit_parts(credits)[0] or _credit(credits)
+    artist, artists, featured = credit_parts(track.get("credit"))
     compilation = any((c.get("artist") or {}).get("id") == VARIOUS_ARTISTS for c in credits)
     group = release.get("release-group") or {}
     date = release.get("date") or group.get("first-release-date") or ""
-    fields = {"name": track["title"], "artist": track["artist"] or album_artist,
+    fields = {"name": _without_featuring(track["title"], featured),
+              "artist": artist or album_artist,
+              "artists": names.join_names(artists) if len(artists) > 1 else None,
+              "featured_artist": names.join_names(featured),
               "album": release.get("title"), "year": int(date[:4]) if date[:4].isdigit() else None,
               "track_number": track["number"], "track_count": track["count"],
               "disc_number": track["disc"], "disc_count": track["discs"],
-              "genre": _top_genre(release.get("genres"), group.get("genres"), track["genres"]),
+              # The song's own genres if it has any (a ballad on a metalcore album),
+              # else the album's: its release group's (where MusicBrainz users put
+              # them), and only if that has none, this edition's.
+              "genre": genres_text(track["genres"], group.get("genres"), release.get("genres")),
               "compilation": 1 if compilation else 0}
-    if compilation or (track["artist"] and track["artist"] != album_artist):
+    if compilation or (artist and artist != album_artist):
         fields["album_artist"] = album_artist
     return fields
 
@@ -275,6 +304,16 @@ def lookup_songs(tracks: list[dict], *, approved: bool, artwork: bool = True, pr
             else:
                 release = client.get(f"release/{choice['id']}",
                                      {"inc": "recordings artist-credits genres release-groups"})
+                group = release.get("release-group") or {}
+                if group.get("id") and not group.get("genres"):
+                    # Most genre votes are on the release group (the album as a whole);
+                    # the release lookup only brings the release's own.
+                    try:
+                        group["genres"] = client.get(f"release-group/{group['id']}",
+                                                     {"inc": "genres"}).get("genres") or []
+                    except CdError as error:
+                        if isinstance(error, Offline):
+                            raise
                 proposal = propose_album(release, songs)
                 needs_art = [s["id"] for s in songs if not s.get("artwork_count")]
                 if artwork and needs_art:
@@ -329,7 +368,7 @@ def _lookup_loose_song(client: _Client, song: dict) -> AlbumProposal | None:
     track = (medium.get("track") or [{}])[0]
     offset = _int(medium.get("track-offset"))
     info = {"title": best.get("title") or song.get("name"),
-            "artist": _credit(best.get("artist-credit")),
+            "credit": best.get("artist-credit"),
             "number": (offset + 1) if offset is not None else _int(track.get("number")),
             "count": _int(medium.get("track-count")),
             "disc": _int(medium.get("position")), "discs": None, "genres": []}

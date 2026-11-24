@@ -112,9 +112,13 @@ percentage of the playing volume), `equalizer`, `loudness` (Sound Check's correc
 dB for a −18 LUFS target, at most +6; NULL when not known yet), `synced_lyrics` (timed
 lyrics in LRC form, `[mm:ss.xx]line`, from LuxTunes 0.8.5; NULL when there are none; the
 words match `lyrics`, so a player can highlight the line being sung), `featured_artist`
-(from LuxTunes 0.9.0: the song's featured artists as typed, e.g. "Ann, Bo & Cy; Dee",
-split at commas and semicolons only and shown "Song (ft. Ann, Bo & Cy, Dee)"; NULL when
-there are none), `show`, `season`,
+(from LuxTunes 0.9.0: the song's featured artists, e.g. "Ann; Bo & Cy", shown
+"Song (ft. Ann, Bo & Cy)"; NULL when there are none. From LuxTunes 0.9.2 names are
+separated by semicolons only, since a comma or "&" can be part of a name ("Tyler, the
+Creator"); 0.9.0 and 0.9.1 separated them with commas), `artists` (from LuxTunes 0.9.2:
+each artist of a song by several, e.g. "Lümen; Grayfield", separated by semicolons, while `artist` keeps
+the text shown, "Lümen & Grayfield"; browsing by artist files the song under each name;
+NULL when the song is just by its `artist`), `show`, `season`,
 `episode_number`, the `sort_*` names, `enabled`, `bpm`, `kind` (e.g. "MPEG audio file")
 and `purchased`. That's every detail a smart playlist rule can test. Dates are UTC,
 written as `YYYY-MM-DDTHH:MM:SSZ`.
@@ -198,7 +202,8 @@ added on the phone and song details edited there; see below.
   only the details that changed, merged if it was edited more than once; the latest
   value wins.
 - Text: `name`, `artist`, `album_artist`, `album`, `genre`, `composer`, `grouping`,
-  `comments`, `featured_artist` (LuxTunes 0.9.0 and newer); `""` clears it (not allowed
+  `comments`, `featured_artist` (LuxTunes 0.9.0 and newer), `artists` (0.9.2 and newer;
+  names separated by `;`); `""` clears it (not allowed
   for `name`). Whole numbers: `year`,
   `track_number`, `track_count`, `disc_number`, `disc_count` (`0` means none) and
   `compilation` (`0` or `1`). Other keys are ignored.

@@ -216,3 +216,11 @@ def test_deleting_songs_closes_the_gaps_in_their_playlists(tmp_path):
                                   "ORDER BY position", (p,)).fetchall()
     assert [tuple(r) for r in rows(mix)] == [(0, 1), (1, 3)]
     assert [tuple(r) for r in rows(other)] == [(0, 5)]
+def test_search_ignores_accents():
+    from luxtunes.ui import formatting
+    lumen = formatting.search_text({"name": "Song", "artist": "Lümen", "album": "Sigur Rós Ø"})
+    assert formatting.matches(lumen, formatting.search_words("Lumen"))
+    assert formatting.matches(lumen, formatting.search_words("LÜMEN"))
+    assert formatting.matches(lumen, formatting.search_words("sigur ros o"))
+    assert not formatting.matches(lumen, formatting.search_words("tulpe"))
+    assert formatting.fold("Beyoncé Æon Łódź") == "beyonce aeon lodz"

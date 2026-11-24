@@ -162,8 +162,9 @@ class PreferencesDialog(QDialog):
         self.group_compilations.setChecked(look["group_compilations"])
         self.group_compilations.setToolTip(
             "On: a compilation's songs stay together under its Album Artist (or Various "
-            "Artists) when you sort or browse by artist.\nOff: each song is listed under "
-            "its own artist.")
+            "Artists) when you sort or browse by artist. In Grid → Artists each song also "
+            "shows under its artists who have songs outside compilations.\nOff: each song "
+            "is listed under its own artist.")
         grid.addWidget(self.group_compilations, 2, 2)
         grid.setColumnStretch(3, 1)
 

@@ -73,7 +73,7 @@ class TrackInfoDialog(QDialog):
         self.tree.expandAll()
 
         notes = []
-        if not result.albums:
+        if not result.albums and not result.problems:
             notes.append("MusicBrainz had nothing new for these songs.")
         else:
             notes.append(f"{changes} suggested change{'s' if changes != 1 else ''}. Blanks to fill "

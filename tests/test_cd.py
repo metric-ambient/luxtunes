@@ -59,7 +59,7 @@ def test_apply_musicbrainz_answer():
     assert cd.apply_release(disc, musicbrainz_answer(toc.disc_id()))
     assert disc.album == "The 1987" and disc.artist == "The 1987" and disc.year == 2013
     assert (disc.disc_number, disc.disc_count) == (1, 2)
-    assert disc.genre == "Indie Pop" and not disc.compilation and disc.album_artist == ""
+    assert disc.genre == "Indie pop, Pop rock" and not disc.compilation and disc.album_artist == ""
     assert [t.name for t in disc.tracks] == ["The Quay", "S.T.A.R.S."]
     assert disc.release_id == "rel-1" and disc.name == "The 1987"
     fields = disc.fields(disc.tracks[1])

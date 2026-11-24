@@ -110,7 +110,7 @@ def test_group_compilations_when_browsing():
 
 def test_featured_on_and_the_name_shown():
     from luxtunes.ui import formatting
-    songs = [{"id": 1, "name": "Up", "artist": "Mia", "album": "A", "featured_artist": "Ann, Bo"},
+    songs = [{"id": 1, "name": "Up", "artist": "Mia", "album": "A", "featured_artist": "Ann; Bo"},
              {"id": 2, "name": "Down", "artist": "Zed", "album": "B", "featured_artist": "ann"},
              {"id": 3, "name": "Own", "artist": "Ann", "album": "C", "featured_artist": "Ann"},
              {"id": 4, "name": "Duo", "artist": "Kim", "album": "D",
@@ -120,4 +120,5 @@ def test_featured_on_and_the_name_shown():
     assert albums.featured_on(songs, "Nobody") == []
     assert formatting.display_value(songs[0], "name") == "Up (ft. Ann, Bo)"
     assert formatting.display_value({"name": "Solo"}, "name") == "Solo"
-    assert formatting.featured_names(" a ;b,, c ") == ["a", "b", "c"]
+    assert formatting.featured_names(" a ;b;; c ;A") == ["a", "b", "c"]
+    assert formatting.featured_names("Tyler, the Creator; Bo") == ["Tyler, the Creator", "Bo"]

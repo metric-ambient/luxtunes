@@ -23,7 +23,9 @@ import fcntl
 import glob
 import hashlib
 import json
+import logging
 import os
+import re
 import shutil
 import sqlite3
 import struct
@@ -72,6 +74,8 @@ KEY_INSERT_ACTION = "cd_insert_action"
 INSERT_ACTIONS = [("nothing", "Do Nothing"), ("show", "Show CD"), ("ask", "Ask to Import CD"),
                   ("import", "Import CD"), ("import_eject", "Import CD and Eject")]
 
+
+log = logging.getLogger(__name__)
 
 class CdError(Exception):
     """The drive couldn't be read, ripping failed, ..."""
@@ -334,28 +338,105 @@ def _get(url: str, timeout: float = 15) -> bytes:
     return net.get(url, timeout=timeout)
 
 
-def musicbrainz_json(get, url: str) -> dict:
+# MusicBrainz answers 503 when it's busy or a computer asks too often: wait and
+# ask again (its own advice), a little longer each time, or as long as it says.
+BUSY_WAITS = (2, 5, 10)
+
+
+def musicbrainz_json(get, url: str, sleep=time.sleep) -> dict:
     """MusicBrainz's answer from get(url); {} if it doesn't know it. Raises
-    Offline if it can't be reached, CdError for any other problem."""
-    try:
-        return json.loads(get(url))
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return {}
-        raise CdError(f"MusicBrainz answered {error.code}.") from error
-    except (urllib.error.URLError, OSError, ValueError) as error:
-        raise Offline(f"Couldn't reach MusicBrainz ({getattr(error, 'reason', error)}).") from error
+    Offline if it can't be reached, CdError for any other problem. A "busy"
+    answer (503) is asked again a few times first."""
+    for attempt in range(len(BUSY_WAITS) + 1):
+        try:
+            return json.loads(get(url))
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                return {}
+            if error.code == 503 and attempt < len(BUSY_WAITS):
+                try:
+                    wait = min(30.0, float(error.headers.get("Retry-After") or BUSY_WAITS[attempt]))
+                except (TypeError, ValueError, AttributeError):
+                    wait = BUSY_WAITS[attempt]
+                log.info("MusicBrainz is busy (503); asking again in %.0f s", wait)
+                sleep(wait)
+                continue
+            if error.code == 503:
+                raise CdError("MusicBrainz was too busy to answer; try again in a few minutes.") \
+                    from error
+            raise CdError(f"MusicBrainz answered {error.code}.") from error
+        except (urllib.error.URLError, OSError, ValueError) as error:
+            raise Offline(f"Couldn't reach MusicBrainz ({getattr(error, 'reason', error)}).") from error
+    return {}
 
 
 def _credit(credits: list | None) -> str:
     return "".join(c.get("name", "") + c.get("joinphrase", "") for c in credits or []).strip()
 
 
-def _top_genre(*groups) -> str:
-    for genres in groups:
+_FEATURING = re.compile(r"^\s*[(\[]?\s*(?:feat\.?|ft\.?|featuring|with)\s*$", re.IGNORECASE)
+
+
+def credit_parts(credits: list | None) -> tuple[str, list[str], list[str]]:
+    """A MusicBrainz artist credit split into what LuxTunes keeps:
+    the Artist text, the Artists list and the Featured Artists list.
+
+    [Lümen " & "] [Grayfield " feat. "] [Ann] -> ("Lümen & Grayfield", ["Lümen", "Grayfield"], ["Ann"]).
+    Everyone credited after "feat.", "ft.", "featuring" or "with" is featured;
+    the names before it are the song's artists, written as credited."""
+    text, main, featured = "", [], []
+    joining = ""
+    for credit in credits or []:
+        name = (credit.get("name") or (credit.get("artist") or {}).get("name") or "").strip()
+        if featured or _FEATURING.match(joining):
+            featured.append(name)
+        else:
+            text += joining + name
+            main.append(name)
+        joining = credit.get("joinphrase") or ""
+    return text.strip(), [n for n in main if n], [n for n in featured if n]
+
+
+MOST_GENRES = 5
+
+
+def merge_genres(*lists) -> list[dict]:
+    """Several MusicBrainz genre lists as one, adding up the votes for a genre
+    that's in more than one (an album's release and its release group)."""
+    votes: dict[str, dict] = {}
+    for genres in lists:
+        for g in genres or []:
+            name = (g.get("name") or "").strip()
+            if name:
+                entry = votes.setdefault(name.casefold(), {"name": name, "count": 0})
+                entry["count"] += g.get("count") or 0
+    return list(votes.values())
+
+
+def _genre_name(name: str) -> str:
+    """A MusicBrainz genre ("post-hardcore") as LuxTunes writes it: the genre
+    catalogue's spelling ("Post-hardcore"), else with a capital first letter."""
+    try:
+        from luxtunes.core import genres
+        catalogue = genres.catalogue()
+        found = catalogue.genre_ids(name)
+        if len(found) == 1:
+            return catalogue.names[found[0]]
+    except (OSError, ValueError):
+        pass
+    return name[:1].upper() + name[1:]
+
+
+def genres_text(*sources) -> str:
+    """The Genre field from MusicBrainz's genres: the first source that has
+    any (most specific first: the song's own, then the album's), every genre
+    in it, most votes first, up to MOST_GENRES ("Metalcore, Post-hardcore, Rock")."""
+    for genres in sources:
+        genres = [g for g in genres or [] if (g.get("name") or "").strip()]
         if genres:
-            best = max(genres, key=lambda g: g.get("count", 0))
-            return best.get("name", "").title()
+            best = sorted(genres, key=lambda g: (-(g.get("count") or 0), g["name"].casefold()))
+            names = list(dict.fromkeys(_genre_name(g["name"].strip()) for g in best))
+            return ", ".join(names[:MOST_GENRES])
     return ""
 
 
@@ -395,7 +476,10 @@ def apply_release(disc: Disc, data: dict) -> bool:
     disc.disc_number = medium.get("position") or None
     recording_genres = [g for t in medium.get("tracks") or []
                         for g in (t.get("recording") or {}).get("genres") or []]
-    disc.genre = _top_genre(release.get("genres"), group.get("genres"), recording_genres)
+    # One Genre for the whole CD: the album's (its release group's, else this
+    # edition's), or else its songs' together.
+    disc.genre = genres_text(group.get("genres"), release.get("genres"),
+                             merge_genres(recording_genres))
     for track, info in zip(disc.tracks, medium.get("tracks") or []):
         recording = info.get("recording") or {}
         track.name = info.get("title") or recording.get("title") or track.name
@@ -418,9 +502,35 @@ def lookup(disc: Disc, *, approved: bool, artwork: bool = True) -> Disc:
                                     "fmt": "json"})
     url = MUSICBRAINZ + disc.toc.disc_id() + "?" + query
     data = musicbrainz_json(_get, url)       # {}: not in the database
-    if apply_release(disc, data) and artwork:
-        disc.artwork = cover_art(disc.release_id, disc.release_group_id, approved=True)
+    if apply_release(disc, data):
+        _add_album_genres(disc, data)
+        if artwork:
+            disc.artwork = cover_art(disc.release_id, disc.release_group_id, approved=True)
     return disc
+
+
+def release_group_genres(get_json, group_id: str) -> list[dict]:
+    """The album's genres as voted on its release group (where most votes are;
+    a disc or release lookup only brings the release's own). [] if none."""
+    if not group_id:
+        return []
+    base = MUSICBRAINZ.rsplit("discid/", 1)[0]
+    data = get_json(f"{base}release-group/{group_id}?inc=genres&fmt=json")
+    return data.get("genres") or []
+
+
+def _add_album_genres(disc: Disc, data: dict) -> None:
+    release = next((r for r in data.get("releases") or [] if r.get("id") == disc.release_id), {})
+    if (release.get("release-group") or {}).get("genres") or not disc.release_group_id:
+        return                                      # already had them
+    time.sleep(1.1)                                 # MusicBrainz: one request a second
+    try:
+        group = release_group_genres(lambda u: musicbrainz_json(_get, u), disc.release_group_id)
+    except CdError:
+        return                                      # keep what the disc lookup gave
+    found = genres_text(group)
+    if found:
+        disc.genre = found
 
 
 def cover_art(release_id: str, release_group_id: str = "", *, approved: bool) -> bytes | None:
