@@ -9,11 +9,12 @@ answer.
 
 from __future__ import annotations
 
+import logging
 import threading
 
 from PySide6.QtCore import QThread, Signal
 
-from luxtunes.core import db
+from luxtunes.core import db, sync_log
 from luxtunes.core.ipod import gpod, settings as ipod_settings, sync as ipod_sync
 
 
@@ -32,6 +33,7 @@ class SyncWorker(QThread):
         self._stop = threading.Event()
         self._answered = threading.Event()
         self._answer = False
+        self.log_path = None                  # this sync's log (see core/sync_log.py)
 
     # Called from the main window ---------------------------------------------------------
     def stop(self):
@@ -64,6 +66,13 @@ class SyncWorker(QThread):
         return self._answer and not self._stop.is_set()
 
     def run(self):
+        name = getattr(self.ipod, "name", None) or self.device_key
+        with sync_log.SyncLog(sync_log.folder_for(self.db_path), name) as path:
+            self.log_path = path
+            self._run()
+
+    def _run(self):
+        log = logging.getLogger("luxtunes.sync")
         conn = None
         try:
             conn = db.connect(self.db_path)
@@ -76,13 +85,20 @@ class SyncWorker(QThread):
                 record = ipod_settings.load_device(conn, self.device_key, self.ipod.name,
                                                    self.ipod.model_number, self.ipod.serial)
                 report = ipod_sync.sync(conn, self.ipod, record, self._progress, self._confirm)
+            log.info("finished: %d added, %d removed, %d playlists%s", report.added,
+                     report.removed, report.playlists, " (stopped)" if report.cancelled else "")
+            for problem in report.problems:
+                log.warning("problem: %s", problem)
             self.succeeded.emit(report)
         except ipod_sync.SyncCancelled:
+            log.info("stopped")
             report = ipod_sync.SyncReport(cancelled=True)
             self.succeeded.emit(report)
         except (gpod.GpodError, OSError) as error:
+            log.exception("the sync didn't finish")
             self.failed.emit(str(error))
         except Exception as error:          # never let a crash in the thread go unreported
+            log.exception("the sync didn't finish")
             self.failed.emit(f"{type(error).__name__}: {error}")
         finally:
             if conn is not None:

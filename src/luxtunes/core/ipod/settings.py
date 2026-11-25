@@ -24,6 +24,7 @@ EPISODE_RULES = ["all", "all unwatched", "1 newest", "3 newest", "5 newest", "10
 PODCAST_RULES = ["all", "all unplayed", "1 most recent", "3 most recent", "5 most recent",
                  "10 most recent", "1 least recent unplayed", "3 least recent unplayed"]
 PODCAST_SCOPES = ["all podcasts", "selected podcasts"]
+TV_SCOPES = ["all shows", "selected shows"]
 BIT_RATES = [128, 192, 256]
 
 
@@ -57,10 +58,14 @@ class SyncSettings:
     movies_auto: bool = True
     movies_rule: str = "all"
     movies: list = field(default_factory=list)      # persistent ids, picked by hand
-    # TV Shows tab
+    # TV Shows tab: "Automatically include <rule> episodes of <scope>", plus
+    # shows and single episodes ticked by hand (like Podcasts)
     sync_tv: bool = False
     tv_auto: bool = True
     tv_rule: str = "all unwatched"
+    tv_scope: str = "all shows"                     # or "selected shows"
+    tv_shows: list = field(default_factory=list)    # show names
+    tv_episodes: list = field(default_factory=list)  # persistent ids
     # Podcasts tab: "Automatically include <rule> episodes of <scope>", plus
     # shows and single episodes ticked by hand
     sync_podcasts: bool = False
@@ -81,6 +86,9 @@ class SyncSettings:
     photos_mode: str = "all"            # "all" folders or "selected"
     photo_folders: list = field(default_factory=list)
     full_resolution: bool = False
+    # iPods that also run Rockbox: plays from its log, playlists, and tags and
+    # covers it can read on the iPod's copies (core/ipod/rockbox.py)
+    rockbox: bool = True
     # Android devices: which storage the LuxTunes folder goes on (its name, e.g.
     # "Internal shared storage" or the SD card's; empty = the phone's own), and
     # whether that's the phone's own ("internal") or a removable card, so the

@@ -72,6 +72,10 @@ class Choices:
     shows: list[str] = field(default_factory=list)            # podcasts, A-Z
     episodes: list[dict] = field(default_factory=list)        # newest first
     books: list[tuple[str, str]] = field(default_factory=list)   # (key, "Book — Author")
+    # key -> {"title", "author", "track" (its first part, for the cover), "time", "size"}
+    book_details: dict = field(default_factory=dict)
+    tv_shows: list[str] = field(default_factory=list)         # A-Z
+    tv_episodes: list[dict] = field(default_factory=list)     # by show, season and episode
 
 
 def library_choices(conn: sqlite3.Connection, phone: bool = False) -> Choices:
@@ -89,12 +93,25 @@ def library_choices(conn: sqlite3.Connection, phone: bool = False) -> Choices:
     episodes = _newest_first(library.load_tracks(conn, media_kind="podcast"))
     shows = sorted({podcast_show(e) for e in episodes}, key=sort_text)
     books = {}
-    for t in library.load_tracks(conn, media_kind="audiobook"):
+    details: dict = {}
+    parts = sorted(library.load_tracks(conn, media_kind="audiobook"),
+                   key=lambda t: (t.get("disc_number") or 0, t.get("track_number") or 0,
+                                  sort_text(t.get("name"))))
+    for t in parts:
         title = t.get("album") or t.get("name") or "Untitled"
-        books[book_key(t)] = f"{title} — {artist_of(t)}" if artist_of(t) else title
+        key = book_key(t)
+        books[key] = f"{title} — {artist_of(t)}" if artist_of(t) else title
+        book = details.setdefault(key, {"title": title, "author": artist_of(t), "track": t,
+                                        "time": 0, "size": 0})
+        book["time"] += t.get("total_time") or 0
+        book["size"] += t.get("size") or 0
+    tv = [t for t in library.load_tracks(conn, media_kind="tvshow") if phone or ipod_can_play(t)]
+    tv.sort(key=lambda e: (sort_text(show_of(e)), _episode_order(e)))
+    tv_shows = sorted({show_of(e) for e in tv}, key=sort_text)
     return Choices(syncable_playlists(conn), artists,
                    sorted(albums.items(), key=lambda item: sort_text(item[1])), genres, movies,
-                   shows, episodes, sorted(books.items(), key=lambda item: sort_text(item[1])))
+                   shows, episodes, sorted(books.items(), key=lambda item: sort_text(item[1])),
+                   details, tv_shows, tv)
 
 
 @dataclass
@@ -277,8 +294,17 @@ def build_plan(conn: sqlite3.Connection, settings: SyncSettings,
         for m in chosen_movies:
             wanted[m["id"]] = m
 
-    if settings.sync_tv and settings.tv_auto:
-        for e in _tv_rule(settings.tv_rule, episodes):
+    if settings.sync_tv:
+        chosen_tv = []
+        if settings.tv_auto:
+            pool = episodes
+            if settings.tv_scope == "selected shows":
+                shows = set(settings.tv_shows)
+                pool = [e for e in episodes if show_of(e) in shows]
+            chosen_tv = _tv_rule(settings.tv_rule, pool)
+        picked = set(settings.tv_episodes)
+        chosen_tv += [e for e in episodes if e["persistent_id"] in picked]
+        for e in chosen_tv:
             wanted[e["id"]] = e
 
     if settings.sync_podcasts:

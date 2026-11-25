@@ -12,6 +12,8 @@ The order of a sync:
      this computer stays on the iPod.
   4. Rebuild the playlists, set the iPod's name, and save the database
      (libgpod adds the 6G/7G signature).
+  5. On an iPod that also runs Rockbox: its plays, playlists, and tags and
+     covers it can read (rockbox.py).
 
 Nothing here deletes or changes anything in the library except step 2.
 """
@@ -21,6 +23,7 @@ from __future__ import annotations
 import ctypes
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -29,8 +32,9 @@ from pathlib import Path
 
 from luxtunes.core import artwork as artwork_reader
 from luxtunes.core import library
-from luxtunes.core.ipod import gpod, models, plan as ipod_plan, settings as ipod_settings, stats
+from luxtunes.core.ipod import gpod, models, plan as ipod_plan, rockbox, settings as ipod_settings, stats
 from luxtunes.core.ipod.device import IPod, usb_details
+from luxtunes.core.convert import ffmpeg_path
 from luxtunes.core.paths import find_file
 from luxtunes.ui.formatting import name_with_featured
 
@@ -58,6 +62,9 @@ class SyncReport:
     artwork_restored: int = 0          # iPod: songs given back artwork they were missing
     imported: list = field(default_factory=list)   # Android: track ids of songs added on the phone
     edited: list = field(default_factory=list)     # Android: track ids edited on the phone
+    rockbox_plays: int = 0             # iPod with Rockbox: plays read from its log
+    rockbox_playlists: int = 0         # …playlists written for it
+    rockbox_fixed: int = 0             # …song files given tags or a cover it can show
 
 
 @dataclass
@@ -460,6 +467,87 @@ def back_up_song_list(ipod: IPod, root: Path | None = None) -> Path | None:
 
 # ---- The sync ---------------------------------------------------------------------------
 
+def _merge_rockbox_plays(conn, ipod: IPod, state: dict, report: SyncReport) -> None:
+    """Plays and skips from Rockbox's scrobbler log into the library, added to
+    the stock firmware's. Remembered on the iPod at once, so they can't count twice."""
+    plays, seen = rockbox.read_scrobbler_log(ipod.mountpoint, state)
+    if not seen:
+        return
+    if plays:
+        result = stats.merge(conn, rockbox.plays_to_stats(conn, plays))
+        report.rockbox_plays = result.plays
+        total = report.stats
+        total.plays += result.plays
+        total.skips += result.skips
+        total.songs += result.songs
+        for track_id, changes in result.changed.items():
+            total.changed.setdefault(track_id, {}).update(changes)
+        log.info("read %d plays and %d skips from Rockbox's log", result.plays, result.skips)
+    state["scrobbler"] = seen
+    rockbox.save_state(ipod.mountpoint, state)
+
+
+def _ready_for_rockbox(source: str, path: str, song: dict, scratch: str,
+                       ffmpeg: str | None) -> str:
+    """The file to copy to an iPod that also runs Rockbox: a converted song
+    (`source` != `path`) gets its tags and cover; an unconverted one whose
+    cover Rockbox can't show is copied to `scratch` and given one. The
+    library's file is never changed."""
+    if source != path:
+        rockbox.fix_file(source, song, path, ffmpeg, needs_tags=True)
+        return source
+    art = artwork_reader.read_embedded_artwork(path)
+    if art is None or rockbox.rockbox_can_show(art) or not ffmpeg:
+        return path
+    copy = os.path.join(scratch, "rockbox" + os.path.splitext(path)[1])
+    try:
+        shutil.copyfile(path, copy)
+    except OSError:
+        return path
+    if rockbox.fix_file(copy, song, None, ffmpeg, needs_tags=False):
+        return copy
+    try:
+        os.remove(copy)
+    except OSError:
+        pass
+    return path
+
+
+SAVE_CHECKED_EVERY = 200
+
+
+def _check_for_rockbox(db, ipod: IPod, kept: dict, library_by_dbid: dict, state: dict,
+                       ffmpeg: str | None, report: SyncReport, tell) -> None:
+    """Songs already on the iPod: tags (converted ones have none, and edits
+    made since it was copied) and a cover Rockbox can show, written into the
+    iPod's copy. Each is checked once (until its file or details change);
+    Stop keeps what was done."""
+    checked = state.setdefault("checked", {})
+    todo = []
+    for dbid, pointer in kept.items():
+        song = library_by_dbid[dbid]
+        path = db.file_of(pointer)
+        pid = song.get("persistent_id")
+        if path and pid and checked.get(pid) != rockbox.checked_key(path, song):
+            todo.append((pointer, song, path, pid))
+    for i, (pointer, song, path, pid) in enumerate(todo):
+        tell("Getting songs ready for Rockbox…", i, len(todo))
+        # Edited since: write all its details; otherwise only if it has none.
+        edited = rockbox.details_changed(checked.get(pid, ""), song) or None
+        if rockbox.fix_file(path, song, find_file(song.get("location")), ffmpeg,
+                            needs_tags=edited):
+            report.rockbox_fixed += 1
+            try:
+                pointer.contents.size = os.path.getsize(path)
+            except OSError:
+                pass
+        checked[pid] = rockbox.checked_key(path, song)
+        if i % SAVE_CHECKED_EVERY == SAVE_CHECKED_EVERY - 1:
+            rockbox.save_state(ipod.mountpoint, state)
+    if todo:
+        log.info("checked %d songs for Rockbox, %d changed", len(todo), report.rockbox_fixed)
+
+
 def database_options(ipod: IPod) -> dict:
     """How gpod.Database should open this iPod: the model to tell libgpod when
     SysInfo names none, and for a nano 6th/7th generation, its own details
@@ -555,6 +643,12 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
         first_sync = record.last_sync is None
         report.stats = stats.merge(conn, read_ipod_stats(db, ratings_too=not first_sync))
         set_aside_play_counts(ipod)
+        with_rockbox = settings.rockbox and rockbox.has_rockbox(ipod.mountpoint)
+        rockbox_state = rockbox.load_state(ipod.mountpoint) if with_rockbox else {}
+        if with_rockbox:
+            _merge_rockbox_plays(conn, ipod, rockbox_state, report)
+        ffmpeg = ffmpeg_path() if with_rockbox else None
+        checked = rockbox_state.setdefault("checked", {})
 
         # 2. Take unwanted songs off the iPod (never out of the library). Only
         # out of its database for now: the files go once the database is saved,
@@ -629,26 +723,32 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
                     source = _convert_for_ipod(path, kbps, scratch.name, report, song)
                     if source is None:
                         continue
+                upload = source
+                if with_rockbox:
+                    upload = _ready_for_rockbox(source, path, song, scratch.name, ffmpeg)
                 tell(f"Copying “{song.get('name')}”", i, len(to_add))
                 pointer = db.new_track()
                 fill_track(pointer.contents, song)
-                pointer.contents.size = os.path.getsize(source)
+                pointer.contents.size = os.path.getsize(upload)
                 if source != path:
                     pointer.contents.bitrate = kbps
                     pointer.contents.type2 = 0
                     gpod.set_str(pointer.contents, "filetype", "AAC audio file")
                 try:
-                    db.copy_file(pointer, source)
+                    db.copy_file(pointer, upload)
                 except gpod.GpodError as error:
                     db.remove_track(pointer)
                     report.problems.append(f"{song.get('name')}: {error}")
                     continue
                 finally:
-                    if source != path:
+                    for temporary in {source, upload} - {path}:
                         try:
-                            os.remove(source)
+                            os.remove(temporary)
                         except OSError:
                             pass
+                if with_rockbox and song.get("persistent_id"):
+                    checked[song["persistent_id"]] = rockbox.checked_key(db.file_of(pointer) or "",
+                                                                         song)
                 art = artwork_reader.read_embedded_artwork(path) if ipod.supports_artwork \
                     else None
                 if art:
@@ -660,8 +760,18 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
         finally:
             scratch.cleanup()
 
+        # 4b. Rockbox: songs already on the iPod get tags and a cover it can
+        # show, if they lack them (each song is checked once).
+        if with_rockbox and not report.cancelled:
+            try:
+                _check_for_rockbox(db, ipod, kept, library_by_dbid, rockbox_state, ffmpeg,
+                                   report, tell)
+            except SyncCancelled:
+                report.cancelled = True
+
         # 5. Playlists: recreate the chosen ones from the library.
         present = {**kept, **added}
+        rockbox_playlists = []
         for playlist in db.playlists():
             if not (db.is_master(playlist) or db.is_podcasts(playlist)):
                 db.remove_playlist(playlist)
@@ -676,12 +786,13 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
                 for pointer in episodes:
                     db.add_to_playlist(podcasts, pointer)
             for entry in the_plan.playlists:
-                members = [present[d] for d in (dbid_of(t) for t in
-                           library.load_tracks_by_ids(conn, entry["track_ids"])) if d in present]
+                songs = [t for t in library.load_tracks_by_ids(conn, entry["track_ids"])
+                         if dbid_of(t) in present]
                 playlist = db.new_playlist(entry["name"])
-                for pointer in members:
-                    db.add_to_playlist(playlist, pointer)
+                for song in songs:
+                    db.add_to_playlist(playlist, present[dbid_of(song)])
                 report.playlists += 1
+                rockbox_playlists.append((entry["name"], songs))
 
         # 6. Name, then save (libgpod signs the database: hash58, hash72 or hashAB).
         if record.pending_name:
@@ -702,6 +813,21 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
                 log.warning("couldn't delete %s from the iPod: %s", path, error)
         if orphans:
             log.info("removed %d song files the iPod's database didn't list", len(orphans))
+
+        # 6c. Rockbox: the playlists as .m3u8 files, and what was checked.
+        if with_rockbox:
+            if not settings.manual:
+                report.rockbox_playlists = rockbox.write_playlists(ipod.mountpoint, [
+                    (name, [{"path": db.file_of(present[dbid_of(song)]),
+                             "seconds": (song.get("total_time") or 0) / 1000,
+                             "artist": song.get("artist"), "name": song.get("name")}
+                            for song in songs])
+                    for name, songs in rockbox_playlists])
+            on_ipod_now = {library_by_dbid[d].get("persistent_id") for d in present
+                           if d in library_by_dbid}
+            for pid in [pid for pid in checked if pid not in on_ipod_now]:
+                del checked[pid]
+            rockbox.save_state(ipod.mountpoint, rockbox_state)
 
     # 7. Photos: one way, from the chosen folder (never back from the iPod).
     if not report.cancelled and ipod.supports_photos:

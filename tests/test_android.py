@@ -588,10 +588,10 @@ def test_a_failed_recopy_keeps_the_old_copy(tmp_path, monkeypatch):
 
     real_copy = sync._copy
 
-    def broken(source, root_, relative, stop=None):
+    def broken(source, root_, relative, stop=None, *more):
         if str(relative).startswith("LuxTunes Media"):
             raise OSError(5, "Input/output error")      # as the phone said for those songs
-        return real_copy(source, root_, relative, stop)
+        return real_copy(source, root_, relative, stop, *more)
 
     monkeypatch.setattr(sync, "_copy", broken)
     report = run(conn, phone)
@@ -920,3 +920,237 @@ def test_a_songs_equalizer_preset_set_on_the_phone(tmp_path):
     assert conn.execute("SELECT equalizer FROM tracks WHERE name = 'Rovers'").fetchone()[0] is None
     assert len(report.problems) == 1                              # 3 isn't a name
     assert "edited_tracks" not in json.loads((root / "changes.json").read_text())
+
+
+PNG_ART = b"\x89PNG\r\n\x1a\n" + b"\x01" * 64        # stands in for a PNG
+
+
+def test_an_album_with_two_pictures_gets_a_cover_for_each(tmp_path, monkeypatch):
+    # Like a standard edition's songs and the deluxe edition's extra ones, each
+    # with its own cover: every song shows its own picture on the phone.
+    conn = small_library(tmp_path)
+    tags.write_tags(str(tmp_path / "0.mp3"), {}, artworks=[ART])         # Rovers: A
+    tags.write_tags(str(tmp_path / "1.mp3"), {}, artworks=[ART])         # Caramel: A
+    tags.write_tags(str(tmp_path / "2.mp3"), {}, artworks=[PNG_ART])     # Westland: B
+    phone = fake_phone(tmp_path)
+    root = _phone_root(tmp_path)
+    run(conn, phone)
+    [first] = (root / "LuxTunes Media").rglob("cover.jpg")
+    [second] = (root / "LuxTunes Media").rglob("cover-2.png")
+    assert first.read_bytes() == ART and second.read_bytes() == PNG_ART
+
+    def artwork():
+        with _db(root) as out:
+            return dict(out.execute("SELECT t.id, t.artwork FROM tracks t"))
+    covers = artwork()
+    assert covers["ABCDEF0000000000"] == covers["ABCDEF0000000001"] == str(first.relative_to(root))
+    assert covers["ABCDEF0000000002"] == str(second.relative_to(root))
+    manifest = json.loads((root / ".luxtunes-sync.json").read_text())
+    assert sorted(manifest["covers"]) == sorted([str(first.relative_to(root)),
+                                                 str(second.relative_to(root))])
+
+    # Nothing changed: no artwork is read again and no cover is written again.
+    reads, written = [], []
+    real_read = sync.artwork_reader.read_embedded_artwork
+    monkeypatch.setattr(sync.artwork_reader, "read_embedded_artwork",
+                        lambda path: reads.append(path) or real_read(path))
+    real_write = sync._write
+    monkeypatch.setattr(sync, "_write", lambda root_, relative, data:
+                        written.append(str(relative)) or real_write(root_, relative, data))
+    run(conn, phone)
+    assert reads == [] and not [w for w in written if "/cover" in w]
+    assert artwork() == covers
+    monkeypatch.undo()
+
+    # Westland gets picture A too: cover-2 goes, and every song shows cover.jpg.
+    tags.write_tags(str(tmp_path / "2.mp3"), {}, artworks=[ART])
+    run(conn, phone)
+    assert not list((root / "LuxTunes Media").rglob("cover-2.*"))
+    assert set(artwork().values()) == {str(first.relative_to(root))}
+
+    # A song without artwork shows the album's cover.jpg.
+    tags.write_tags(str(tmp_path / "0.mp3"), {}, artworks=[])
+    run(conn, phone)
+    assert artwork()["ABCDEF0000000000"] == str(first.relative_to(root))
+
+
+def test_an_album_with_one_picture_still_has_just_cover_jpg(tmp_path):
+    conn = small_library(tmp_path)
+    for i in range(3):
+        tags.write_tags(str(tmp_path / f"{i}.mp3"), {}, artworks=[ART])
+    phone = fake_phone(tmp_path)
+    root = _phone_root(tmp_path)
+    run(conn, phone)
+    found = sorted(p.name for p in (root / "LuxTunes Media").rglob("cover*"))
+    assert found == ["cover.jpg"]
+
+
+def test_updating_luxtunes_doesnt_rewrite_every_cover(tmp_path, monkeypatch):
+    # The record from before LuxTunes remembered each cover's picture has only
+    # "covers" (and "no_cover"). The first sync after updating must keep those
+    # covers, not write every album's cover to the phone again (over an hour).
+    conn = small_library(tmp_path)
+    for i in range(3):
+        tags.write_tags(str(tmp_path / f"{i}.mp3"), {}, artworks=[ART])
+    phone = fake_phone(tmp_path)
+    root = _phone_root(tmp_path)
+    run(conn, phone)
+    record = root / ".luxtunes-sync.json"
+    manifest = json.loads(record.read_text())
+    for key in ("art", "cover_hashes"):
+        manifest.pop(key)
+    manifest["no_cover"] = []
+    record.write_text(json.dumps(manifest))
+    written = []
+    real_write = sync._write
+    monkeypatch.setattr(sync, "_write", lambda root_, relative, data:
+                        written.append(str(relative)) or real_write(root_, relative, data))
+    run(conn, phone)
+    assert not [w for w in written if "/cover" in w]
+    [cover] = (root / "LuxTunes Media").rglob("cover.jpg")
+    with _db(root) as out:
+        assert {r[0] for r in out.execute("SELECT artwork FROM tracks")} == \
+            {str(cover.relative_to(root))}
+    # ...and from then on, nothing is read either.
+    reads = []
+    real_read = sync.artwork_reader.read_embedded_artwork
+    monkeypatch.setattr(sync.artwork_reader, "read_embedded_artwork",
+                        lambda path: reads.append(path) or real_read(path))
+    run(conn, phone)
+    assert reads == [] and not [w for w in written if "/cover" in w]
+
+
+# ---- Stopping, and a phone that stops answering ------------------------------------------
+
+STUCK_HELPER = r"""
+import json, sys, time
+for line in sys.stdin:
+    request = json.loads(line)
+    sys.stdout.write(json.dumps({"wrote": 1}) + "\n"); sys.stdout.flush()
+    sys.stdout.write(json.dumps({"closing": True}) + "\n"); sys.stdout.flush()
+    time.sleep(3600)            # like a phone that never finishes taking the file
+"""
+
+
+def test_stop_ends_a_copy_the_phone_is_stuck_on(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    from luxtunes.core.android import copier
+    monkeypatch.setattr(copier, "HELPER", STUCK_HELPER)
+    source = tmp_path / "book.m4b"
+    source.write_bytes(b"x" * 1000)
+    stop = threading.Event()
+    threading.Timer(0.5, stop.set).start()
+    started = time.monotonic()
+    c = copier.Copier()
+    with pytest.raises(copier.CopyStopped):
+        c.copy(str(source), str(tmp_path / "out.m4b"), 1000, stop)
+    assert time.monotonic() - started < 5          # not "after the current song"
+    c.close()
+
+
+def test_a_phone_that_never_finishes_a_file_is_given_up_on(tmp_path, monkeypatch):
+    from luxtunes.core.android import copier
+    monkeypatch.setattr(copier, "HELPER", STUCK_HELPER)
+    monkeypatch.setattr(copier, "STALL", 1)
+    source = tmp_path / "book.m4b"
+    source.write_bytes(b"x" * 1000)
+    c = copier.Copier()
+    with pytest.raises(copier.PhoneStalled):
+        c.copy(str(source), str(tmp_path / "out.m4b"), 1000)
+    # The next file gets a fresh helper.
+    monkeypatch.undo()
+    c.copy(str(source), str(tmp_path / "out2.m4b"), 1000)
+    assert (tmp_path / "out2.m4b").read_bytes() == b"x" * 1000
+    c.close()
+
+
+def test_a_stalled_phone_stops_the_sync_cleanly(tmp_path, monkeypatch):
+    from luxtunes.core.android import copier
+    conn = small_library(tmp_path)
+    phone = fake_phone(tmp_path)
+    root = _phone_root(tmp_path)
+    calls = []
+    real = copier.Copier.copy
+
+    def stalls_on_the_second(self, source, target, size, stop=None, progress=None):
+        calls.append(target)
+        if len(calls) == 2:
+            raise copier.PhoneStalled("the phone stopped taking data after 0 of 0 MB")
+        return real(self, source, target, size, stop, progress)
+    monkeypatch.setattr(copier.Copier, "copy", stalls_on_the_second)
+    report = run(conn, phone)
+    assert report.cancelled and len(calls) == 2 and report.added == 1
+    assert any("stopped" in p and "Sync Logs" in p for p in report.problems)
+    manifest = json.loads((root / ".luxtunes-sync.json").read_text())
+    assert len(manifest["files"]) == 1                 # what got there is remembered
+    monkeypatch.undo()
+    report = run(conn, phone)                          # and the next sync finishes the job
+    assert not report.cancelled and report.added == 2
+
+
+def test_stop_during_album_covers_picks_up_next_time(tmp_path, monkeypatch):
+    conn = small_library(tmp_path)
+    for i in range(3):
+        tags.write_tags(str(tmp_path / f"{i}.mp3"), {}, artworks=[ART])
+    phone = fake_phone(tmp_path)
+    root = _phone_root(tmp_path)
+    record = settings.load_device(conn, phone.key, phone.name)
+    stop = __import__("threading").Event()
+
+    def progress(text, done, total):
+        if text.startswith("Adding album covers"):
+            stop.set()                                  # Stop pressed during the covers
+        return not stop.is_set()
+    monkeypatch.setattr(sync, "_add_cover", lambda *a, **k: None)   # no cover during copying
+    report = sync.sync(conn, phone, record, progress, stop=stop)
+    assert report.cancelled and report.added == 3
+    with _db(root) as out:                              # the phone's library is still written
+        assert out.execute("SELECT COUNT(*) FROM tracks").fetchone()[0] == 3
+    monkeypatch.undo()
+    run(conn, phone)                                    # carries on: the cover arrives
+    assert len(list((root / "LuxTunes Media").rglob("cover.jpg"))) == 1
+
+
+def test_stop_while_removing_keeps_a_true_record(tmp_path):
+    import threading
+    conn = small_library(tmp_path)
+    phone = fake_phone(tmp_path)
+    root = _phone_root(tmp_path)
+    run(conn, phone)
+    conn.execute("DELETE FROM tracks")
+    conn.commit()
+    record = settings.load_device(conn, phone.key, phone.name)
+    stop = threading.Event()
+    seen = []
+
+    def progress(text, done, total):
+        if text.startswith("Removing"):
+            seen.append(done)
+            if done == 1:
+                stop.set()
+        return not stop.is_set()
+    report = sync.sync(conn, phone, record, progress, stop=stop)
+    assert report.cancelled and report.removed == 1
+    manifest = json.loads((root / ".luxtunes-sync.json").read_text())
+    assert len(manifest["files"]) == 2                  # the two still there
+    report = run(conn, phone)
+    assert report.removed == 2 and not list((root / "LuxTunes Media").rglob("*.mp3"))
+
+
+def test_each_sync_writes_a_log(tmp_path):
+    import logging
+
+    from luxtunes.core import sync_log
+    folder = tmp_path / "Sync logs"
+    with sync_log.SyncLog(folder, "Pixel 7") as path:
+        logging.getLogger("luxtunes.core.android.sync").debug("copying a song")
+    text = path.read_text()
+    assert "Pixel 7" in text and "copying a song" in text and "ended" in text
+    assert oct(path.stat().st_mode & 0o777) == "0o600"
+    for i in range(sync_log.KEEP + 5):
+        (folder / f"old {i}.log").write_text("x")
+    with sync_log.SyncLog(folder, "Pixel 7"):
+        pass
+    assert len(list(folder.glob("*.log"))) == sync_log.KEEP

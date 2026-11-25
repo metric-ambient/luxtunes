@@ -20,6 +20,9 @@ LIGHT = {
     "indicator_border": "#7d7d7d",  # the outline of every checkbox and radio button
     "base": "#ffffff",
     "alt_base": "#f1f5fa",
+    "list_bg": "#ffffff",           # the device page's lists
+    "list_alt": "#f1f5fa",
+    "list_border": "#b3b3b3",
     "now_playing": "#d2d5da",       # the bar behind the song that's playing
     "highlight": "#3d80df",
     "highlight_text": "#ffffff",
@@ -55,6 +58,9 @@ DARK = {
     "indicator_border": "#a8b0ba",  # light enough to see on the dark background
     "base": "#1e1f22",
     "alt_base": "#26272b",
+    "list_bg": "#2a2c31",           # the device page's lists: lighter than the page
+    "list_alt": "#303238",
+    "list_border": "#464951",
     "now_playing": "#41444b",
     "highlight": "#2f6fd0",
     "highlight_text": "#ffffff",
@@ -64,10 +70,11 @@ DARK = {
     "button_top": "#55575c",
     "button_bottom": "#36373b",
     "button_border": "#16171a",
-    "lcd_top": "#3d4133",
-    "lcd_bottom": "#2e3124",
-    "lcd_border": "#14150f",
-    "lcd_text": "#e9edcc",
+    # A cool slate LCD (the old olive one looked yellow-green on dark).
+    "lcd_top": "#3b4352",
+    "lcd_bottom": "#2c323d",
+    "lcd_border": "#121418",
+    "lcd_text": "#e8eef6",
     "sidebar": "#25272b",
     "sidebar_sel_top": "#3e6fb8",
     "sidebar_sel_bottom": "#2c5596",
@@ -150,6 +157,12 @@ QToolButton#deviceTab:checked {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #8a8a8a, stop:1 #6a6a6a);
 }
 QFrame#deviceBox { background: $alt_base; border: 1px solid $border; }
+/* The device page's lists: a frame and their own background, so each list
+   stands out from the page (hard to tell apart on dark otherwise). */
+QListWidget#deviceList {
+    background: $list_bg; alternate-background-color: $list_alt; border: 1px solid $list_border;
+    border-radius: 4px;
+}
 /* Checkboxes and radio buttons everywhere (dialogs, the iPod's pages, list
    checkboxes): a clear outline in both themes, filled blue when ticked. */
 QCheckBox::indicator, QGroupBox::indicator, QAbstractItemView::indicator {

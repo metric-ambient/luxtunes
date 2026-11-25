@@ -23,7 +23,7 @@ from pathlib import Path
 from luxtunes.core.paths import data_home
 
 # Bump this when the schema changes, and add a step to _migrate().
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS library_info (
@@ -277,8 +277,39 @@ def _migrate(conn: sqlite3.Connection) -> None:
                             "WHERE featured_artist LIKE '%,%'").fetchall()
         conn.executemany("UPDATE tracks SET featured_artist = ? WHERE id = ?",
                          [(from_old_featured(text), track_id) for track_id, text in rows])
+    if version < 15:
+        # Podcast subscriptions (core/podcasts.py): each feed, and every episode
+        # it lists, with the song it became once downloaded.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS podcast_feeds (
+                id           INTEGER PRIMARY KEY,
+                url          TEXT NOT NULL UNIQUE,
+                title        TEXT,
+                author       TEXT,
+                description  TEXT,
+                image_url    TEXT,
+                link         TEXT,
+                added        TEXT,
+                last_checked TEXT,
+                last_error   TEXT
+            )""")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS podcast_episodes (
+                id          INTEGER PRIMARY KEY,
+                feed_id     INTEGER NOT NULL REFERENCES podcast_feeds(id) ON DELETE CASCADE,
+                guid        TEXT NOT NULL,
+                title       TEXT,
+                description TEXT,
+                url         TEXT,
+                published   TEXT,
+                size        INTEGER,
+                duration    INTEGER,       -- ms
+                track_id    INTEGER REFERENCES tracks(id) ON DELETE SET NULL,
+                first_seen  TEXT,
+                UNIQUE (feed_id, guid)
+            )""")
     # Future schema changes go here:
-    # if version < 15:
+    # if version < 16:
     #     conn.execute("ALTER TABLE tracks ADD COLUMN ...")
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()

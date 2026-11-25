@@ -373,3 +373,35 @@ def sync_a_hash_ab_nano(tmp_path, monkeypatch, usb_product, user_version, versio
             ["Caramel", "Rovers", "Westland"]
     backups = list((tmp_path / "data" / "luxtunes" / "iPod backups" / ipod.key).iterdir())
     assert len(backups) == 1 and (backups[0] / "iTunesDB").exists()   # the song list as it was
+
+
+def test_ipod_with_rockbox_too(tmp_path):
+    from luxtunes.core.ipod import rockbox
+    mount, conn = fake_ipod(tmp_path), small_library(tmp_path)
+    (mount / ".rockbox").mkdir()
+    (mount / ".scrobbler.log").write_text(
+        "#AUDIOSCROBBLER/1.1\n#TZ/UTC\n#CLIENT/Rockbox ipod6g\n"
+        "The 1987\tThe 1987\tCaramel\t\t3\tL\t1767225600\t\n")
+    report = do_sync(conn, mount)
+    assert report.rockbox_plays == 1 and report.stats.plays == 1
+    assert conn.execute("SELECT play_count FROM tracks WHERE name = 'Caramel'").fetchone()[0] == 2
+    lines = (mount / "Playlists" / "Mix.m3u8").read_text().splitlines()
+    files = [line for line in lines if not line.startswith("#")]
+    assert len(files) == 2 and all((mount / f.lstrip("/")).is_file() for f in files)
+    state = rockbox.load_state(str(mount))
+    assert len(state["checked"]) == 3 and state["scrobbler"]["entries"] == 1
+    # Again: the same play isn't counted twice, and no song needs checking.
+    report = do_sync(conn, mount)
+    assert report.rockbox_plays == 0 and report.rockbox_fixed == 0
+    assert conn.execute("SELECT play_count FROM tracks WHERE name = 'Caramel'").fetchone()[0] == 2
+    # An edited title reaches the iPod's copy (Rockbox reads the file's tags).
+    conn.execute("UPDATE tracks SET name = 'Caramel (Live)' WHERE name = 'Caramel'")
+    conn.commit()
+    report = do_sync(conn, mount)
+    assert report.rockbox_fixed == 1
+    with gpod.Database(str(mount)) as ipod_db:
+        [song] = [t for t in ipod_db.tracks() if gpod.get_str(t.contents, "title") == "Caramel (Live)"]
+        assert tags.read_fields(ipod_db.file_of(song))["name"] == "Caramel (Live)"
+    # Turned off: no playlists written, nothing removed.
+    report = do_sync(conn, mount, rockbox=False)
+    assert report.rockbox_playlists == 0 and (mount / "Playlists" / "Mix.m3u8").exists()

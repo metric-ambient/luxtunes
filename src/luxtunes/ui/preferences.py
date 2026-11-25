@@ -5,11 +5,11 @@ the Grid view's colour, source icons and list checkboxes, and what happens
 when you insert a CD (plus Import Settings…) and the sounds when an import
 or an iPod sync ends.
 Advanced: the LuxTunes Media folder and keeping it organized.
+Network: what may go online without asking each time (core/network_prefs.py).
+All of it is off at first; turning one on asks you to confirm.
 
-Looking up CD names or album artwork online is never automatic: LuxTunes
-asks every time (see MainWindow._approve_internet). The only setting is
-whether it asks by itself when a CD is inserted. Checking for updates only
-happens when you choose Help → Check for Updates…, after a yes.
+Otherwise LuxTunes asks every time before going online (see
+MainWindow._approve_internet).
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from luxtunes.core import add_files, cd, convert, encoders, library, organize
+from luxtunes.core import add_files, cd, convert, encoders, library, network_prefs, organize
 from luxtunes.ui.tab_memory import remember_tab
 
 # Look-and-feel choices, kept in the app's settings (QSettings), with their defaults.
@@ -102,6 +102,7 @@ class PreferencesDialog(QDialog):
         tabs.addTab(self._general_tab(), "General")
         tabs.addTab(self._playback_tab(), "Playback")
         tabs.addTab(self._advanced_tab(), "Advanced")
+        tabs.addTab(self._network_tab(), "Network")
         remember_tab(tabs, "preferences", "General")
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
                                    | QDialogButtonBox.StandardButton.Cancel)
@@ -344,6 +345,68 @@ class PreferencesDialog(QDialog):
         layout.addStretch(1)
         return page
 
+    def _network_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        intro = QLabel("LuxTunes only goes online when you ask it to, and asks you first each "
+                       "time. Tick what may go ahead without asking. The status bar shows "
+                       "whenever LuxTunes connects, and each connection is only as long as that "
+                       "one request: nothing stays connected or runs in the background, and "
+                       "LuxTunes never accepts connections from outside.")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        layout.addSpacing(6)
+        self.network_boxes: dict[str, QCheckBox] = {}
+        allowed = network_prefs.all_allowed(self.conn)
+        for feature, text in network_prefs.FEATURES.items():
+            box = QCheckBox(text)
+            box.setChecked(allowed[feature])
+            box.setToolTip(network_prefs.SENDS[feature])
+            box.toggled.connect(lambda on, f=feature, b=box: self._network_toggled(f, b, on))
+            if feature == "podcasts_startup":
+                indent = QHBoxLayout()
+                indent.addSpacing(24)
+                indent.addWidget(box)
+                indent.addStretch(1)
+                layout.addLayout(indent)
+            else:
+                layout.addWidget(box)
+            self.network_boxes[feature] = box
+        self.network_boxes["podcasts_startup"].setEnabled(allowed["podcasts"])
+        note = QLabel("Song info and lyrics still only look up the songs you choose (right-click "
+                      "→ Get Track Info Online… or Get Lyrics Online…); ticking them just skips the "
+                      "question. Updates are never installed without asking.")
+        note.setWordWrap(True)
+        note.setEnabled(False)            # lighter grey, like the other notes
+        layout.addSpacing(6)
+        layout.addWidget(note)
+        layout.addStretch(1)
+        return page
+
+    def _network_toggled(self, feature: str, box: QCheckBox, on: bool):
+        """Turning one on: say plainly what it means, and only keep it on after a yes."""
+        if feature == "podcasts":
+            startup = self.network_boxes.get("podcasts_startup")
+            if startup is not None:
+                startup.setEnabled(on)
+                if not on:
+                    startup.setChecked(False)
+        if not on:
+            return
+        answer = QMessageBox.question(
+            self, "Allow LuxTunes to Go Online",
+            f"You're choosing to let LuxTunes connect to the internet for “"
+            f"{network_prefs.FEATURES[feature]}” without asking each time.\n\n"
+            f"{network_prefs.SENDS[feature]}\n\nYou can turn this off here at any time.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel)
+        if answer != QMessageBox.StandardButton.Yes:
+            box.blockSignals(True)
+            box.setChecked(False)
+            box.blockSignals(False)
+            if feature == "podcasts":
+                self.network_boxes["podcasts_startup"].setEnabled(False)
+
     def _change_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Change LuxTunes Media Folder Location",
                                                   self._folder)
@@ -356,6 +419,8 @@ class PreferencesDialog(QDialog):
         organize.set_media_folder(self.conn, self._folder)
         add_files.set_move_when_adding(self.conn, self.move_files.isChecked())
         convert.set_delete_original(self.conn, self.delete_original.isChecked())
+        for feature, box in self.network_boxes.items():
+            network_prefs.set_allowed(self.conn, feature, box.isChecked() and box.isEnabled())
         cd.set_insert_action(self.conn, self.insert_action.currentData())
         cd.set_ask_lookup(self.conn, self.ask_lookup.isChecked())
         encoders.save(self.conn, self._import_settings)

@@ -53,6 +53,9 @@ Made for Linux Mint, and it runs on most recent Linux systems.
   columns and sort; search everything or just artists, albums, composers or song names.
   Accents and capitals don't matter: "beyonce" finds Beyoncé.
 - Music, Movies, TV Shows, Podcasts and Audiobooks, kept apart.
+- **Podcast subscriptions:** paste a podcast's feed address (no account needed), then
+  **Refresh Podcasts** downloads new episodes; **File → Podcasts…** lists older ones to
+  download.
 - Playlists and live **smart playlists**, plus an **Up Next** queue.
 - **Get Info** for editing details, artwork and lyrics (and show, season and episode for
   movies and TV shows), for one song or many at once. Your edits are written into the
@@ -64,8 +67,9 @@ Made for Linux Mint, and it runs on most recent Linux systems.
   built-in list of about 3,300 (a song can have several).
 - **Get Track Info Online…** suggests corrections, genres and missing covers from
   MusicBrainz (a credit like "Lümen & Grayfield feat. Ann" fills in the artists and the
-  featured artist), and **Get Lyrics Online…** fills in lyrics from LRCLIB, both only after
-  you say yes.
+  featured artist), and **Get Lyrics Online…** fills in lyrics from LRCLIB, both only for
+  the songs you choose and only after you say yes (or without the question, if you allow it
+  in Preferences → Network).
 - **Keeps your files tidy:** everything you add is copied (or, if you like, moved) into one
   LuxTunes Media folder, named and filed as Artist / Album / *Track Name*, and follows
   your edits.
@@ -101,6 +105,12 @@ Made for Linux Mint, and it runs on most recent Linux systems.
   aren't in your library, with their play counts and ratings. Before syncing a nano 6th or
   7th generation, LuxTunes keeps a copy of its song list in case it needs to be put back.
   (The iPod touch can't be supported.)
+- **iPods that also run Rockbox or RepriseOS:** one normal sync serves every firmware on the
+  iPod. RepriseOS is built on Apple's own software and reads the same song list; it's
+  expected to work but hasn't been tested yet. For Rockbox, LuxTunes also writes your
+  playlists into the iPod's `Playlists` folder, gives the iPod's copies of your songs their
+  details and a cover Rockbox can show (your library's files are never changed), and adds
+  plays from Rockbox's scrobbler log to your library.
 - **Android phones,** over a USB cable: songs, videos, podcasts, audiobooks, artwork,
   lyrics, playlists and your equalizer go into one `LuxTunes` folder on the phone, which
   any music player can use. With the companion
@@ -110,12 +120,17 @@ Made for Linux Mint, and it runs on most recent Linux systems.
   ([how the folder is laid out](docs/android-library-format.md)).
 - Choose to sync everything, everything with only some playlists, or just chosen
   playlists, artists, albums and genres. A sync in progress can be stopped with **Stop
-  Sync**; what's already copied stays.
+  Sync** at any point, even mid-file; what's already copied stays, and the next sync
+  carries on. Each sync keeps a log (Help → Show Sync Logs).
 
 ### Privacy
 
 LuxTunes asks before it ever goes online, which only happens for CD names, Get Track Info
-Online…, Get Lyrics Online…, and checking for updates. There's no account and nothing is collected.
+Online…, Get Lyrics Online…, podcasts, and checking for updates. There's no account and
+nothing is collected. **Preferences → Network** can let any of those go ahead without asking
+(all off at first); updates can then be checked, and podcasts refreshed, when LuxTunes
+starts. The status bar shows whenever LuxTunes connects, only secure (https://) connections
+are made, and LuxTunes never accepts connections from outside.
 
 ## Get LuxTunes
 
@@ -138,12 +153,13 @@ short guides to everything.
 
 | Install | For |
 |---|---|
-| `ffmpeg` | movies and TV shows, MP3, AAC and iPod versions, Sound Check |
+| `ffmpeg` | movies and TV shows, MP3, AAC and iPod versions, Sound Check, covers for Rockbox |
 | `cdparanoia` | importing CDs |
 | `libgpod-common` | iPod sync |
 
 **Updating:** Help → Check for Updates…. LuxTunes asks before it goes online, downloads
-the new version, and uses it the next time you open LuxTunes.
+the new version, and uses it the next time you open LuxTunes. To have it check by itself
+each time it starts, turn that on in Preferences → Network; it still asks before installing.
 
 **Removing it:** Help → Remove LuxTunes from This Computer…. Your library, settings and
 music are kept.

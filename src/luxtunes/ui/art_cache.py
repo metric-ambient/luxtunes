@@ -168,6 +168,14 @@ class ArtCache:
         self._request(key, notify)
         return None
 
+    def peek(self, track: dict | None, size: int) -> tuple[bool, QPixmap | None]:
+        """(True, picture or None) if the track's art at this size is in memory
+        already; (False, None) if it hasn't been read yet. Never reads."""
+        key = ((track or {}).get("location"), size)
+        if key in self._items:
+            return True, self._items[key]
+        return False, None
+
     def loading(self, track: dict | None, size: int) -> bool:
         """True while the track's art is being read (draw a blank, not "no art")."""
         return bool(track) and (track.get("location"), size) in self._waiting

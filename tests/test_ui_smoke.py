@@ -485,6 +485,177 @@ def test_movie_list_hides_when_syncing_all_movies(window, tmp_path):
     assert rule_box.size() == size
 
 
+def test_sync_page_lists_tick_anywhere_and_follow_the_search(window, tmp_path):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+
+    from luxtunes.core.ipod import device
+    from luxtunes.ui.device_page import TABS
+    from luxtunes.ui.widgets import SOURCE_MUSIC
+    from test_ipod_core import make_ipod
+
+    mount, mounts = make_ipod(tmp_path)
+    [ipod] = device.find_ipods(mounts)
+    window._ipods[ipod.key] = ipod
+    window.reload_library()
+    window.sidebar.select_source(("device", ipod.key))
+    QApplication.instance().processEvents()
+    page = window.device_page
+    assert "Audiobooks" in TABS and "Books" not in TABS
+    assert window.search.isVisibleTo(window)
+    assert not window.search.isEnabled()                 # Summary: nothing to search
+    page._show_tab(TABS.index("Music"))
+    assert window.search.isEnabled() and window.search.placeholderText() == "Search Music"
+
+    lists = page.artist_list
+    assert lists.count() >= 2
+    item = lists.item(0)
+    before = item.checkState()
+    lists.itemClicked.emit(item)                         # a click anywhere on the row
+    assert item.checkState() != before
+    lists.itemClicked.emit(item)
+    assert item.checkState() == before
+
+    name = item.text()
+    window.search.setText(name.upper())                  # capitals don't matter
+    shown = [lists.item(i).text() for i in range(lists.count()) if not lists.item(i).isHidden()]
+    assert name in shown and len(shown) < lists.count()
+    window.search.clear()
+    assert not any(lists.item(i).isHidden() for i in range(lists.count()))
+
+    page._show_tab(TABS.index("Audiobooks"))
+    assert window.search.placeholderText() == "Search Audiobooks"
+    window.sidebar.select_source(SOURCE_MUSIC)
+    QApplication.instance().processEvents()
+    assert window.search.isEnabled() and window.model.rowCount() > 0
+
+
+def test_network_preferences_and_podcasts_window(window, monkeypatch):
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from luxtunes.core import net, network_prefs, podcasts
+    from luxtunes.ui.preferences import PreferencesDialog
+    from test_podcasts import RSS
+
+    app = QApplication.instance()
+    conn = window.conn
+    # Nothing is allowed at first: going online asks (here: "no").
+    assert not any(network_prefs.all_allowed(conn).values())
+    asked = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda box: asked.append(box.text()) or 0)
+    assert not window._approve_internet("T", "Go?", "details", "Go", feature="lyrics")
+    assert asked == ["Go?"]
+    # Preferences → Network: turning one on asks to confirm; Cancel leaves it off.
+    answers = [QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Yes]
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: answers.pop(0))
+    dialog = PreferencesDialog(conn, window, window.settings)
+    lyrics = dialog.network_boxes["lyrics"]
+    lyrics.setChecked(True)
+    assert not lyrics.isChecked()
+    lyrics.setChecked(True)
+    assert lyrics.isChecked()
+    assert not dialog.network_boxes["podcasts_startup"].isEnabled()   # needs "podcasts" first
+    dialog._save()
+    assert network_prefs.allowed(conn, "lyrics") and not network_prefs.allowed(conn, "updates")
+    asked.clear()
+    assert window._approve_internet("T", "Go?", "details", "Go", feature="lyrics")
+    assert asked == []                                                # no question now
+    # Every connection shows in the status bar.
+    net._tell("https://feeds.example.org/rss")
+    app.processEvents()
+    assert "feeds.example.org" in window.statusBar().currentMessage()
+    # File → Podcasts…: a subscription's episodes, to download by hand.
+    feed_id, _ = podcasts.save_feed(conn, podcasts.parse_feed(RSS, "https://example.org/feed.xml"))
+    window._show_podcast_window()
+    app.processEvents()
+    pods = window._podcast_window
+    assert pods.feed_list.count() == 1 and pods.episode_list.topLevelItemCount() == 2
+    assert not pods.download_button.isEnabled()
+    pods.episode_list.topLevelItem(0).setSelected(True)
+    assert pods.download_button.isEnabled()
+    started = []
+    monkeypatch.setattr(window, "_download_podcast_episodes", started.append)
+    monkeypatch.setattr(window, "_approve_podcasts", lambda question: True)
+    pods._download()
+    assert started == [[podcasts.episodes(conn, feed_id)[0]["id"]]]
+    pods.close()
+    # The Podcasts section has the same three buttons along its bottom.
+    from luxtunes.ui.widgets import SOURCE_MUSIC, SOURCE_PODCASTS
+    window.show_source(SOURCE_PODCASTS)
+    app.processEvents()
+    bar = window.podcast_bar
+    assert bar.isVisibleTo(window) and bar.label.text() == "1 podcast subscription"
+    assert bar.refresh.isEnabled() and bar.subscribe.isEnabled()
+    window.show_source(SOURCE_MUSIC)
+    assert not bar.isVisibleTo(window)
+
+
+def test_sync_page_boxes_keep_their_size_and_tv_has_lists(window, tmp_path):
+    from PySide6.QtWidgets import QApplication
+
+    from luxtunes.core.ipod import device
+    from luxtunes.ui.device_page import TABS
+    from test_ipod_core import make_ipod
+
+    app = QApplication.instance()
+    mount, mounts = make_ipod(tmp_path)
+    [ipod] = device.find_ipods(mounts)
+    window._ipods[ipod.key] = ipod
+    window.reload_library()
+    window.sidebar.select_source(("device", ipod.key))
+    app.processEvents()
+    page = window.device_page
+    # "All" and "Selected" leave the option boxes the same size (the lists keep their place).
+    for tab, everything, chosen in (("Music", page.music_all, page.music_selected),
+                                    ("Audiobooks", page.books_all, page.books_selected),
+                                    ("Photos", page.photos_all, page.photos_selected)):
+        page._show_tab(TABS.index(tab))
+        if tab == "Photos":
+            page.sync_photos.setChecked(True)
+        frame = everything.parentWidget()
+        chosen.setChecked(True)
+        app.processEvents()
+        size = frame.height()
+        everything.setChecked(True)
+        app.processEvents()
+        assert frame.height() == size, tab
+    # TV Shows: shows on the left, episodes on the right, and the search box works there.
+    page._show_tab(TABS.index("TV Shows"))
+    assert window.search.isEnabled() and window.search.placeholderText() == "Search TV Shows"
+    page.sync_tv.setChecked(True)
+    page.tv_scope.setCurrentText("selected shows")
+    assert page.tv_shows.isEnabled() and page.settings.tv_scope == "selected shows"
+
+
+def test_ipod_page_shows_rockbox_and_repriseos(window, tmp_path):
+    from PySide6.QtWidgets import QApplication
+
+    from luxtunes.core.ipod import device
+    from test_ipod_core import make_ipod
+
+    mount, mounts = make_ipod(tmp_path)
+    [plain] = device.find_ipods(mounts)
+    window._ipods[plain.key] = plain
+    window.reload_library()
+    window.sidebar.select_source(("device", plain.key))
+    QApplication.instance().processEvents()
+    page = window.device_page
+    assert page.summary_labels["Also Runs"].isHidden() and page.rockbox.isHidden()
+    (mount / ".rockbox").mkdir()
+    (mount / "osos-cfw.bin").write_bytes(b"x")
+    [both] = device.find_ipods(mounts)
+    assert both.other_firmware == ["Rockbox", "RepriseOS"]
+    window._ipods[both.key] = both
+    window.sidebar.select_source(("device", both.key))
+    QApplication.instance().processEvents()
+    page.set_device(window.conn, both, page.record)
+    assert page.summary_values["Also Runs"].text() == "Rockbox, RepriseOS"
+    assert not page.summary_labels["Also Runs"].isHidden() and not page.rockbox.isHidden()
+    assert page.rockbox.isChecked()                     # on by default
+    page.rockbox.setChecked(False)
+    assert page.dirty and not page.settings.rockbox
+
+
 def test_background_sync_with_libgpod(window, tmp_path, monkeypatch):
     import time
 
@@ -2509,3 +2680,24 @@ def test_pill_boxes_for_several_artists_and_genres(window, tmp_path, monkeypatch
     app.processEvents()
     multi.grab()
     assert {"artists", "featured_artist", "genre"} <= set(multi.getters)
+
+
+def test_help_shows_the_sync_logs_and_stop_says_stopping(window, tmp_path, monkeypatch):
+    from luxtunes.ui import main_window
+    opened = []
+    monkeypatch.setattr(main_window.QDesktopServices, "openUrl",
+                        lambda url: opened.append(url.toLocalFile()))
+    window._show_sync_logs()
+    assert opened and opened[0].endswith("Sync logs")
+
+    class Worker:
+        def stop(self):
+            self.stopped = True
+    worker = Worker()
+    window._sync_worker = worker
+    window._sync_name = "Phone"
+    window.lcd.start_task("sync", "Syncing “Phone”", "Copying…", "Stop syncing")
+    window._stop_sync()
+    assert worker.stopped
+    window._sync_worker = None
+    window._sync_still_stopping(worker)           # the sync ended meanwhile: no message

@@ -70,8 +70,8 @@ artwork large, with controls when you move the mouse over it. Drag its corner to
 Click <b>Lyrics</b> in its controls to show the song's lyrics over the artwork. When the
 lyrics are timed, the line being sung is highlighted and stays in the middle (turn
 this off in <b>Edit → Preferences… → Playback</b>).</li>
-<li>No lyrics? Right-click songs → <b>Get Lyrics Online…</b>. After you say yes, LuxTunes
-asks LRCLIB, a free lyrics library, and adds lyrics to songs that have none (and timing,
+<li>No lyrics? Right-click songs → <b>Get Lyrics Online…</b>. After you say yes (or straight
+away, if Preferences → Network allows it), LuxTunes asks LRCLIB, a free lyrics library, and adds lyrics to songs that have none (and timing,
 where LRCLIB has it).</li>
 <li>The Mini Player stays on top of your other windows; turn that off in
 <b>Edit → Preferences… → Playback</b>.</li>
@@ -173,7 +173,7 @@ Description.</li>
 <li>With several songs selected you get <i>Multiple Item Information</i>: only the
 fields you change are applied (a whole season's episodes at once, for example).</li>
 <li>Right-click → <b>Get Track Info Online…</b> looks songs up on MusicBrainz (after you
-say yes) and shows every suggested correction, and missing covers, for you to tick
+say yes, or straight away if Preferences → Network allows it) and shows every suggested correction, and missing covers, for you to tick
 before anything changes. A credit like <i>Lümen &amp; Grayfield feat. Ann</i> fills in the
 Artist, each of the Artists and the Featured Artist; genres come from the song, else its
 album. If MusicBrainz is busy, LuxTunes waits a moment and tries again.
@@ -214,7 +214,8 @@ so you can change your mind.</li>
 <ul>
 <li>Insert a CD: it appears under <b>Devices</b>. What happens on insert is set in
 Preferences → General (for example <i>Ask to Import CD</i>).</li>
-<li>LuxTunes asks before looking up the CD's names online.</li>
+<li>LuxTunes asks before looking up the CD's names online (unless Preferences → Network
+allows it without asking).</li>
 <li>Choose the format (MP3, AAC, Apple Lossless, AIFF or WAV) with
 <b>Import Settings…</b> in Preferences.</li>
 </ul>"""),
@@ -247,9 +248,14 @@ while the equalizer is on.</li>
     ("Syncing an iPod", "Put your music on an iPod", """
 <ul>
 <li>Plug the iPod in: it appears under <b>Devices</b>. Choose what to sync on its tabs
-(Music, Movies, Podcasts, Photos…), then click <b>Sync</b>. The Music tab offers the
+(Music, Movies, Podcasts, Audiobooks, Photos…), then click <b>Sync</b>. The Music tab offers the
 entire library with all playlists, the entire library with chosen playlists, or chosen
 playlists, artists, albums and genres.</li>
+<li>Click anywhere on a row (or a movie's or audiobook's cover) to tick it. On the
+TV Shows and Podcasts tabs, clicking a show lists its episodes, so tick its box to sync it.
+Ticked shows are used with "episodes of selected shows"; ticked episodes always go.</li>
+<li>The search box filters the lists on the tab you're looking at, so a long list of
+artists or albums is quick to go through. Ticked rows stay ticked while hidden.</li>
 <li>Works with iPod classic, mini, shuffle and nano 1st–7th generation, and the
 original iPods. iPod touch can't be synced.</li>
 <li>Before syncing an iPod nano 6th or 7th generation, LuxTunes keeps a copy of its song
@@ -266,6 +272,22 @@ sync.</li>
 <li>While it syncs, the iPod's <b>Sync</b> button becomes <b>Stop Sync</b>: it stops after
 the song being copied, and what's already copied stays.</li>
 <li>Click the eject button next to the iPod before unplugging it.</li>
+<li><b>Rockbox or RepriseOS on the iPod too?</b> The iPod's Summary shows them under
+<b>Also Runs</b>. One sync serves all of them. RepriseOS reads Apple's song list like the
+iPod's own software. Rockbox reads the song files themselves, so with
+<b>Make songs and playlists work in Rockbox too</b> (on by default) LuxTunes also:
+<ul>
+<li>writes your playlists into the iPod's <i>Playlists</i> folder (your own playlists there are
+left alone);</li>
+<li>gives the iPod's copies of your songs their details and a cover Rockbox can show (a small
+plain JPEG; needs FFmpeg). Your library's files are never changed. The first sync checks
+every song once, which takes a while; after that only new or edited songs;</li>
+<li>adds plays from Rockbox to your library, if Rockbox's <i>Last.fm scrobbler</i> plugin is
+on. Its log isn't changed, and no play is counted twice.</li>
+</ul>
+In Rockbox, use the <b>Database</b> menu to browse by artist and album (the song files have
+coded names), and update its database after a sync: Settings → General Settings → Database
+→ Initialize Now, or turn on Auto Update there.</li>
 </ul>"""),
 
     ("Syncing an Android phone", "Put your music on your phone", """
@@ -278,8 +300,14 @@ tick, or just chosen playlists, artists, albums and genres.
 Everything goes in one <i>LuxTunes</i> folder that any music player can use.</li>
 <li><b>Delete media not in this selection</b> keeps the phone tidy. LuxTunes only ever
 touches its own folder.</li>
-<li>While it syncs, the phone's <b>Sync</b> button becomes <b>Stop Sync</b>: it stops after
-the song being copied, and what's already copied stays.</li>
+<li>While it syncs, the phone's <b>Sync</b> button becomes <b>Stop Sync</b>. It stops
+straight away, even partway through a big audiobook or a step like adding album covers;
+what's already copied stays, and the next sync carries on from there.</li>
+<li>If the phone stops responding partway through a file, LuxTunes gives up on that file
+after a while (instead of waiting forever), stops the sync and says so. Unlock the phone
+and sync again. Don't unplug the phone while it's still syncing.</li>
+<li>Each sync keeps a log of what it did, file by file. If something goes wrong,
+<b>Help → Show Sync Logs</b> opens the folder.</li>
 <li>With the LuxTunes app for Android on the phone (luxtunes-mobile on GitHub), plays,
 ratings, playlists and the equalizer come back at the next sync. Songs you add on the phone are copied into your
 library, and details you edit there (names, albums, years…) are saved here too.</li>
@@ -311,12 +339,30 @@ order; playlists use Music's.</li>
 <li><b>File → Display Duplicates</b> and <b>Display Missing</b> help clean up.</li>
 </ul>"""),
 
-    ("Updates and privacy", "Nothing goes online without asking", """
+    ("Podcasts", "Subscribe to podcasts and get new episodes", """
+<ul>
+<li><b>File → Subscribe to Podcast…</b> and paste the podcast's feed address (the "RSS" link on
+its website). No account is needed. Its newest episode is downloaded into your LuxTunes Media
+folder (Podcasts/&lt;podcast&gt;) and shows up under Podcasts.</li>
+<li><b>File → Refresh Podcasts</b> checks every podcast and downloads the episodes that are new
+since the last check. LuxTunes asks before going online, unless you allow it in
+<b>Preferences → Network</b>, where podcasts can also be refreshed when LuxTunes starts.</li>
+<li><b>File → Podcasts…</b> lists every episode each podcast offers: select older ones and click
+<b>Download</b>, or <b>Unsubscribe</b> (the episodes you downloaded stay).</li>
+<li>An episode you delete isn't downloaded again. Only secure (https://) addresses are used.</li>
+</ul>"""),
+
+    ("Updates and privacy", "Nothing goes online unless you allow it", """
 <ul>
 <li>LuxTunes only goes online when you agree: CD names, Get Track Info Online…, Get Lyrics
-Online…, and updates.</li>
-<li><b>Help → Check for Updates…</b> looks for a new version (after asking) and offers
-to install it. Every download is checked against the checksum GitHub publishes for it
+Online…, podcasts, and updates. The status bar says whenever it connects.</li>
+<li><b>Preferences → Network</b> lets each of those go ahead without asking (all off at
+first; turning one on tells you what it sends, and to whom). Updates can be checked, and
+podcasts refreshed, when LuxTunes starts. Each connection only lasts as long as that one
+request; LuxTunes never accepts connections from outside.</li>
+<li><b>Help → Check for Updates…</b> looks for a new version (after asking, or by itself at
+startup if Preferences → Network allows it) and offers to install it; nothing is installed
+without your yes. Every download is checked against the checksum GitHub publishes for it
 before it's installed.</li>
 </ul>"""),
 ]

@@ -1,6 +1,6 @@
 """The page shown when an iPod is selected in the sidebar:
 
-  tabs      Summary · Music · Movies · TV Shows · Podcasts · Books · Photos · Games
+  tabs      Summary · Music · Movies · TV Shows · Podcasts · Audiobooks · Photos · Games
   bottom    a capacity bar (Audio / Video / Photos / Other / Free, as it
             will be after syncing) and Sync, or Revert + Apply after changes.
 
@@ -14,7 +14,7 @@ import copy
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
 from luxtunes.core.ipod import device as ipod_device
 from luxtunes.core.ipod import plan as ipod_plan
 from luxtunes.core.ipod.settings import (
+    TV_SCOPES,
     BIT_RATES, EPISODE_RULES, MOVIE_RULES, PODCAST_RULES, PODCAST_SCOPES, DeviceRecord,
     SyncSettings,
 )
@@ -48,7 +49,7 @@ from luxtunes.ui import formatting
 from luxtunes.ui.art_cache import ART_CACHE
 from luxtunes.ui.widgets import playlist_icon
 
-TABS = ("Summary", "Music", "Movies", "TV Shows", "Podcasts", "Books", "Photos", "Games")
+TABS = ("Summary", "Music", "Movies", "TV Shows", "Podcasts", "Audiobooks", "Photos", "Games")
 
 COLOURS = {"Audio": "#4b9be6", "Video": "#a95fcd", "Photos": "#ef8650", "Other": "#e7c638",
            "Free": "#5d6574"}
@@ -74,12 +75,65 @@ def box() -> tuple[QFrame, QVBoxLayout]:
     return frame, layout
 
 
-def checklist(height: int = 300) -> QListWidget:
-    widget = QListWidget()
+class CheckList(QListWidget):
+    """A list of things to sync, each with a checkbox. Clicking anywhere on a
+    row ticks or unticks it (not just the little box), and so does Space.
+    click_anywhere False: only the box ticks (a row click does something else,
+    like showing a podcast's episodes)."""
+
+    def __init__(self, click_anywhere: bool = True, parent=None):
+        super().__init__(parent)
+        self.click_anywhere = click_anywhere
+        if click_anywhere:
+            self.itemClicked.connect(self._toggle)
+
+    @staticmethod
+    def _toggle(item: QListWidgetItem):
+        if item.flags() & Qt.ItemFlag.ItemIsEnabled:
+            item.setCheckState(Qt.CheckState.Unchecked if item.checkState() == Qt.CheckState.Checked
+                               else Qt.CheckState.Checked)
+
+    def keyPressEvent(self, event):
+        if self.click_anywhere and event.key() == Qt.Key.Key_Space and self.currentItem():
+            self._toggle(self.currentItem())
+            return
+        super().keyPressEvent(event)
+
+
+def checklist(height: int = 160, click_anywhere: bool = True) -> CheckList:
+    """A list that grows to fill the page (at least `height` pixels tall)."""
+    widget = CheckList(click_anywhere)
     widget.setObjectName("deviceList")
     widget.setAlternatingRowColors(True)
     widget.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
     widget.setMinimumHeight(height)
+    return widget
+
+
+def tile_list(height: int = 220) -> CheckList:
+    """Movies and audiobooks: tiles with a cover, ticked by clicking anywhere."""
+    widget = CheckList()
+    widget.setObjectName("deviceList")
+    widget.setViewMode(QListView.ViewMode.IconMode)
+    widget.setResizeMode(QListView.ResizeMode.Adjust)
+    widget.setMovement(QListView.Movement.Static)
+    widget.setIconSize(QSize(ART_SIZE, ART_SIZE))
+    widget.setGridSize(QSize(260, ART_SIZE + 32))
+    widget.setWordWrap(True)
+    widget.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+    widget.setMinimumHeight(height)
+    return widget
+
+
+ART_SIZE = 72
+
+
+def keep_space(widget):
+    """A list that keeps its place on the page while hidden (e.g. when "all"
+    is chosen), so the boxes above it don't stretch to fill the page."""
+    policy = widget.sizePolicy()
+    policy.setRetainSizeWhenHidden(True)
+    widget.setSizePolicy(policy)
     return widget
 
 
@@ -88,10 +142,56 @@ def add_check(widget: QListWidget, text: str, key, checked: bool, icon=None) -> 
     if icon is not None:
         item.setIcon(icon)
     item.setData(Qt.ItemDataRole.UserRole, key)
-    item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
+    # A CheckList ticks on a click anywhere; the plain box-only kind ticks on the box.
+    flags = Qt.ItemFlag.ItemIsEnabled
+    if not (isinstance(widget, CheckList) and widget.click_anywhere):
+        flags |= Qt.ItemFlag.ItemIsUserCheckable
+    item.setFlags(flags)
     item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
     widget.addItem(item)
     return item
+
+
+class ArtIcons(QObject):
+    """Covers for a list's items, read in the background (ui/art_cache.py):
+    an item gets its picture as soon as it's ready."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._waiting: list[tuple[QListWidgetItem, dict]] = []
+
+    def clear(self):
+        self._waiting = []
+
+    def set(self, item: QListWidgetItem, track: dict | None):
+        if not track:
+            return
+        art = ART_CACHE.get(track, ART_SIZE, notify=self)
+        if art is not None:
+            item.setIcon(QIcon(art))
+        elif ART_CACHE.loading(track, ART_SIZE):
+            self._waiting.append((item, track))
+
+    def update(self):
+        """Called by the art cache when a picture has been read."""
+        still = []
+        for item, track in self._waiting:
+            ready, art = ART_CACHE.peek(track, ART_SIZE)
+            try:
+                if ready and art is not None:
+                    item.setIcon(QIcon(art))
+                elif not ready:
+                    still.append((item, track))
+            except RuntimeError:                  # the list was refilled meanwhile
+                pass
+        self._waiting = still
+
+
+def matches_filter(item: QListWidgetItem, words: list[str]) -> bool:
+    if not words:
+        return True
+    text = formatting.fold(item.text())
+    return all(word in text for word in words)
 
 
 def checked_keys(widget: QListWidget) -> list:
@@ -295,6 +395,9 @@ class DevicePage(QWidget):
     sync_requested = Signal()
     stop_requested = Signal()          # Stop Sync (the Sync button while this device syncs)
     settings_saved = Signal()
+    # What the search box searches on the tab shown ("Search Audiobooks"), or ""
+    # when the tab has nothing to search (Summary, Games).
+    search_hint_changed = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -311,6 +414,9 @@ class DevicePage(QWidget):
         self._refresh_timer.setSingleShot(True)
         self._refresh_timer.setInterval(150)
         self._refresh_timer.timeout.connect(self._refresh_plan)
+        self._filter_words: list[str] = []
+        self.book_art = ArtIcons(self)
+        self.movie_art = ArtIcons(self)
 
         # Tabs along the top.
         tab_bar = QWidget()
@@ -412,6 +518,10 @@ class DevicePage(QWidget):
             widget.setVisible(not android)
         self.summary_labels["Format"].setVisible(not android)
         self.summary_values["Format"].setVisible(not android)
+        others = [] if android else list(getattr(self.ipod, "other_firmware", None) or [])
+        self.summary_labels["Also Runs"].setVisible(bool(others))
+        self.summary_values["Also Runs"].setVisible(bool(others))
+        self.rockbox.setVisible("Rockbox" in others)
         self.storage_label.setVisible(android)
         self.storage.setVisible(android)
         self.delete_unselected.setVisible(android)
@@ -533,8 +643,10 @@ class DevicePage(QWidget):
         unsupported = bool(getattr(self.ipod, "unsupported", "")) and not self.is_android
         stopping = syncing and getattr(self, "_stopping", False)
         self.sync_button.setText("Stopping…" if stopping else "Stop Sync" if syncing else "Sync")
-        self.sync_button.setToolTip("Stop after the song being copied (what's copied so far "
-                                    "stays)" if syncing else "")
+        stop_tip = ("Stop now (what's copied so far stays, and the next sync carries on)"
+                    if self.is_android else
+                    "Stop after the song being copied (what's copied so far stays)")
+        self.sync_button.setToolTip(stop_tip if syncing else "")
         self.sync_button.setEnabled((syncing and not stopping) or (not syncing and not unsupported))
         self.apply_button.setEnabled(not syncing)
         self.revert_button.setVisible(dirty)
@@ -545,7 +657,37 @@ class DevicePage(QWidget):
         self.pages.setCurrentIndex(index)
         if TABS[index] == "Photos":
             self._update_photo_count()
+        self._apply_filter()
+        self.search_hint_changed.emit(self.search_hint())
         self._refresh_plan()
+
+    # ---- Searching the tab shown ---------------------------------------------------------------
+
+    def _searchable(self) -> dict[str, list[QListWidget]]:
+        return {"Music": [self.playlist_list, self.artist_list, self.genre_list, self.album_list],
+                "Movies": [self.movie_list],
+                "TV Shows": [self.tv_shows, self.tv_episodes],
+                "Podcasts": [self.podcast_shows, self.podcast_episodes],
+                "Audiobooks": [self.book_list],
+                "Photos": [self.photo_folder_list]}
+
+    def search_hint(self) -> str:
+        """The search box's placeholder for the tab shown, or "" if it has no lists."""
+        name = TABS[self.pages.currentIndex()]
+        return f"Search {name}" if name in self._searchable() else ""
+
+    def set_filter(self, text: str):
+        """The search box's text: only matching rows show (accents and capitals
+        don't matter). Ticked rows that are hidden stay ticked."""
+        self._filter_words = formatting.search_words(text or "")
+        self._apply_filter()
+
+    def _apply_filter(self):
+        lists = self._searchable().get(TABS[self.pages.currentIndex()], [])
+        for widget in lists:
+            for i in range(widget.count()):
+                item = widget.item(i)
+                item.setHidden(not matches_filter(item, self._filter_words))
 
     # ---- Summary -----------------------------------------------------------------------------
 
@@ -572,7 +714,7 @@ class DevicePage(QWidget):
         self.summary_values = {}
         self.summary_labels = {}
         for i, name in enumerate(("Name", "Capacity", "Software Version", "Serial Number",
-                                  "Model", "Format")):
+                                  "Model", "Format", "Also Runs")):
             label = QLabel(f"<b>{name}:</b>")
             label.setAlignment(Qt.AlignmentFlag.AlignRight)
             value = QLabel()
@@ -586,8 +728,8 @@ class DevicePage(QWidget):
         self.storage_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.storage = QComboBox()
         self.storage.currentIndexChanged.connect(self._storage_changed)
-        grid.addWidget(self.storage_label, 6, 0)
-        grid.addWidget(self.storage, 6, 1)
+        grid.addWidget(self.storage_label, 7, 0)
+        grid.addWidget(self.storage, 7, 1)
         row.addLayout(grid)
         row.addStretch(2)
         inner.addLayout(row)
@@ -638,6 +780,14 @@ class DevicePage(QWidget):
         self.manual = QCheckBox("Manually manage music and videos")
         self.disk_use = QCheckBox("Enable disk use")
         self._ipod_only += [self.manual, self.disk_use]
+        # iPods that also run Rockbox (shown only for those).
+        self.rockbox = QCheckBox("Make songs and playlists work in Rockbox too")
+        self.rockbox.setToolTip(
+            "This iPod also runs Rockbox, which reads song details and covers from the song files "
+            "rather than from Apple's song list. At each sync, LuxTunes also writes your playlists "
+            "into the iPod's Playlists folder, gives the iPod's copies of your songs their details "
+            "and a cover Rockbox can show, and reads plays from Rockbox's scrobbler log. The files "
+            "in your library are never changed.")
         # Phones only (an iPod's database is always kept to the selection).
         self.delete_unselected = QCheckBox("Delete media not in this selection")
         self.delete_unselected.setToolTip(
@@ -648,9 +798,11 @@ class DevicePage(QWidget):
         inner.addWidget(self.delete_unselected)
         inner.addWidget(self.manual)
         inner.addWidget(self.disk_use)
+        inner.addWidget(self.rockbox)
         column.addWidget(frame)
         column.addStretch(1)
-        for widget in (self.only_checked, self.manual, self.disk_use, self.delete_unselected):
+        for widget in (self.only_checked, self.manual, self.disk_use, self.delete_unselected,
+                       self.rockbox):
             widget.toggled.connect(self._changed)
         return page
 
@@ -707,6 +859,8 @@ class DevicePage(QWidget):
             "Serial Number": ipod.serial or "Unknown",
             "Model": self._model_text(ipod),
             "Format": ipod.format_name,
+            # Rockbox or RepriseOS installed beside Apple's software (one sync serves all)
+            "Also Runs": ", ".join(getattr(ipod, "other_firmware", None) or []),
         }
         for key, value in values.items():
             self.summary_values[key].setText(value)
@@ -759,7 +913,8 @@ class DevicePage(QWidget):
         self.music_library_lists = QRadioButton("Entire music library and selected playlists")
         self.music_selected = QRadioButton("Selected playlists, artists, albums, and genres")
         self.music_videos = QCheckBox("Include music videos")
-        self.autofill = QCheckBox("Automatically fill free space with songs")
+        # Only for "Selected…", but it keeps its row, so the box is the same size either way.
+        self.autofill = keep_space(QCheckBox("Automatically fill free space with songs"))
         for widget in (self.music_all, self.music_library_lists, self.music_selected):
             inner.addWidget(widget)
         inner.addSpacing(8)
@@ -767,9 +922,12 @@ class DevicePage(QWidget):
         inner.addWidget(self.autofill)
         column.addWidget(frame)
 
-        self.music_lists = QWidget()
+        self.music_lists = keep_space(QWidget())
         grid = QGridLayout(self.music_lists)
         grid.setContentsMargins(0, 10, 0, 0)
+        grid.setRowStretch(1, 1)
+        grid.setRowStretch(3, 1)
+        self._music_grid = grid
         self.playlist_list, self.artist_list = checklist(), checklist()
         self.genre_list, self.album_list = checklist(), checklist()
         self._music_list_titles = {}
@@ -782,8 +940,7 @@ class DevicePage(QWidget):
             grid.addWidget(label, (i // 2) * 2, i % 2)
             grid.addWidget(widget, (i // 2) * 2 + 1, i % 2)
             widget.itemChanged.connect(self._changed)
-        column.addWidget(self.music_lists)
-        column.addStretch(1)
+        column.addWidget(self.music_lists, 1)
         for widget in (self.sync_music, self.music_all, self.music_library_lists,
                        self.music_selected, self.music_videos, self.autofill):
             widget.toggled.connect(self._changed)
@@ -825,16 +982,7 @@ class DevicePage(QWidget):
         self.movie_area.setSizePolicy(policy)
         self.movies_heading = heading("Movies", 1.3)
         area.addWidget(self.movies_heading)
-        self.movie_list = QListWidget()
-        self.movie_list.setObjectName("deviceList")
-        self.movie_list.setViewMode(QListView.ViewMode.IconMode)
-        self.movie_list.setResizeMode(QListView.ResizeMode.Adjust)
-        self.movie_list.setMovement(QListView.Movement.Static)
-        self.movie_list.setIconSize(QSize(64, 64))
-        self.movie_list.setGridSize(QSize(250, 96))
-        self.movie_list.setWordWrap(True)
-        self.movie_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.movie_list.setMinimumHeight(380)
+        self.movie_list = tile_list()
         self.movie_list.itemChanged.connect(self._changed)
         area.addWidget(self.movie_list, 1)
         column.addWidget(self.movie_area, 1)
@@ -843,62 +991,90 @@ class DevicePage(QWidget):
         self.movies_rule.currentIndexChanged.connect(self._changed)
         return page
 
-    # ---- Shells: TV Shows, Podcasts, Books, Info, Games ----------------------------------------
+    # ---- TV Shows, Podcasts, Audiobooks, Games -----------------------------------------------
 
-    def _shell(self, title: str, count_word: str, rules: list[str] | None, second_combo: list[str],
-               lists: tuple[str, ...], note: str):
+    def _tv_tab(self) -> QWidget:
         page = QWidget()
         column = QVBoxLayout(page)
         column.setContentsMargins(30, 16, 30, 16)
         top = QHBoxLayout()
-        check = QCheckBox(title)
-        check.setFont(heading("").font())
-        count = heading(f"0 {count_word}", 1.3)
-        count.setObjectName("deviceCount")
-        top.addWidget(check)
+        self.sync_tv = QCheckBox("Sync TV Shows")
+        self.sync_tv.setFont(heading("").font())
+        self.tv_count = heading("", 1.3)
+        self.tv_count.setObjectName("deviceCount")
+        top.addWidget(self.sync_tv)
         top.addStretch(1)
-        top.addWidget(count)
+        top.addWidget(self.tv_count)
         column.addLayout(top)
-        auto = combo = None
-        if rules is not None:
-            frame, inner = box()
-            row = QHBoxLayout()
-            auto = QCheckBox("Automatically include")
-            combo = QComboBox()
-            combo.addItems(rules)
-            row.addWidget(auto)
-            row.addWidget(combo)
-            row.addWidget(QLabel("episodes of"))
-            second = QComboBox()
-            second.addItems(second_combo)
-            row.addWidget(second)
-            row.addStretch(1)
-            inner.addLayout(row)
-            column.addWidget(frame)
-        if lists:
-            grid = QGridLayout()
-            for i, name in enumerate(lists):
-                grid.addWidget(heading(name, 1.3), 0, i)
-                grid.addWidget(checklist(320), 1, i)
-            column.addLayout(grid)
-        hint = QLabel(note)
-        hint.setObjectName("deviceNote")
-        hint.setWordWrap(True)
-        column.addWidget(hint)
-        column.addStretch(1)
-        check.toggled.connect(self._changed)
-        if auto is not None:
-            auto.toggled.connect(self._changed)
+        frame, inner = box()
+        row = QHBoxLayout()
+        self.tv_auto = QCheckBox("Automatically include")
+        self.tv_rule = QComboBox()
+        self.tv_rule.addItems(EPISODE_RULES)
+        self.tv_scope = QComboBox()
+        self.tv_scope.addItems(TV_SCOPES)
+        row.addWidget(self.tv_auto)
+        row.addWidget(self.tv_rule)
+        row.addWidget(QLabel("episodes of"))
+        row.addWidget(self.tv_scope)
+        row.addStretch(1)
+        inner.addLayout(row)
+        column.addWidget(frame)
+        # Left: the shows (ticked = "selected shows"). Right: the episodes of
+        # the show highlighted on the left; ticked ones always go.
+        grid = QGridLayout()
+        grid.addWidget(heading("Shows", 1.3), 0, 0)
+        grid.addWidget(heading("Episodes", 1.3), 0, 1)
+        grid.setRowStretch(1, 1)
+        # A click on a show lists its episodes, so only its box ticks it.
+        self.tv_shows = checklist(click_anywhere=False)
+        self.tv_shows.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.tv_episodes = checklist()
+        grid.addWidget(self.tv_shows, 1, 0)
+        grid.addWidget(self.tv_episodes, 1, 1)
+        column.addLayout(grid, 1)
+        self.tv_note = QLabel("Only .m4v, .mp4 and .mov videos go to the iPod (it can't play "
+                              ".mkv or .avi).")
+        self.tv_note.setObjectName("deviceNote")
+        self.tv_note.setWordWrap(True)
+        column.addWidget(self.tv_note)
+        self._tv_list: list[dict] = []
+        self._picked_tv: set[str] = set()
+        self.tv_shows.currentRowChanged.connect(lambda _: self._fill_tv_episodes())
+        self.tv_shows.itemChanged.connect(self._changed)
+        self.tv_episodes.itemChanged.connect(self._tv_episode_ticked)
+        for widget in (self.sync_tv, self.tv_auto):
+            widget.toggled.connect(self._changed)
+        for combo in (self.tv_rule, self.tv_scope):
             combo.currentIndexChanged.connect(self._changed)
-        return page, check, auto, combo
-
-    def _tv_tab(self) -> QWidget:
-        page, self.sync_tv, self.tv_auto, self.tv_rule = self._shell(
-            "Sync TV Shows", "episodes", EPISODE_RULES, ["all shows"],
-            (), "Episodes are chosen for each show by the rule above. Only .m4v, .mp4 and .mov "
-            "videos go to the iPod (it can't play .mkv or .avi).")
-        self.tv_count = page.findChild(QLabel, "deviceCount")
         return page
+
+    def _fill_tv_episodes(self):
+        """The episodes of the show highlighted on the left, in order."""
+        item = self.tv_shows.currentItem()
+        show = item.data(Qt.ItemDataRole.UserRole) if item else None
+        self.tv_episodes.blockSignals(True)
+        self.tv_episodes.clear()
+        for e in self._tv_list:
+            if ipod_plan.show_of(e) != show:
+                continue
+            season, number = e.get("season"), e.get("episode_number") or e.get("track_number")
+            where = " ".join(part for part in (f"S{season}" if season else "",
+                                                 f"E{number}" if number else "") if part)
+            unwatched = "" if e.get("play_count") else "●  "
+            label = f"{unwatched}{where + ' · ' if where else ''}{e.get('name') or 'Untitled'}"
+            item = add_check(self.tv_episodes, label, e["persistent_id"],
+                             e["persistent_id"] in self._picked_tv)
+            item.setHidden(not matches_filter(item, self._filter_words))
+        self.tv_episodes.blockSignals(False)
+
+    def _tv_episode_ticked(self, item):
+        key = item.data(Qt.ItemDataRole.UserRole)
+        if item.checkState() == Qt.CheckState.Checked:
+            self._picked_tv.add(key)
+        else:
+            self._picked_tv.discard(key)
+        self._changed()
 
     def _podcasts_tab(self) -> QWidget:
         page = QWidget()
@@ -932,17 +1108,19 @@ class DevicePage(QWidget):
         grid = QGridLayout()
         grid.addWidget(heading("Podcasts", 1.3), 0, 0)
         grid.addWidget(heading("Episodes", 1.3), 0, 1)
-        self.podcast_shows = checklist(320)
-        self.podcast_episodes = checklist(320)
+        grid.setRowStretch(1, 1)
+        # A click on a podcast shows its episodes, so only its box ticks it.
+        self.podcast_shows = checklist(click_anywhere=False)
+        self.podcast_shows.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.podcast_episodes = checklist()
         grid.addWidget(self.podcast_shows, 1, 0)
         grid.addWidget(self.podcast_episodes, 1, 1)
-        column.addLayout(grid)
+        column.addLayout(grid, 1)
         self.podcasts_empty = QLabel("Your library has no podcasts yet. To make an episode one, "
                                      "choose Get Info → Options → Media Kind → Podcast.")
         self.podcasts_empty.setObjectName("deviceNote")
         self.podcasts_empty.setWordWrap(True)
         column.addWidget(self.podcasts_empty)
-        column.addStretch(1)
         self._episodes: list[dict] = []
         self._picked_episodes: set[str] = set()
         self.podcast_shows.currentRowChanged.connect(lambda _: self._fill_episodes())
@@ -963,8 +1141,9 @@ class DevicePage(QWidget):
         for e in self._episodes:
             if ipod_plan.podcast_show(e) == show:
                 unplayed = "" if e.get("play_count") else "●  "
-                add_check(self.podcast_episodes, f"{unplayed}{e.get('name') or 'Untitled'}",
-                          e["persistent_id"], e["persistent_id"] in self._picked_episodes)
+                item = add_check(self.podcast_episodes, f"{unplayed}{e.get('name') or 'Untitled'}",
+                                 e["persistent_id"], e["persistent_id"] in self._picked_episodes)
+                item.setHidden(not matches_filter(item, self._filter_words))
         self.podcast_episodes.blockSignals(False)
 
     def _episode_ticked(self, item):
@@ -994,15 +1173,13 @@ class DevicePage(QWidget):
         inner.addWidget(self.books_all)
         inner.addWidget(self.books_selected)
         column.addWidget(frame)
-        self.book_list = checklist(320)
-        self.book_list.setMaximumWidth(520)
-        column.addWidget(self.book_list)
+        self.book_list = keep_space(tile_list())
+        column.addWidget(self.book_list, 1)
         self.books_empty = QLabel("Your library has no audiobooks yet. To make a song one, "
                                   "choose Get Info → Options → Media Kind → Audiobook.")
         self.books_empty.setObjectName("deviceNote")
         self.books_empty.setWordWrap(True)
         column.addWidget(self.books_empty)
-        column.addStretch(1)
         self.book_list.itemChanged.connect(self._changed)
         for widget in (self.sync_books, self.books_all, self.books_selected):
             widget.toggled.connect(self._changed)
@@ -1068,15 +1245,14 @@ class DevicePage(QWidget):
         inner.addWidget(self.full_resolution)
         inner.addWidget(note)
         column.addWidget(frame)
-        self.photo_folder_list = checklist(260)
+        self.photo_folder_list = keep_space(checklist())
         self.photo_folder_list.itemChanged.connect(self._changed)
-        column.addWidget(self.photo_folder_list)
+        column.addWidget(self.photo_folder_list, 1)
         hint = QLabel("Photos go one way: from this folder to the iPod. Each folder inside it "
                       "becomes a photo album on the iPod.")
         hint.setObjectName("deviceNote")
         hint.setWordWrap(True)
         column.addWidget(hint)
-        column.addStretch(1)
         self.photo_source.activated.connect(self._photo_source_chosen)
         for widget in (self.sync_photos, self.photos_all, self.photos_selected, self.full_resolution):
             widget.toggled.connect(self._changed)
@@ -1165,7 +1341,7 @@ class DevicePage(QWidget):
         choices = ipod_plan.library_choices(self.conn, phone=self.is_android)
         s = self.settings
         lists = (self.playlist_list, self.artist_list, self.genre_list, self.album_list,
-                 self.movie_list, self.podcast_shows, self.book_list)
+                 self.movie_list, self.podcast_shows, self.book_list, self.tv_shows)
         for widget in lists:
             widget.blockSignals(True)
             widget.clear()
@@ -1178,28 +1354,48 @@ class DevicePage(QWidget):
             add_check(self.genre_list, name, name, name in s.genres)
         for key, label in choices.albums:
             add_check(self.album_list, label, key, key in s.albums)
+        self.movie_art.clear()
+        self.book_art.clear()
         for movie in choices.movies:
             minutes = round((movie.get("total_time") or 0) / 60000)
             item = add_check(self.movie_list,
                              f"{movie.get('name')}\n{minutes} minutes\n{formatting.format_size(movie.get('size'))}",
                              movie["persistent_id"], movie["persistent_id"] in s.movies)
-            art = ART_CACHE.get(movie, 64)
-            if art is not None:
-                item.setIcon(QIcon(art))
+            self.movie_art.set(item, movie)
         for show in choices.shows:
             add_check(self.podcast_shows, show, show, show in s.podcast_shows)
+        for show in choices.tv_shows:
+            add_check(self.tv_shows, show or "Untitled", show, show in s.tv_shows)
+        self._tv_list = choices.tv_episodes
+        self._picked_tv = set(s.tv_episodes)
         self._episodes = choices.episodes
         self._picked_episodes = set(s.podcast_episodes)
         for key, label in choices.books:
-            add_check(self.book_list, label, key, key in s.books)
+            book = choices.book_details.get(key, {})
+            text = "\n".join(part for part in (
+                book.get("title") or label, book.get("author") or "",
+                formatting.format_duration(book.get("time")) if book.get("time") else "")
+                if part)
+            item = add_check(self.book_list, text, key, key in s.books)
+            item.setToolTip(label)
+            self.book_art.set(item, book.get("track"))
         for widget in lists:
             widget.blockSignals(False)
         if self.podcast_shows.count():
             self.podcast_shows.setCurrentRow(0)
         self._fill_episodes()
+        if self.tv_shows.count():
+            self.tv_shows.setCurrentRow(0)
+        self._fill_tv_episodes()
+        self.tv_note.setText(
+            ("Your library has no TV shows yet. To make a video one, choose Get Info → Options → "
+             "Media Kind → TV Show. " if not choices.tv_episodes else "")
+            + ("" if self.is_android else
+               "Only .m4v, .mp4 and .mov videos go to the iPod (it can't play .mkv or .avi)."))
         self.podcasts_empty.setVisible(not choices.episodes)
         self.books_empty.setVisible(not choices.books)
         self._fill_photo_sources()
+        self._apply_filter()
 
     def _load_controls(self):
         s = self.settings
@@ -1208,6 +1404,7 @@ class DevicePage(QWidget):
         self.convert_kbps.setCurrentIndex(max(0, self.convert_kbps.findData(s.convert_kbps)))
         self.manual.setChecked(s.manual)
         self.disk_use.setChecked(s.disk_use)
+        self.rockbox.setChecked(s.rockbox)
         self.delete_unselected.setChecked(s.android_delete_unselected)
         self.sync_music.setChecked(s.sync_music)
         {"library_playlists": self.music_library_lists,
@@ -1220,6 +1417,7 @@ class DevicePage(QWidget):
         self.sync_tv.setChecked(s.sync_tv)
         self.tv_auto.setChecked(s.tv_auto)
         self.tv_rule.setCurrentText(s.tv_rule)
+        self.tv_scope.setCurrentText(s.tv_scope)
         self.sync_podcasts.setChecked(s.sync_podcasts)
         self.podcasts_auto.setChecked(s.podcasts_auto)
         self.podcasts_rule.setCurrentText(s.podcasts_rule)
@@ -1239,6 +1437,7 @@ class DevicePage(QWidget):
         s.convert_kbps = self.convert_kbps.currentData() or s.convert_kbps
         s.manual = self.manual.isChecked()
         s.disk_use = self.disk_use.isChecked()
+        s.rockbox = self.rockbox.isChecked()
         if self.is_android:
             s.android_delete_unselected = self.delete_unselected.isChecked()
         s.sync_music = self.sync_music.isChecked()
@@ -1257,6 +1456,9 @@ class DevicePage(QWidget):
         s.sync_tv = self.sync_tv.isChecked()
         s.tv_auto = self.tv_auto.isChecked()
         s.tv_rule = self.tv_rule.currentText()
+        s.tv_scope = self.tv_scope.currentText()
+        s.tv_shows = checked_keys(self.tv_shows)
+        s.tv_episodes = sorted(self._picked_tv)
         s.sync_podcasts = self.sync_podcasts.isChecked()
         s.podcasts_auto = self.podcasts_auto.isChecked()
         s.podcasts_rule = self.podcasts_rule.currentText()
@@ -1287,6 +1489,8 @@ class DevicePage(QWidget):
             widget.setVisible(s.music_mode == "selected")
             self._music_list_titles[widget].setVisible(s.music_mode == "selected")
         self.music_lists.setEnabled(music_on)
+        # Only the playlists: they take the whole area.
+        self._music_grid.setRowStretch(3, 1 if s.music_mode == "selected" else 0)
         movies_on = s.sync_movies and not s.manual
         self.movies_auto.setEnabled(movies_on)
         self.movies_rule.setEnabled(movies_on and s.movies_auto)
@@ -1298,6 +1502,11 @@ class DevicePage(QWidget):
                                   (self.sync_podcasts, self.podcasts_auto, self.podcasts_rule)):
             auto.setEnabled(check.isChecked())
             rule.setEnabled(check.isChecked() and auto.isChecked())
+        tv_on = s.sync_tv and not s.manual
+        self.tv_scope.setEnabled(tv_on and s.tv_auto)
+        # Ticking shows only matters for "selected shows".
+        self.tv_shows.setEnabled(tv_on and s.tv_auto and s.tv_scope == "selected shows")
+        self.tv_episodes.setEnabled(tv_on)
         podcasts_on = s.sync_podcasts and not s.manual
         self.podcasts_scope.setEnabled(podcasts_on and s.podcasts_auto)
         # Ticking shows only matters for "selected podcasts".

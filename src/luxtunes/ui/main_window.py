@@ -27,7 +27,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QPointF, QSettings, QSize, Qt, QTimer, QUrl
+from PySide6.QtCore import QObject, QPoint, QPointF, QSettings, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QAction, QActionGroup, QColor, QDesktopServices, QFont, QIcon, QKeySequence, QPainter, QPalette, QPixmap,
     QShortcut,
@@ -109,6 +109,7 @@ from luxtunes.ui.track_model import (
 from luxtunes.ui.widgets import (
     SOURCE_MOVIES,
     SOURCE_MUSIC,
+    SOURCE_PODCASTS,
     SOURCE_RADIO,
     SOURCE_RADIO_LIKES,
     SOURCE_UP_NEXT,
@@ -134,6 +135,11 @@ VIEW_TIPS = ("List", "Album List", "Grid", "Cover Flow")
 # Columns shown in a fresh Album List layout, in order.
 ALBUM_LAYOUT = ("album_group", "album_track", "enabled", "name", "total_time",
                 "artist", "genre", "rating", "play_count")
+
+
+class _NetRelay(QObject):
+    """Brings "connecting to <host>" from any thread to the status bar."""
+    connecting = Signal(str)
 
 
 class MainWindow(QMainWindow):
@@ -247,6 +253,12 @@ class MainWindow(QMainWindow):
         self._song_lookup = None                # Get Track Info Online… running in the background
         self._smart_refresh_pending = False     # a live smart playlist on show may need updating
         self._update_worker = None              # Help → Check for Updates… in the background
+        self._update_silent = False             # …started by itself at startup (Preferences → Network)
+        self._podcast_worker = None             # reading podcast feeds or downloading episodes
+        self._podcast_window = None             # File → Podcasts…
+        self._podcast_downloads: list = []      # (episode id, title) waiting after the feeds are read
+        self._podcast_report = {"new": 0, "added": 0, "problems": []}
+        self._podcast_silent = False
         self._recent: list[int] = []            # Controls → Play Recent (newest first)
 
         self._build_ui()
@@ -267,6 +279,15 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._device_tick)
         self._update_device_actions()
         QTimer.singleShot(800, self._offer_desktop_integration)
+        # Every connection to the internet shows in the status bar (core/net.py).
+        from luxtunes.core import net
+        self._net_relay = _NetRelay(self)
+        self._net_relay.connecting.connect(
+            lambda host: self.statusBar().showMessage(f"Connecting to {host}…", 3000))
+        self._net_listener = self._net_relay.connecting.emit
+        net.listeners.append(self._net_listener)
+        # What Preferences → Network allows at startup (all off unless you turned it on).
+        QTimer.singleShot(4000, self._startup_online)
 
     # ======================================================================
     # Building the window
@@ -508,6 +529,9 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.dup_bar)
         self.radio_bar = RadioBar()              # PLAYING → Radio: Save as Playlist, Refresh...
         right_layout.addWidget(self.radio_bar)
+        from luxtunes.ui.podcast_window import PodcastBar
+        self.podcast_bar = PodcastBar(self)      # Podcasts: Subscribe…, Refresh, Podcasts…
+        right_layout.addWidget(self.podcast_bar)
 
         # ---- Put it together ------------------------------------------------
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -566,6 +590,10 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         self._action(file_menu, "Add File to Library…", self._add_file, "Ctrl+O")
         self._action(file_menu, "Add Folder to Library…", self._add_folder)
+        self._action(file_menu, "Subscribe to Podcast…", self.subscribe_to_podcast)
+        self.refresh_podcasts_action = self._action(file_menu, "Refresh Podcasts",
+                                                    lambda: self.refresh_podcasts())
+        self._action(file_menu, "Podcasts…", self._show_podcast_window)
         library_menu = file_menu.addMenu("Library")
         self.organize_action = self._action(library_menu, "Organize Library…", self._organize_library)
         self.organize_action.setEnabled(organize.is_enabled(self.conn))   # never rearranges a folder you keep as it is
@@ -663,6 +691,7 @@ class MainWindow(QMainWindow):
         self._action(help_menu, "LuxTunes Help", self._show_help, "F1")
         help_menu.addSeparator()
         self._action(help_menu, "Check for Updates…", self._check_for_updates)
+        self._action(help_menu, "Show Sync Logs", self._show_sync_logs)
         from luxtunes.core import updater
         if updater.running_appimage():
             self._action(help_menu, "Remove LuxTunes from This Computer…", self._remove_appimage)
@@ -756,6 +785,7 @@ class MainWindow(QMainWindow):
         self.sidebar.eject_requested.connect(self._eject_device)
         self.device_page.sync_requested.connect(self._sync_device)
         self.device_page.stop_requested.connect(self._stop_sync)
+        self.device_page.search_hint_changed.connect(self._device_search_hint)
         self.lcd.stop_requested.connect(self._stop_task)
         self.cd_page.import_clicked.connect(self._cd_import_clicked)
         self.cd_page.settings_clicked.connect(self._edit_import_settings)
@@ -804,11 +834,15 @@ class MainWindow(QMainWindow):
         self._current_source = source
         self._end_duplicates()
         self.radio_bar.hide()
+        self.podcast_bar.setVisible(source == SOURCE_PODCASTS)
+        if source == SOURCE_PODCASTS:
+            self.podcast_bar.update_state(self.conn)
         if source[0] == "device":
             self._show_device(source[1])
             return
         if self._showing_device_page():     # back from an iPod's or a CD's page
             self.views.setCurrentIndex(1 if self.view_mode == "grid" else 0)
+            self.search.setEnabled(True)
             self.search.show()
         if self._drilled:
             self._leave_drill(show_grid=self.view_mode == "grid")
@@ -979,6 +1013,9 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, lambda: restore(40))       # up to about a second
 
     def _on_search(self, text):
+        if self.views.currentWidget() is self.device_page:
+            self.device_page.set_filter(text)    # filters the device tab shown
+            return
         self.model.set_filter(text)
         self._update_summary()
         if self._play_follows_search:
@@ -1945,7 +1982,7 @@ class MainWindow(QMainWindow):
             "from the Cover Art Archive. You'll see every change before anything is saved."
             + (f"\n\nThis takes about {max(1, lookups * 2 // 60)} minute(s): MusicBrainz allows "
                "about one question a second." if lookups > 20 else ""),
-            "Look Up Online")
+            "Look Up Online", feature="track_info")
         if not approved:
             return
         from luxtunes.ui.cd_worker import SongLookupWorker
@@ -1996,7 +2033,7 @@ class MainWindow(QMainWindow):
             "online lyrics library, and download the lyrics it has. Songs that already have "
             "lyrics keep them; where LRCLIB knows when each line is sung, the Pop-Out Player "
             "highlights it as the song plays.",
-            "Look Up Lyrics")
+            "Look Up Lyrics", feature="lyrics")
         if not approved:
             return
         from luxtunes.ui.cd_worker import LyricsLookupWorker
@@ -3588,9 +3625,24 @@ class MainWindow(QMainWindow):
         self.cover_flow.hide()
         self.device_page.set_device(self.conn, ipod, record)
         self.views.setCurrentWidget(self.device_page)
-        self.search.hide()          # nothing to search on a device's page
+        # The search box filters the lists on the tab shown (Music, Movies,
+        # Podcasts, Audiobooks, Photos); it starts empty on each device.
+        self.search.blockSignals(True)
+        self.search.clear()
+        self.search.blockSignals(False)
+        self.device_page.set_filter("")
+        self._device_search_hint(self.device_page.search_hint())
+        self.search.show()
         self.summary_label.setText(f"{record.name} — {ipod.model_name or 'iPod'}")
         self._update_device_actions()
+
+    def _device_search_hint(self, hint: str):
+        """The device page's tab changed: "Search Audiobooks", or greyed out on
+        a tab with nothing to search."""
+        if self.views.currentWidget() is not self.device_page:
+            return
+        self.search.setPlaceholderText(hint or "Search")
+        self.search.setEnabled(bool(hint))
 
     def _on_device_renamed(self, key: str, name: str):
         ipod = self._players.get(key)
@@ -3693,8 +3745,34 @@ class MainWindow(QMainWindow):
 
     def _stop_sync(self):
         if self._sync_worker is not None:
-            self.lcd.set_stopping("sync", "Stopping after the current song…")
+            # Even a copy in progress is cut short (core/android/copier.py).
+            self.lcd.set_stopping("sync", "Stopping…")
             self._sync_worker.stop()
+            worker = self._sync_worker
+            QTimer.singleShot(90_000, lambda: self._sync_still_stopping(worker))
+
+    def _sync_still_stopping(self, worker):
+        """Stop was pressed a minute and a half ago and the sync still hasn't
+        ended: the device itself has stopped answering. Say so, rather than
+        leaving "Stopping…" up with no explanation."""
+        if worker is not self._sync_worker or self._closing_after_sync:
+            return
+        log.warning("sync still stopping after 90 s: the device isn't answering")
+        QMessageBox.warning(
+            self, "Sync",
+            f"“{self._sync_name}” isn't answering, so the sync can't finish stopping.\n\n"
+            "LuxTunes isn't copying anything to it any more. Unlock the phone and wait a "
+            "minute. If it stays stuck, unplug it: then restart the phone before plugging it "
+            "in again.\n\nThe sync log has the details (Help → Show Sync Logs).")
+
+    def _show_sync_logs(self):
+        """Help → Show Sync Logs: the folder with a log of each sync."""
+        from luxtunes.core import sync_log
+        folder = sync_log.folder_of(self.conn)
+        if folder is None:
+            return
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def _confirm_sync(self, adding: int, removing: int, removals=()):
         """Asked by the sync before it changes the iPod. Only the first LuxTunes
@@ -3776,8 +3854,16 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Playlists from “{self._sync_name}”: "
                                          + ", ".join(parts) + ".", 8000)
         if report.stats and report.stats.plays:
+            rockbox_plays = getattr(report, "rockbox_plays", 0)
             self.statusBar().showMessage(
-                f"{report.stats.plays:,} plays were read from “{self._sync_name}”.", 8000)
+                f"{report.stats.plays:,} plays were read from “{self._sync_name}”"
+                + (f" ({rockbox_plays:,} of them from Rockbox)" if rockbox_plays
+                   else "") + ".", 8000)
+        fixed = getattr(report, "rockbox_fixed", 0)
+        if fixed:
+            self.statusBar().showMessage(
+                f"{fixed:,} song{'s' if fixed != 1 else ''} on “{self._sync_name}” got details "
+                "or a cover Rockbox can show.", 8000)
         restored = getattr(report, "artwork_restored", 0)
         if restored:
             self.statusBar().showMessage(
@@ -3790,7 +3876,8 @@ class MainWindow(QMainWindow):
                 f"{'were' if imported != 1 else 'was'} added to your library.", 8000)
         if report.problems and not self._closing_after_sync:
             QMessageBox.warning(self, "Sync", "Some items couldn't be synced:\n\n"
-                                + "\n".join(report.problems[:20]))
+                                + "\n".join(report.problems[:20])
+                                + "\n\nThe sync log has the details (Help → Show Sync Logs).")
 
     def _sync_failed(self, message: str):
         self._lcd_finished("sync", "The sync didn't finish.", 4)
@@ -3798,7 +3885,8 @@ class MainWindow(QMainWindow):
         if self._closing_after_sync:
             log.warning("sync didn't finish while closing: %s", message)
             return
-        QMessageBox.warning(self, "Sync", f"“{self._sync_name}” couldn't be synced:\n\n{message}")
+        QMessageBox.warning(self, "Sync", f"“{self._sync_name}” couldn't be synced:\n\n{message}"
+                            "\n\nThe sync log has the details (Help → Show Sync Logs).")
 
     def _sync_thread_done(self):
         if self._sync_worker is not None:
@@ -4093,13 +4181,18 @@ class MainWindow(QMainWindow):
             self.reload_library()
 
     def _approve_internet(self, title: str, question: str, details: str, go: str,
-                          dont_ask_again=None) -> bool:
-        """Ask before anything goes online. Nothing does without a yes here.
+                          dont_ask_again=None, feature: str | None = None) -> bool:
+        """Ask before anything goes online. Nothing does without a yes here,
+        unless you turned `feature` on in Preferences → Network (then it goes
+        ahead without the question; the status bar still says when it connects).
         With dont_ask_again (a function), the question has a "Don't ask again"
         box; ticking it calls that function (the question stops coming up by
         itself; it never turns into going online without asking)."""
         if not self.isVisible():
             return False
+        from luxtunes.core import network_prefs
+        if feature is not None and network_prefs.allowed(self.conn, feature):
+            return True
         box = QMessageBox(QMessageBox.Icon.Question, title, question, parent=self)
         box.setInformativeText(details)
         yes = box.addButton(go, QMessageBox.ButtonRole.AcceptRole)
@@ -4129,7 +4222,8 @@ class MainWindow(QMainWindow):
             "LuxTunes will send the CD's layout (how long each track is, not your music) to "
             "MusicBrainz, a free online music database, and download the song names, and the "
             "album cover from the Cover Art Archive.", "Look Up Online",
-            dont_ask_again=(lambda: cd.set_ask_lookup(self.conn, False)) if automatic else None)
+            dont_ask_again=(lambda: cd.set_ask_lookup(self.conn, False)) if automatic else None,
+            feature="cd_names")
         if approved and key in self._discs:
             self._start_lookup(self._discs[key], approved=True)
         elif then_continue:
@@ -4926,6 +5020,7 @@ class MainWindow(QMainWindow):
         self.search.setPlaceholderText("Search Missing")
         self._showing_missing = True
         self.radio_bar.hide()
+        self.podcast_bar.hide()
         self.filter_label.setText("Displaying Missing")
         self.dup_bar.show()
         missing = sum(1 for p in problems.values() if p == "File not found")
@@ -5064,10 +5159,216 @@ class MainWindow(QMainWindow):
         self._refresh_view_icons()
         self.reload_library()  # re-colour the sidebar section titles
 
+    # ---- Going online by itself (Preferences → Network) -------------------------------
+
+    def _startup_online(self):
+        """At startup, only what you turned on in Preferences → Network."""
+        from luxtunes.core import network_prefs
+        if self._closing or not self.isVisible():
+            return
+        if network_prefs.allowed(self.conn, "updates"):
+            self._check_for_updates(silent=True)
+        if network_prefs.allowed(self.conn, "podcasts_startup"):
+            from luxtunes.core import podcasts
+            if podcasts.feeds(self.conn):
+                self.refresh_podcasts(silent=True)
+
+    # ---- Podcasts (File → Subscribe to Podcast…, Refresh Podcasts, Podcasts…) ------------
+
+    def podcasts_busy(self) -> bool:
+        return self._podcast_worker is not None
+
+    def _approve_podcasts(self, question: str) -> bool:
+        return self._approve_internet(
+            "Podcasts", question,
+            "LuxTunes will contact each podcast's website for its list of episodes and download "
+            "new ones into your LuxTunes Media folder. No account is needed and nothing about "
+            "your library is sent; the podcasts' sites (and services they use to count "
+            "listeners) see your IP address, as with any podcast app. To skip this question, "
+            "use Preferences → Network.", "Go Online", feature="podcasts")
+
+    def subscribe_to_podcast(self):
+        """Paste a podcast's feed address; its newest episode is downloaded."""
+        from PySide6.QtWidgets import QInputDialog
+        from luxtunes.core import podcasts
+        if self.podcasts_busy():
+            return
+        parent = self._podcast_window if self._podcast_window is not None \
+            and self._podcast_window.isVisible() else self
+        text, ok = QInputDialog.getText(
+            parent, "Subscribe to Podcast",
+            "The podcast's feed address (its RSS link, from the podcast's website):")
+        if not ok or not text.strip():
+            return
+        try:
+            url = podcasts.normalize_url(text)
+        except podcasts.FeedError as error:
+            QMessageBox.warning(parent, "Subscribe to Podcast", str(error))
+            return
+        if podcasts.is_subscribed(self.conn, url):
+            QMessageBox.information(parent, "Subscribe to Podcast",
+                                    "You already subscribe to that podcast.")
+            return
+        if not self._approve_podcasts("Subscribe to this podcast?"):
+            return
+        self._read_feeds([(None, url)], silent=False)
+
+    def refresh_podcasts(self, silent: bool = False):
+        """Check every podcast for new episodes and download them. silent:
+        started at startup (Preferences → Network): no question, no dialogs."""
+        from luxtunes.core import podcasts
+        if self.podcasts_busy():
+            return
+        feeds = [(f["id"], f["url"]) for f in podcasts.feeds(self.conn)]
+        if not feeds:
+            if not silent:
+                QMessageBox.information(self, "Refresh Podcasts",
+                                        "You don't subscribe to any podcasts yet. Choose "
+                                        "File → Subscribe to Podcast… to add one.")
+            return
+        if not silent and not self._approve_podcasts(
+                f"Check {len(feeds)} podcast{'s' if len(feeds) != 1 else ''} for new episodes?"):
+            return
+        self._read_feeds(feeds, silent=silent)
+
+    def _read_feeds(self, feeds: list, silent: bool):
+        from luxtunes.ui.podcast_worker import FeedWorker
+        self._podcast_silent = silent
+        self._podcast_downloads = []
+        self._podcast_report = {"new": 0, "added": 0, "problems": [], "subscribed": None}
+        worker = FeedWorker(feeds, approved=True, parent=self)
+        self._podcast_worker = worker
+        worker.progress.connect(lambda done, total, url: self._podcast_status(
+            f"Checking podcasts ({done + 1} of {total})…"))
+        worker.read.connect(self._on_feed_read)
+        worker.finished.connect(self._feeds_done)
+        self._podcast_status("Checking podcasts…")
+        worker.start()
+
+    def _on_feed_read(self, feed_id, url: str, feed, problem: str):
+        from luxtunes.core import podcasts
+        report = self._podcast_report
+        if feed is None:
+            if feed_id is not None:
+                podcasts.note_problem(self.conn, feed_id, problem)
+            report["problems"].append(f"{url}: {problem}")
+            return
+        new_subscription = feed_id is None
+        feed_id, new = podcasts.save_feed(self.conn, feed)
+        if new_subscription:
+            report["subscribed"] = (feed_id, feed.title)
+            new = podcasts.newest(self.conn, new, 1)     # just the newest, like iTunes
+        report["new"] += len(new)
+        self._podcast_downloads += [(episode_id, feed.title) for episode_id in new]
+
+    def _feeds_done(self):
+        worker, self._podcast_worker = self._podcast_worker, None
+        if worker is not None:
+            worker.deleteLater()
+        if self._podcast_downloads and not self._closing:
+            self._download_podcast_episodes([e for e, _ in self._podcast_downloads])
+        else:
+            self._podcasts_finished()
+
+    def download_episodes(self, episode_ids: list[int]):
+        """The Podcasts window's Download: these episodes, after a yes."""
+        if self.podcasts_busy() or not episode_ids:
+            return
+        count = len(episode_ids)
+        if not self._approve_podcasts(
+                f"Download {count} episode{'s' if count != 1 else ''}?"):
+            return
+        self._podcast_silent = False
+        self._podcast_report = {"new": 0, "added": 0, "problems": [], "subscribed": None}
+        self._download_podcast_episodes(episode_ids)
+
+    def _download_podcast_episodes(self, episode_ids: list[int]):
+        from luxtunes.core import podcasts
+        from luxtunes.ui.podcast_worker import DownloadWorker
+        downloads = [d for d in (podcasts.plan_download(self.conn, e) for e in episode_ids) if d]
+        if not downloads:
+            self._podcasts_finished()
+            return
+        covers = {f["title"]: f["image_url"] for f in podcasts.feeds(self.conn)}
+        worker = DownloadWorker(downloads, covers, approved=True, parent=self)
+        self._podcast_worker = worker
+
+        def tell(done, total, title, got, expected):
+            size = (f" — {got / 1e6:,.0f} of {expected / 1e6:,.0f} MB" if expected
+                    else f" — {got / 1e6:,.0f} MB" if got else "")
+            self._podcast_status(f"Downloading “{title}” ({done + 1} of {total}){size}")
+        worker.progress.connect(tell)
+        worker.downloaded.connect(self._on_episode_downloaded)
+        worker.finished.connect(self._downloads_done)
+        worker.start()
+
+    def _on_episode_downloaded(self, episode_id: int, path: str, cover, problem: str):
+        from luxtunes.core import podcasts
+        if not path:
+            self._podcast_report["problems"].append(problem)
+            return
+        try:
+            podcasts.add_downloaded(self.conn, episode_id, path, cover)
+            self._podcast_report["added"] += 1
+        except Exception as error:          # the file stays; it can be added by hand
+            log.warning("couldn't add the episode %s: %s", path, error)
+            self._podcast_report["problems"].append(f"{os.path.basename(path)}: {error}")
+
+    def _downloads_done(self):
+        worker, self._podcast_worker = self._podcast_worker, None
+        if worker is not None:
+            worker.deleteLater()
+        self._podcasts_finished()
+
+    def _podcast_status(self, text: str):
+        self.statusBar().showMessage(text)
+        self.podcast_bar.update_state(self.conn)
+        if self._podcast_window is not None:
+            self._podcast_window.set_busy(True, text)
+
+    def _podcasts_finished(self):
+        report = self._podcast_report
+        if report["added"]:
+            self.reload_library()
+        parts = []
+        if report.get("subscribed"):
+            parts.append(f"Subscribed to “{report['subscribed'][1]}”.")
+        if report["added"]:
+            parts.append(f"{report['added']:,} new episode{'s' if report['added'] != 1 else ''} "
+                         "added to your library.")
+        elif not report.get("subscribed") and not report["problems"]:
+            parts.append("No new podcast episodes.")
+        if report["problems"]:
+            parts.append(f"{len(report['problems'])} problem{'s' if len(report['problems']) != 1 else ''}"
+                         " (see File → Podcasts…).")
+        self.statusBar().showMessage(" ".join(parts), 10000)
+        self.podcast_bar.update_state(self.conn)
+        if self._podcast_window is not None:
+            selected = report["subscribed"][0] if report.get("subscribed") else None
+            self._podcast_window.reload(selected)
+            self._podcast_window.set_busy(False)
+        if report["problems"] and not self._podcast_silent and not self._closing:
+            shown = report["problems"][:8]
+            more = len(report["problems"]) - len(shown)
+            QMessageBox.warning(self, "Podcasts", "Some podcasts couldn't be updated:\n\n"
+                                + "\n".join(shown) + (f"\n…and {more} more" if more else ""))
+
+    def _show_podcast_window(self):
+        from luxtunes.ui.podcast_window import PodcastWindow
+        if self._podcast_window is None:
+            self._podcast_window = PodcastWindow(self.conn, self, self)
+        else:
+            self._podcast_window.reload()
+        self._podcast_window.show()
+        self._podcast_window.raise_()
+        self._podcast_window.activateWindow()
+
     # ---- Help → Check for Updates… --------------------------------------------------
 
-    def _check_for_updates(self):
-        """Ask GitHub for the newest LuxTunes (after a yes), then offer to install it."""
+    def _check_for_updates(self, silent: bool = False):
+        """Ask GitHub for the newest LuxTunes (after a yes), then offer to install it.
+        silent: started by itself at startup (Preferences → Network): only a new
+        version is mentioned, never "you're up to date" or a problem."""
         from luxtunes.core import updater
         if self._update_worker is not None:
             return
@@ -5075,12 +5376,13 @@ class MainWindow(QMainWindow):
             "Check for Updates", "Check GitHub for a newer version of LuxTunes?",
             f"LuxTunes will ask GitHub ({updater.RELEASES_PAGE.removeprefix('https://')}) for its "
             "latest release. Nothing about you or your library is sent. If there's a new version, "
-            "you choose whether to install it.", "Check Now")
+            "you choose whether to install it.", "Check Now", feature="updates")
         if not approved:
             return
         from luxtunes.ui.update_worker import CheckWorker
         worker = CheckWorker(approved=True, parent=self)
         self._update_worker = worker
+        self._update_silent = silent
         self.statusBar().showMessage("Checking for updates…")
         worker.found.connect(self._on_update_found)
         worker.failed.connect(lambda message: self._update_problem("Check for Updates", message))
@@ -5094,11 +5396,18 @@ class MainWindow(QMainWindow):
 
     def _update_problem(self, title: str, message: str):
         self.statusBar().clearMessage()
+        if self._update_silent:
+            self._update_silent = False
+            self.statusBar().showMessage(f"Couldn't check for updates: {message}", 8000)
+            return
         QMessageBox.warning(self, title, message)
 
     def _on_update_found(self, release):
         from luxtunes.core import updater
         self.statusBar().clearMessage()
+        silent, self._update_silent = self._update_silent, False
+        if silent and not updater.is_newer(release.version):
+            return
         if not updater.is_newer(release.version):
             QMessageBox.information(self, "Check for Updates",
                                     f"You have the latest version of LuxTunes ({__version__}).")
@@ -5365,6 +5674,12 @@ class MainWindow(QMainWindow):
             self._song_lookup.wait(20_000)
         if self._update_worker is not None:
             self._update_worker.wait()       # never stop an update half-installed
+        if self._podcast_worker is not None:
+            self._podcast_worker.stop()      # a half-downloaded episode is removed
+            self._podcast_worker.wait(20_000)
+        from luxtunes.core import net
+        if self._net_listener in net.listeners:
+            net.listeners.remove(self._net_listener)
         if self._deferred_tag_jobs:
             self.player.stop()                   # its file is free now: write the edits waiting
             self._tag_jobs.extend(self._deferred_tag_jobs)

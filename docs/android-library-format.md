@@ -11,6 +11,7 @@ LuxTunes/
         Music/<Artist>/<Album>/<disc-track Name>.<ext>
         Movies/  TV Shows/  Podcasts/  Audiobooks/
         .../cover.jpg            one per album folder (or cover.png)
+        .../cover-2.jpg, …       more, when an album's songs carry different pictures
     Playlists/<name>.m3u8        one per synced playlist
     library.db                   SQLite, rewritten at every sync
     changes.json                 written by a player on the device (optional)
@@ -19,8 +20,14 @@ LuxTunes/
 
 Songs keep their own embedded artwork (also converted ones: "Convert higher bit rate
 songs" writes the details, lyrics and artwork back into the converted copy). Each album
-folder also gets a `cover.jpg` (or `.png`) from the first of its songs that has artwork,
-written as soon as that song is copied; `tracks.artwork` in `library.db` points to it.
+folder also gets a `cover.jpg` (or `.png`) from the first of its songs (in disc and track
+order) that has artwork, written as soon as a song with artwork is copied. When an album's
+songs carry different pictures (say the standard edition's cover on the first 12 and the
+deluxe edition's on the last 6), each further picture gets its own file, `cover-2.jpg`,
+`cover-3.jpg` and so on (`.png` for a PNG), in the order they first appear; from LuxTunes
+0.9.3. `tracks.artwork` in `library.db` points to the file showing each song's own
+picture, so it can differ between songs of one album folder; a song without artwork points
+to the folder's `cover.jpg`. Cover files no song uses any more are removed.
 
 LuxTunes never writes or deletes anything outside the `LuxTunes` folder (it follows
 links before deciding, so a link can't lead it elsewhere). With **Delete media not in this
@@ -54,7 +61,8 @@ lacked the smart playlist rules, the extra song details and the reference tables
 
 - `id` is the song's persistent ID: 16 hexadecimal digits that never change for that
   song. Use it to match songs between syncs and in `changes.json`.
-- `path` and `artwork` are relative to the `LuxTunes` folder. `artwork` may be empty.
+- `path` and `artwork` are relative to the `LuxTunes` folder. `artwork` may be empty, and
+  it's the song's own picture: songs of one album can point to different covers.
 - `library_id` identifies the computer's library. If it changes, the folder was synced
   from a different library and stored plays should not be carried over.
 - `playlist_items` lists only songs that are on the phone, also for smart playlists

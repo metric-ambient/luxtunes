@@ -38,6 +38,7 @@ class IPod:
     usb_product: str = ""            # 1261 = iPod classic, 1209 = iPod 5G/5.5G
     song_count: int | None = None
     sysinfo: dict = field(default_factory=dict)
+    other_firmware: list = field(default_factory=list)   # "Rockbox", "RepriseOS" beside Apple's
     identity: models.Identity = field(default_factory=lambda: models.identify())
 
     # What this model can do (see models.py).
@@ -170,6 +171,8 @@ def read_ipod(mountpoint: str, device: str = "", filesystem: str = "") -> IPod:
     name, songs = read_database_summary(ipod.control / "iTunes" / "iTunesDB")
     ipod.name = name or os.path.basename(mountpoint.rstrip("/")) or "iPod"
     ipod.song_count = songs
+    from luxtunes.core.ipod import rockbox
+    ipod.other_firmware = rockbox.other_firmware(mountpoint)
     return ipod
 
 

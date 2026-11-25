@@ -239,6 +239,17 @@ def test_tv_rules_and_ipod_playable_videos(tmp_path):
     off = settings.SyncSettings(sync_music=False, sync_tv=False)
     assert plan.build_plan(conn, off).count("tvshow") == 0
     assert all(m["persistent_id"] != "MKV" for m in plan.library_choices(conn).movies)
+    # Chosen shows, and single episodes ticked by hand (like Podcasts).
+    def picked(**options):
+        s = settings.SyncSettings(sync_music=False, sync_tv=True, **options)
+        return sorted(t["persistent_id"] for t in plan.build_plan(conn, s).tracks)
+
+    assert picked(tv_scope="selected shows", tv_shows=["Show B"]) == ["B1"]
+    assert picked(tv_scope="selected shows", tv_shows=["Show B"], tv_episodes=["A1"]) == ["A1", "B1"]
+    assert picked(tv_auto=False, tv_episodes=["A3"]) == ["A3"]
+    choices = plan.library_choices(conn)
+    assert choices.tv_shows == ["Show A", "Show B"]
+    assert [e["persistent_id"] for e in choices.tv_episodes] == ["A1", "A2", "A3", "B1"]
 
 
 def test_finds_the_programs_keeping_an_ipod_busy(tmp_path):
@@ -298,6 +309,11 @@ def test_podcasts_and_audiobooks_in_the_plan(tmp_path):
                   podcast_episodes=["P1"], sync_books=False) == {"P4", "P1"}
     big_book = plan.book_key({"artist": "Writer", "album": "Big Book"})
     assert chosen(sync_podcasts=False, books_mode="selected", books=[big_book]) == {"K1", "K2"}
+    # The Audiobooks tab's tiles: title, author, the whole book's size, and the
+    # first part's cover.
+    details = plan.library_choices(conn).book_details[big_book]
+    assert (details["title"], details["author"], details["size"]) == ("Big Book", "Writer", 20)
+    assert details["track"]["persistent_id"] == "K1"
     p = plan.build_plan(conn, settings.SyncSettings(sync_movies=False))
     assert p.video_bytes == 0                                     # podcasts and books are audio
 
