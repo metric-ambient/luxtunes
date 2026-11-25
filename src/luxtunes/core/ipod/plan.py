@@ -24,6 +24,9 @@ IPOD_VIDEO_EXTENSIONS = (".m4v", ".mp4", ".mov")   # what an iPod Classic can pl
 IPOD_AUDIO_EXTENSIONS = (".mp3", ".m4a", ".m4b", ".m4p", ".aac", ".wav", ".aif", ".aiff",
                          ".aa", ".aax")
 UNPLAYABLE_KBPS = 256          # for files the iPod can't play, when no rate is chosen
+ALAC = "alac"                  # transfer_kbps: convert to Apple Lossless instead of AAC
+LOSSLESS_EXTENSIONS = (".flac", ".wav", ".aif", ".aiff", ".wv", ".ape")
+ALAC_SIZE = 0.65               # Apple Lossless is about this much of 16-bit stereo audio
 AUTOFILL_RESERVE = 1024 ** 3      # leave 1 GB free when "Automatically fill free space" is on
 SEP = "\x1f"
 
@@ -145,24 +148,42 @@ def _movie_rule(rule: str, movies: list[dict]) -> list[dict]:
     return chosen
 
 
-def transfer_kbps(song: dict, settings: SyncSettings) -> int | None:
-    """The AAC bit rate a song is converted to on its way to the iPod, or None
-    to copy it as it is. With "Convert higher bit rate songs to …" on, songs
-    above that rate (and lossless ones) are converted; protected (.m4p) songs
-    never are."""
+def is_lossless(song: dict) -> bool:
+    """FLAC, WAV, AIFF, Apple Lossless (and other lossless formats)."""
+    location = (song.get("location") or "").lower()
+    kind = (song.get("kind") or "").lower()
+    return location.endswith(LOSSLESS_EXTENSIONS) or "lossless" in kind or "flac" in kind
+
+
+def transfer_kbps(song: dict, settings: SyncSettings, alac_ok: bool = True) -> int | str | None:
+    """How a song goes to the iPod: an AAC bit rate to convert it to, ALAC
+    (convert it to Apple Lossless), or None to copy it as it is.
+      * What the iPod can't play (FLAC, Ogg, Opus...) is always converted:
+        lossless songs to Apple Lossless when lossless_format is "alac" (and
+        the iPod plays it: alac_ok), otherwise to AAC.
+      * With "Convert higher bit rate songs to …" on, songs above that rate are
+        converted to it, and WAV/AIFF (and Apple Lossless when AAC is chosen)
+        too: to Apple Lossless or AAC, as lossless_format says.
+    Protected (.m4p) and Audible songs never are."""
     if (song.get("media_kind") or "music") not in library.AUDIO_KINDS:
         return None
     location = (song.get("location") or "").lower()
     if location.endswith((".m4p", ".aa", ".aax")):
         return None
+    lossless = is_lossless(song)
+    to_alac = alac_ok and settings.lossless_format == ALAC and lossless
     if not location.endswith(IPOD_AUDIO_EXTENSIONS):          # e.g. FLAC, Ogg, Opus
+        if to_alac:
+            return ALAC
         from luxtunes.core.convert import capped_kbps
         # Never above what a lossy original (Ogg, Opus) had.
         return capped_kbps(song, settings.convert_kbps if settings.convert else UNPLAYABLE_KBPS)
     if not settings.convert:
         return None
-    lossless = location.endswith((".wav", ".aif", ".aiff")) or \
-        "lossless" in (song.get("kind") or "").lower()
+    if to_alac:
+        # WAV and AIFF become Apple Lossless (smaller, still lossless); Apple
+        # Lossless stays as it is.
+        return ALAC if location.endswith((".wav", ".aif", ".aiff")) else None
     if lossless or (song.get("bit_rate") or 0) > settings.convert_kbps:
         return settings.convert_kbps
     return None
@@ -174,6 +195,15 @@ def transfer_size(song: dict, settings: SyncSettings, kbps_for=None) -> int:
     kbps = (kbps_for or transfer_kbps)(song, settings)
     if kbps is None:
         return song.get("size") or 0
+    if kbps == ALAC:
+        # 16-bit stereo at the iPod's rate, as Apple Lossless packs it; never
+        # more than the original lossless file (a FLAC packs about as well).
+        from luxtunes.core.convert import ipod_sample_rate
+        rate = song.get("sample_rate") or 44100
+        rate = ipod_sample_rate(rate) or rate
+        estimate = int((song.get("total_time") or 0) * rate * 4 * ALAC_SIZE / 1000)
+        size = song.get("size") or 0
+        return min(estimate, int(size * 1.05)) if size else estimate
     return (song.get("total_time") or 0) * kbps // 8      # ms × kbit/s ÷ 8 = bytes
 
 

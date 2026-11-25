@@ -62,6 +62,7 @@ class SyncReport:
     artwork_restored: int = 0          # iPod: songs given back artwork they were missing
     imported: list = field(default_factory=list)   # Android: track ids of songs added on the phone
     edited: list = field(default_factory=list)     # Android: track ids edited on the phone
+    library_renamed: str | None = None             # Android: the library's new name from the phone
     rockbox_plays: int = 0             # iPod with Rockbox: plays read from its log
     rockbox_playlists: int = 0         # …playlists written for it
     rockbox_fixed: int = 0             # …song files given tags or a cover it can show
@@ -317,10 +318,11 @@ def restore_missing_artwork(db, kept: dict, library_by_dbid: dict, tell,
     return restored
 
 
-def _convert_for_ipod(path: str, kbps: int, folder: str, report: SyncReport,
+def _convert_for_ipod(path: str, kbps, folder: str, report: SyncReport,
                       song: dict) -> str | None:
-    """An AAC copy of the song for the iPod, in `folder`; None (and a problem
-    noted) if it can't be made. The library's file is never changed."""
+    """An AAC copy of the song for the iPod (kbps: its bit rate), or an Apple
+    Lossless one (kbps is plan.ALAC), in `folder`; None (and a problem noted)
+    if it can't be made. The library's file is never changed."""
     from luxtunes.core import convert
     ffmpeg = convert.ffmpeg_path()
     if ffmpeg is None:
@@ -330,8 +332,10 @@ def _convert_for_ipod(path: str, kbps: int, folder: str, report: SyncReport,
         return None
     target = os.path.join(folder, f"{song.get('id') or 'song'}.m4a")
     try:
-        result = subprocess.run(convert.ipod_audio_command(ffmpeg, path, target, kbps),
-                                capture_output=True, text=True, timeout=1800)
+        command = (convert.ipod_alac_command(ffmpeg, path, target, song.get("sample_rate"))
+                   if kbps == ipod_plan.ALAC else
+                   convert.ipod_audio_command(ffmpeg, path, target, kbps))
+        result = subprocess.run(command, capture_output=True, text=True, timeout=1800)
     except (OSError, subprocess.SubprocessError) as error:
         report.problems.append(f"{song.get('name')}: couldn't convert ({error})")
         return None
@@ -716,7 +720,7 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
                 if path is None:
                     report.problems.append(f"{song.get('name')}: file not found")
                     continue
-                kbps = ipod_plan.transfer_kbps(song, settings)
+                kbps = ipod_plan.transfer_kbps(song, settings, alac_ok=ipod.supports_alac)
                 source = path
                 if kbps is not None:
                     tell(f"Converting “{song.get('name')}”", i, len(to_add))
@@ -731,9 +735,19 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
                 fill_track(pointer.contents, song)
                 pointer.contents.size = os.path.getsize(upload)
                 if source != path:
-                    pointer.contents.bitrate = kbps
                     pointer.contents.type2 = 0
-                    gpod.set_str(pointer.contents, "filetype", "AAC audio file")
+                    if kbps == ipod_plan.ALAC:
+                        from luxtunes.core.convert import ipod_sample_rate
+                        rate = song.get("sample_rate") or 0
+                        pointer.contents.samplerate = min(ipod_sample_rate(rate) or rate, 65535)
+                        length = song.get("total_time") or 0
+                        pointer.contents.bitrate = (round(pointer.contents.size * 8 / length)
+                                                    if length else 0)
+                        gpod.set_str(pointer.contents, "filetype", "Apple Lossless audio file")
+                    else:
+                        pointer.contents.bitrate = kbps
+                        pointer.contents.samplerate = 44100
+                        gpod.set_str(pointer.contents, "filetype", "AAC audio file")
                 try:
                     db.copy_file(pointer, upload)
                 except gpod.GpodError as error:

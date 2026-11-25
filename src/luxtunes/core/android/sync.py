@@ -28,6 +28,7 @@ No Qt in here.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import logging
@@ -175,6 +176,37 @@ def _copy(source: str, root: Path, relative, stop=None, copier: Copier | None = 
             log.warning("couldn't remove the half-copied %s from the phone (it isn't "
                         "answering); the next sync removes it", relative)
         raise
+
+
+LOST_CONNECTION = {errno.EIO, errno.ENODEV, errno.ENXIO, errno.ENOTCONN, errno.ETIMEDOUT,
+                   errno.ESHUTDOWN, errno.ECONNRESET}
+
+
+def lost_connection(error: OSError) -> bool:
+    """An error that can mean the phone isn't reachable any more (Input/output
+    error is how the desktop's MTP layer reports a dropped USB connection, but
+    also some problems with one file: see phone_answers)."""
+    return getattr(error, "errno", None) in LOST_CONNECTION
+
+
+CARD_ADVICE = ("The phone's SD card isn't accepting some files. SD cards that fail like this, "
+               "partway through big files, are often worn out or counterfeit. Try syncing to "
+               "the phone's internal storage (“Sync to” on the phone's Summary), and test the "
+               "card on a computer.")
+
+
+def card_problem(title: str, error) -> str:
+    """What to say when the phone's SD card stopped taking a file."""
+    return (f"{title}: the phone's SD card stopped accepting data ({error}). The sync "
+            f"stopped there. {CARD_ADVICE.split('. ', 1)[1]}")
+
+
+def phone_answers(root: Path, seconds: float = 15) -> bool:
+    """The phone still lists the LuxTunes folder (an Input/output error can be
+    about one file, or mean the whole connection is gone)."""
+    ok = []
+    _within(lambda: (os.listdir(root), ok.append(True)), seconds)
+    return bool(ok)
 
 
 def _within(job, seconds: float) -> bool:
@@ -412,6 +444,36 @@ def _apply_phone_equalizer(conn, merged, report) -> None:
         log.info("equalizer taken from the phone (%d presets)", len(merged.equalizer.presets))
 
 
+def _apply_phone_library_name(conn, merged, report, manifest: dict, confirm_rename) -> None:
+    """The library renamed on the phone: you're asked whether to use that name
+    here too (confirm_rename(current, new) -> bool; without one, the name here
+    stays). Yes renames it as Preferences → General → Library Name would, and
+    the next library.db carries the name, which tells the phone it was taken.
+    No keeps this name: it's remembered on the phone (the record's
+    declined_library_name, and library.db's info library_name_declined) so the
+    phone drops its rename and you aren't asked again about that name. Only for
+    this library; the same name again changes nothing."""
+    name = merged.library_name
+    current = library.library_name(conn)
+    if not name or name == current:
+        manifest.pop("declined_library_name", None)
+        return
+    if merged.library_id != library_id(conn):
+        log.info("library name %r from the phone ignored: made for another library", name)
+        return
+    if name == manifest.get("declined_library_name"):
+        log.info("library name %r from the phone already turned down", name)
+        return
+    if confirm_rename is None or not confirm_rename(current, name):
+        manifest["declined_library_name"] = name
+        log.info("library name %r from the phone turned down; it stays %r", name, current)
+        return
+    library.set_library_name(conn, name)
+    manifest.pop("declined_library_name", None)
+    report.library_renamed = name
+    log.info("library renamed on the phone: %r -> %r", current, name)
+
+
 def _apply_phone_playlists(conn, root: Path, merged, manifest: dict, record, report,
                            confirm_playlists) -> None:
     """Playlists made, changed or deleted on the phone (format v2)."""
@@ -492,10 +554,11 @@ class PhoneNames:
 
 def transfer_kbps(song: dict, settings) -> int | None:
     """Android plays FLAC, Ogg and the rest, so only "Convert higher bit rate
-    songs" ever converts."""
+    songs" ever converts (always to AAC: a phone plays the FLAC itself, so
+    Apple Lossless would only be a bigger copy)."""
     if not settings.convert:
         return None
-    return ipod_plan.transfer_kbps(song, settings)
+    return ipod_plan.transfer_kbps(song, settings, alac_ok=False)
 
 
 # ---- The database for players on the phone ------------------------------------------------
@@ -602,9 +665,12 @@ def _write_references(out, conn, playlists: list[dict], placed: dict) -> None:
 
 
 def build_database(path: str, conn: sqlite3.Connection, placed: dict, covers: dict,
-                   playlists: list[dict], lists_files: dict) -> None:
+                   playlists: list[dict], lists_files: dict,
+                   declined_name: str | None = None) -> None:
     """placed: persistent id -> phone path; covers: persistent id -> the cover
-    file showing that song's own artwork (see _write_covers)."""
+    file showing that song's own artwork (see _write_covers). declined_name: a
+    library name the phone asked for and you turned down (info
+    library_name_declined, so the phone drops it and shows library_name)."""
     existing = {row[1] for row in conn.execute("PRAGMA table_info(tracks)")}
     columns = [c for c in TRACK_COLUMNS if c in existing]
     out = sqlite3.connect(path)
@@ -617,6 +683,8 @@ def build_database(path: str, conn: sqlite3.Connection, placed: dict, covers: di
                 # This LuxTunes takes songs added on the phone (changes.json
                 # "added_tracks") and details edited there ("edited_tracks").
                 "phone_imports": "1", "phone_edits": "1"}
+        if declined_name and declined_name != info["library_name"]:
+            info["library_name_declined"] = declined_name
         out.executemany("INSERT INTO info VALUES (?, ?)", info.items())
         by_pid = {t["persistent_id"]: t for t in library.load_tracks(conn)}
         rows = []
@@ -663,13 +731,15 @@ def playlist_text(entry: dict, tracks: list[dict], placed: dict) -> str:
 # ---- The sync ---------------------------------------------------------------------------
 
 def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRecord,
-         progress=None, confirm=None, confirm_playlists=None, stop=None) -> SyncReport:
+         progress=None, confirm=None, confirm_playlists=None, stop=None,
+         confirm_rename=None) -> SyncReport:
     """Sync this phone. progress(text, done, total) may return False to stop
     copying; confirm(adding, removing, removals) is asked before anything on the
     phone changes; confirm_playlists(names) before deleting playlists the phone
-    deleted (no: they're kept, and go back to the phone). stop: a threading.Event
-    that also cuts a long copy short. Raises OSError if the phone can't be
-    written to."""
+    deleted (no: they're kept, and go back to the phone); confirm_rename(current,
+    new) before taking a library name set on the phone (no: this one stays, and
+    goes back to the phone). stop: a threading.Event that also cuts a long copy
+    short. Raises OSError if the phone can't be written to."""
     report = SyncReport()
     settings = record.settings
 
@@ -686,8 +756,12 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
         raise OSError("Can't see the phone's storage. Unlock the phone and choose "
                       "“File transfer” in its USB notification.")
     root = Path(storage) / FOLDER
-    log.info("syncing %s %s (%s), storage %s, LuxTunes folder %s", phone.maker, phone.model,
-             phone.key, settings.android_storage or "default", root)
+    # An SD card that's worn out or counterfeit fails partway through big files
+    # (Input/output errors, or the phone stops taking data): said as such.
+    on_card = device_storage_kind(phone, storage) == "removable"
+    log.info("syncing %s %s (%s), storage %s%s, LuxTunes folder %s", phone.maker, phone.model,
+             phone.key, settings.android_storage or "default", " (SD card)" if on_card else "",
+             root)
     tell("Reading the phone…")
     (root / MEDIA).mkdir(parents=True, exist_ok=True)     # there even before the first song
     manifest = read_manifest(root)
@@ -704,6 +778,7 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
     # the phone has just made.
     _apply_phone_equalizer(conn, merged, report)
     _apply_phone_edits(conn, merged, report)
+    _apply_phone_library_name(conn, merged, report, manifest, confirm_rename)
     report.stats = stats.merge(conn, merged.tracks)
     log.info("from the phone: %d plays, %d skips, %d ratings added to the library",
              report.stats.plays, report.stats.skips, report.stats.ratings)
@@ -817,6 +892,7 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
     taken = {f["path"].casefold() for f in files.values()}      # incl. kept ones
     copier = Copier()
     stalled = False
+    card_warned = False                 # the SD card advice, once per sync
     fresh: set[str] = set()                   # album folders that got songs this sync
     new_covers: set[str] = set()              # covers written this sync
     names = PhoneNames(root)
@@ -857,14 +933,27 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
             log.debug("copying %s (%s) to %s", source, f"converted to {kbps} kbps"
                       if kbps is not None else "as it is", relative)
             try:
-                _copy(sending, root, relative, stop, copier, copying)
+                try:
+                    _copy(sending, root, relative, stop, copier, copying)
+                except OSError as error:
+                    if (not isinstance(error, PhoneStalled) and lost_connection(error)
+                            and not phone_answers(root)):
+                        # The phone (or the cable) dropped the connection: every
+                        # further file would fail the same way, after a long wait.
+                        raise PhoneStalled(f"the connection to the phone was lost "
+                                           f"({error.strerror or error})") from error
+                    raise
             except PhoneStalled as error:
                 # The phone stopped answering: no more copying this time (each
                 # further file would hang the same way). What's there is kept.
-                report.problems.append(
-                    f"{title}: {error}. The sync stopped there. Unlock the phone and sync "
-                    "again; if it keeps happening with this item, the sync log has the details "
-                    "(Help → Show Sync Logs).")
+                if on_card:
+                    log.error("the SD card stopped accepting %s: %s", relative, error)
+                    report.problems.append(card_problem(title, error))
+                else:
+                    report.problems.append(
+                        f"{title}: {error}. The sync stopped there. Unlock the phone and sync "
+                        "again; if it keeps happening with this item, the sync log has the "
+                        "details (Help → Show Sync Logs).")
                 if old and old["path"].casefold() != relative.casefold():
                     taken.add(old["path"].casefold())
                 else:
@@ -875,6 +964,9 @@ def sync(conn: sqlite3.Connection, phone: Phone, record: ipod_settings.DeviceRec
             except OSError as error:
                 log.warning("couldn't copy %s: %s", relative, error)
                 report.problems.append(f"{track.get('name')}: {error.strerror or error}")
+                if on_card and lost_connection(error) and not card_warned:
+                    card_warned = True          # once per sync, after the first such error
+                    report.problems.append(CARD_ADVICE)
                 if old and old["path"].casefold() != relative.casefold():
                     taken.add(old["path"].casefold())     # the old copy stays for now
                 else:
@@ -1040,7 +1132,8 @@ def _finish(conn, root: Path, phone: Phone, record, report: SyncReport, manifest
     tell("Writing the library database…", can_stop=False)
     with tempfile.TemporaryDirectory(prefix="luxtunes-android-db-") as folder:
         local = os.path.join(folder, DATABASE)
-        build_database(local, conn, placed, covers, the_plan.playlists, lists_files)
+        build_database(local, conn, placed, covers, the_plan.playlists, lists_files,
+                       manifest.get("declined_library_name"))
         # Through the helper (see copier.py), so a phone that stopped answering
         # can't hang LuxTunes here. Not stoppable: it's quick, and a player needs it.
         copier = Copier()
@@ -1053,7 +1146,13 @@ def _finish(conn, root: Path, phone: Phone, record, report: SyncReport, manifest
             return
         finally:
             copier.close()
-    _save_manifest(root, manifest, conn)
+    try:
+        _save_manifest(root, manifest, conn)
+    except OSError as error:            # the phone stopped answering at the very end
+        log.error("couldn't save the sync record on the phone: %s", error)
+        report.problems.append(f"The sync record couldn't be saved on the phone "
+                               f"({error.strerror or error}). Sync again to finish.")
+        return
     if not stopped:
         ipod_settings.mark_synced(conn, record.id)      # a rename stays in LuxTunes
     log.info("%s %s: +%d -%d, %d playlists", "stopped syncing" if stopped else "synced",

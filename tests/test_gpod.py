@@ -286,6 +286,35 @@ def test_songs_converted_on_the_way_to_the_ipod(tmp_path):
     assert all((tmp_path / f"{i}.mp3").read_bytes() == data for i, data in originals.items())
 
 
+def test_flac_synced_as_apple_lossless(tmp_path):
+    import shutil
+    import subprocess
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("needs ffmpeg")
+    mount, conn = fake_ipod(tmp_path), small_library(tmp_path)
+    flac = tmp_path / "hires.flac"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=duration=2", "-ac", "2",
+                    "-sample_fmt", "s32", "-ar", "96000", "-c:a", "flac", str(flac)], check=True)
+    original = flac.read_bytes()
+    conn.execute("DELETE FROM tracks")
+    conn.execute("INSERT INTO tracks (persistent_id, name, artist, location, size, kind, total_time, "
+                 "sample_rate) VALUES ('ABCDEF0000000099', 'Harbor Lights', 'Slow Orbit', ?, ?, "
+                 "'FLAC audio file', 2000, 96000)", (str(flac), len(original)))
+    conn.commit()
+    report = do_sync(conn, mount, lossless_format="alac")
+    assert report.added == 1 and not report.problems, report.problems
+    with gpod.Database(str(mount)) as ipod_db:
+        [t] = ipod_db.tracks()
+        assert gpod.get_str(t.contents, "filetype") == "Apple Lossless audio file"
+        assert t.contents.samplerate == 48000 and t.contents.bitrate > 0
+        path = ipod_db.file_of(t)
+        assert path.endswith(".m4a")
+        info = subprocess.run(["ffmpeg", "-hide_banner", "-i", path], capture_output=True,
+                              text=True).stderr
+        assert "alac" in info and "48000 Hz" in info and "s16p" in info
+    assert flac.read_bytes() == original                   # the library's file is untouched
+
+
 def test_song_files_the_ipod_doesnt_list_are_cleaned_up(tmp_path):
     mount, conn = fake_ipod(tmp_path), small_library(tmp_path)
     do_sync(conn, mount)

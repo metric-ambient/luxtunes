@@ -664,6 +664,25 @@ def test_sync_page_boxes_keep_their_size_and_tv_has_lists(window, tmp_path):
     assert page.tv_shows.isEnabled() and page.settings.tv_scope == "selected shows"
 
 
+def test_ipod_page_lossless_choice(window, tmp_path):
+    from PySide6.QtWidgets import QApplication
+
+    from luxtunes.core.ipod import device
+    from test_ipod_core import make_ipod
+
+    mount, mounts = make_ipod(tmp_path)
+    [ipod] = device.find_ipods(mounts)
+    window._ipods[ipod.key] = ipod
+    window.reload_library()
+    window.sidebar.select_source(("device", ipod.key))
+    QApplication.instance().processEvents()
+    page = window.device_page
+    assert not page.lossless_format.isHidden() and not page.convert_note.isHidden()
+    assert page.lossless_format.currentData() == "aac"            # as before, by default
+    page.lossless_format.setCurrentIndex(page.lossless_format.findData("alac"))
+    assert page.settings.lossless_format == "alac" and page.dirty
+
+
 def test_ipod_page_shows_rockbox_and_repriseos(window, tmp_path):
     from PySide6.QtWidgets import QApplication
 
@@ -2738,3 +2757,33 @@ def test_help_shows_the_sync_logs_and_stop_says_stopping(window, tmp_path, monke
     assert worker.stopped
     window._sync_worker = None
     window._sync_still_stopping(worker)           # the sync ended meanwhile: no message
+
+
+def test_phone_rename_question(window, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    class Worker:
+        answers = []
+
+        def answer(self, ok):
+            self.answers.append(ok)
+    window._sync_worker = Worker()
+    window._sync_name = "Pixel 7"
+    shown = []
+
+    def pick(label):
+        def exec_(box):
+            shown.append(box.text())
+            for button in box.buttons():
+                if button.text().startswith(label):
+                    box._clicked = button
+            return 0
+        return exec_
+    monkeypatch.setattr(QMessageBox, "clickedButton", lambda box: getattr(box, "_clicked", None))
+    monkeypatch.setattr(QMessageBox, "exec", pick("Use"))
+    window._confirm_phone_rename("My Library", "Lantern Valley")
+    monkeypatch.setattr(QMessageBox, "exec", pick("Keep"))
+    window._confirm_phone_rename("My Library", "Lantern Valley")
+    window._sync_worker = None
+    assert Worker.answers == [True, False]
+    assert "Lantern Valley" in shown[0] and "My Library" in shown[0]

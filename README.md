@@ -104,6 +104,8 @@ Made for Linux Mint, and it runs on most recent Linux systems.
   next sync. An iPod synced with another computer? LuxTunes offers to add its songs that
   aren't in your library, with their play counts and ratings. Before syncing a nano 6th or
   7th generation, LuxTunes keeps a copy of its song list in case it needs to be put back.
+  Keep FLACs in your library: songs the iPod can't play are converted as they sync, to AAC
+  or (your choice) Apple Lossless, and your library's files are never changed.
   (The iPod touch can't be supported.)
 - **iPods that also run Rockbox or RepriseOS:** one normal sync serves every firmware on the
   iPod. RepriseOS is built on Apple's own software and reads the same song list; it's

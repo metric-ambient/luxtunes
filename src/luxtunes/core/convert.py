@@ -206,6 +206,29 @@ IPOD_AAC = ["-c:a", "aac", "-profile:a", "aac_low", "-aac_is", "0", "-aac_pns", 
             "-aac_tns", "0", "-ac", "2", "-af", "aresample=44100:rematrix_maxval=1.0"]
 
 
+def ipod_sample_rate(rate: int | None) -> int | None:
+    """iPods play up to 48 kHz: 88.2/176.4 kHz become 44.1, 96/192 kHz become 48
+    (the same family, so the conversion is cleaner). None: leave it as it is."""
+    if not rate or rate <= 48000:
+        return None
+    return 44100 if rate % 44100 == 0 else 48000
+
+
+def ipod_alac_command(ffmpeg: str, source: str, target: str,
+                      sample_rate: int | None = None) -> list[str]:
+    """A lossless song as Apple Lossless for the iPod (Sync → "Sync lossless
+    songs as Apple Lossless"): stereo, 16-bit, at most 48 kHz. A 24-bit or
+    high-resolution file is brought down with dither (FFmpeg's default is
+    none, which leaves a faint grain in quiet passages); a 16-bit, 44.1/48 kHz
+    file comes out bit for bit the same."""
+    rate = ipod_sample_rate(sample_rate)
+    chain = (f"aresample=rematrix_maxval=1.0{f':osr={rate}' if rate else ''},"
+             "aformat=channel_layouts=stereo,aresample=osf=s16p:dither_method=triangular")
+    return [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", source,
+            "-map", "0:a:0", "-map_metadata", "-1", "-vn", "-af", chain,
+            "-c:a", "alac", "-sample_fmt", "s16p", "-movflags", "+faststart", "-f", "ipod", target]
+
+
 def ipod_audio_command(ffmpeg: str, source: str, target: str, kbps: int) -> list[str]:
     """A song as AAC for the iPod (Sync → "Convert higher bit rate songs")."""
     return [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", source,

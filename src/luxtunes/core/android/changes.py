@@ -9,8 +9,14 @@ Format version 2 (version 1 files are still read the same way):
      "equalizer": {"on", "preset", "manual": {"preamp", "bands"},
                    "presets": [{"name", "preamp", "bands"}]},   (optional)
      "added_tracks": [{"id", "path", "name", "artist", ..., "date_added"}],  (optional)
-     "edited_tracks": [{"id", "album": "...", "year": 1971, "equalizer": "Jazz", ...}]}
+     "edited_tracks": [{"id", "album": "...", "year": 1971, "equalizer": "Jazz", ...}],
                                                                          (optional)
+     "library_name": "..."}                                              (optional)
+
+library_name is the library renamed on the phone (Settings → Library & Sync →
+Rename Library…): taken as if renamed here (see sync._apply_phone_library_name).
+The phone sends it until a library.db with that name arrives, so the same name
+can come more than once.
 
 added_tracks are songs added on the phone: copied into the library at the
 next sync under the phone's id (see sync._import_phone_songs). edited_tracks
@@ -97,6 +103,7 @@ class PhoneChanges:
     raw_equalizer: object = None                  # as the phone wrote it
     added: list[AddedTrack] = field(default_factory=list)
     edited: list[EditedTrack] = field(default_factory=list)
+    library_name: str | None = None               # renamed on the phone (spaces tidied)
     problems: list[str] = field(default_factory=list)
 
 
@@ -283,6 +290,9 @@ def read(root: Path) -> PhoneChanges:
         return result
     lid = data.get("library_id")
     result.library_id = str(lid) if lid else None
+    name = data.get("library_name")
+    if isinstance(name, str) and " ".join(name.split()):
+        result.library_name = " ".join(name.split())[:200]
     for entry in data.get("tracks") or []:
         item = _track(entry)
         if item is not None:
@@ -481,6 +491,11 @@ def emptied(merged: PhoneChanges, now_text: str | None) -> dict:
     if "equalizer" in data and json.dumps(data["equalizer"], sort_keys=True) != \
             json.dumps(merged.raw_equalizer, sort_keys=True):
         empty["equalizer"] = data["equalizer"]
+    # A rename the phone made after the file was read stays for next time.
+    later_name = data.get("library_name")
+    if isinstance(later_name, str) and " ".join(later_name.split()) and \
+            " ".join(later_name.split()) != merged.library_name:
+        empty["library_name"] = later_name
     if data.get("library_id"):
         empty["library_id"] = data["library_id"]
     return empty

@@ -345,6 +345,37 @@ def test_which_songs_are_converted_for_the_ipod():
     assert plan.transfer_kbps({"location": "/m/f.mp3", "bit_rate": 128}, s) is None
 
 
+def test_lossless_songs_as_apple_lossless():
+    s = settings.SyncSettings(lossless_format="alac")
+    flac = {"location": "/m/a.flac", "bit_rate": 900, "total_time": 60_000, "size": 6_000_000,
+            "sample_rate": 96000}
+    wav = {"location": "/m/b.wav", "bit_rate": 1411, "total_time": 60_000, "size": 10_584_000}
+    alac = {"location": "/m/c.m4a", "kind": "Apple Lossless audio file", "bit_rate": 800}
+    ogg = {"location": "/m/d.ogg", "bit_rate": 160}
+    mp3 = {"location": "/m/e.mp3", "bit_rate": 320}
+    songs = (flac, wav, alac, ogg, mp3)
+    # Box off: FLAC becomes Apple Lossless; what the iPod plays stays; Ogg (lossy) is AAC.
+    assert [plan.transfer_kbps(t, s) for t in songs] == [plan.ALAC, None, None, 160, None]
+    # Box on: WAV becomes Apple Lossless too (not AAC); Apple Lossless stays; MP3 → the rate.
+    s.convert, s.convert_kbps = True, 256
+    assert [plan.transfer_kbps(t, s) for t in songs] == [plan.ALAC, plan.ALAC, None, 160, 256]
+    # An iPod that can't play Apple Lossless gets AAC.
+    assert [plan.transfer_kbps(t, s, alac_ok=False) for t in songs] == [256, 256, 256, 160, 256]
+    # Size: 16-bit stereo at 48 kHz (the 96 kHz file comes down), packed, but never above the FLAC.
+    assert plan.transfer_size(flac, s) == min(int(60 * 48000 * 4 * plan.ALAC_SIZE), 6_300_000)
+    assert plan.transfer_size(wav, s) == int(60 * 44100 * 4 * plan.ALAC_SIZE)
+    # Phones play FLAC: never Apple Lossless there.
+    from luxtunes.core.android import sync as android_sync
+    assert android_sync.transfer_kbps(flac, s) == 256
+
+
+def test_which_ipods_play_apple_lossless():
+    from luxtunes.core.ipod import models
+    assert not models.FAMILIES["first"].alac and not models.FAMILIES["shuffle_2"].alac
+    assert models.FAMILIES["classic"].alac and models.FAMILIES["video"].alac
+    assert models.FAMILIES["shuffle_3"].alac and models.FAMILIES["nano_1"].alac
+
+
 def test_a_new_device_syncs_only_music():
     s = settings.SyncSettings()
     assert s.sync_music

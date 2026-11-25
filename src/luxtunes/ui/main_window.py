@@ -3712,6 +3712,7 @@ class MainWindow(QMainWindow):
         worker.progress.connect(self._on_sync_progress)
         worker.confirm_needed.connect(self._confirm_sync)
         worker.playlists_confirm_needed.connect(self._confirm_phone_deletions)
+        worker.rename_confirm_needed.connect(self._confirm_phone_rename)
         worker.succeeded.connect(self._sync_finished)
         worker.failed.connect(self._sync_failed)
         worker.finished.connect(self._sync_thread_done)
@@ -3806,6 +3807,24 @@ class MainWindow(QMainWindow):
         box.exec()
         worker.answer(box.clickedButton() is delete)
 
+    def _confirm_phone_rename(self, current: str, new: str):
+        """The library was renamed on the phone: use that name here too? Asked
+        each time a new name comes (No keeps this one, and it goes back to the
+        phone, which then drops its rename)."""
+        worker = self._sync_worker
+        if worker is None:
+            return
+        box = QMessageBox(QMessageBox.Icon.Question, "Sync",
+                          f"The library was renamed on “{self._sync_name}”.\n\n"
+                          f"On the phone: “{new}”\nOn this computer: “{current}”\n\n"
+                          "Use the phone's name? If you keep this computer's name, it goes back "
+                          "to the phone.", parent=self)
+        use = box.addButton(f"Use “{new}”", QMessageBox.ButtonRole.AcceptRole)
+        keep = box.addButton(f"Keep “{current}”", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(keep)
+        box.exec()
+        worker.answer(box.clickedButton() is use)
+
     def _sync_finished(self, report):
         ipod = self._sync_ipod
         edited = getattr(report, "edited", None) or []
@@ -3840,6 +3859,12 @@ class MainWindow(QMainWindow):
             if appearance(self.settings)["sync_done_sound"]:
                 from luxtunes.core import sounds
                 sounds.play_done_sound()            # the desktop's "done" sound
+        if getattr(report, "library_renamed", None):
+            # Renamed on the phone (Settings → Library & Sync → Rename Library…).
+            self.setWindowTitle(f"LuxTunes — {library.library_name(self.conn)}")
+            self.statusBar().showMessage(
+                f"The library was renamed on “{self._sync_name}”: it's now "
+                f"“{report.library_renamed}”.", 8000)
         if getattr(report, "equalizer_from_phone", False):
             # The phone's equalizer is LuxTunes' now: show and play it.
             self.eq_settings.copy_from(equalizer.load(self.conn))

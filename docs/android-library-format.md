@@ -51,7 +51,7 @@ lacked the smart playlist rules, the extra song details and the reference tables
 
 | Table | Columns |
 |---|---|
-| `info` | `key`, `value`: `format_version` (now `2`), `library_id`, `library_name`, `luxtunes_version`, `synced_at`, `equalizer_on`, `equalizer_preset`, `equalizer_from_phone` |
+| `info` | `key`, `value`: `format_version` (now `2`), `library_id`, `library_name`, `library_name_declined` (only after a rename from the phone was turned down), `luxtunes_version`, `synced_at`, `equalizer_on`, `equalizer_preset`, `equalizer_from_phone` |
 | `tracks` | `id`, `path`, `artwork`, then the song details below |
 | `playlists` | `id`, `name`, `is_smart`, `position` (sidebar order), `file` (its .m3u8, relative to `LuxTunes`), `smart_info`, `smart_criteria` |
 | `playlist_items` | `playlist_id`, `position`, `track_id` |
@@ -166,6 +166,24 @@ taken, unless the phone wrote a newer one meanwhile.
 
 Optional `"added_tracks"` and `"edited_tracks"` keys (LuxTunes 0.8.2 and newer) list songs
 added on the phone and song details edited there; see below.
+
+An optional `"library_name"` key (LuxTunes 0.9.4 and newer) is the library renamed on the
+phone, for example `"library_name": "Lantern Valley"`. Spaces are tidied (trimmed, runs of
+spaces made one) and an empty name is ignored. It can be the only thing in the file. For the
+same `library_id`, LuxTunes asks whether to use the phone's name:
+
+- **Yes:** the library is renamed, as Preferences → General → Library Name would, and the
+  next `library.db` carries it in `info.library_name`. That tells the phone the rename was
+  taken.
+- **No:** the computer's name stays. The next `library.db` has it in `info.library_name`,
+  plus `info.library_name_declined` = the name that was turned down. A phone whose pending
+  rename equals `library_name_declined` should drop it and show `library_name`. LuxTunes
+  also remembers the turned-down name, so sending it again doesn't ask again; a different
+  name does.
+
+The same name as the library's changes nothing and isn't asked. A different `library_id` is
+ignored, and so is the key for older LuxTunes versions. If the phone renames the library
+again while a sync is reading the file, the newer name stays in the file for the next sync.
 
 ### added_tracks
 

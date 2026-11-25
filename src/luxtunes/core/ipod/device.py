@@ -51,6 +51,11 @@ class IPod:
         return self.identity.family.photos
 
     @property
+    def supports_alac(self) -> bool:
+        """Plays Apple Lossless (all but the 1st/2nd generation iPod and shuffle)."""
+        return self.identity.family.alac
+
+    @property
     def supports_artwork(self) -> bool:
         return self.identity.family.artwork
 

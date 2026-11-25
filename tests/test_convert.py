@@ -156,6 +156,40 @@ def test_a_lossy_original_is_never_re_encoded_above_its_own_bit_rate():
     assert "128k" in convert.command("ffmpeg", "a.mp3", "a.m4a", 44100, "aac", 128)
 
 
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="FFmpeg isn't installed")
+def test_apple_lossless_for_the_ipod(tmp_path):
+    """High-resolution or surround FLAC becomes 16-bit stereo at most 48 kHz
+    (with dither); a 16-bit 44.1 kHz FLAC comes out bit for bit the same."""
+    import subprocess
+
+    def make(name, *options):
+        path = tmp_path / name
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=duration=1",
+                        *options, "-c:a", "flac", str(path)], check=True)
+        return str(path)
+
+    def stream(path):
+        out = subprocess.run(["ffmpeg", "-hide_banner", "-i", path], capture_output=True, text=True)
+        return next(line for line in out.stderr.splitlines() if "Audio:" in line)
+
+    def md5(path):
+        return subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-f", "md5", "-"],
+                              capture_output=True, text=True).stdout
+
+    assert convert.ipod_sample_rate(96000) == 48000 and convert.ipod_sample_rate(88200) == 44100
+    assert convert.ipod_sample_rate(44100) is None
+    for name, options, rate, expect in (
+            ("hires.flac", ["-ac", "2", "-sample_fmt", "s32", "-ar", "96000"], 96000, "48000 Hz"),
+            ("surround.flac", ["-ac", "6", "-ar", "44100"], 44100, "44100 Hz"),
+            ("cd.flac", ["-ac", "2", "-ar", "44100"], 44100, "44100 Hz")):
+        source = make(name, *options)
+        target = str(tmp_path / (name + ".m4a"))
+        subprocess.run(convert.ipod_alac_command("ffmpeg", source, target, rate), check=True)
+        info = stream(target)
+        assert "alac" in info and expect in info and "stereo" in info and "s16p" in info, info
+    assert md5(str(tmp_path / "cd.flac")) == md5(str(tmp_path / "cd.flac.m4a"))
+
+
 def test_an_ogg_for_the_ipod_is_not_inflated():
     from luxtunes.core.ipod import plan
     from luxtunes.core.ipod.settings import SyncSettings

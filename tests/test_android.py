@@ -1209,3 +1209,135 @@ def test_a_library_database_that_cant_be_copied_is_a_problem_not_a_crash(tmp_pat
     report = run(conn, phone)                       # no exception
     assert any("library database couldn't be written" in p for p in report.problems)
     assert any("couldn't copy" in p.lower() or "ended unexpectedly" in p for p in report.problems)
+
+
+def test_a_dropped_connection_stops_the_sync_at_once(tmp_path, monkeypatch):
+    """Input/output error from the desktop's MTP layer means the phone (or the
+    cable) dropped the connection: the sync stops there instead of trying the
+    covers, playlists and database for minutes (as on a phone at USB 1.1 speed)."""
+    import errno
+
+    from luxtunes.core.android import copier
+    conn = small_library(tmp_path)
+    phone = fake_phone(tmp_path)
+    calls = []
+
+    def drops(self, source, target, size, stop=None, progress=None):
+        calls.append(target)
+        raise OSError(errno.EIO, "Input/output error")
+    monkeypatch.setattr(copier.Copier, "copy", drops)
+    monkeypatch.setattr(sync, "phone_answers", lambda root, seconds=15: False)
+    report = run(conn, phone)
+    assert len(calls) == 1 and report.cancelled
+    assert any("connection to the phone was lost" in p for p in report.problems)
+
+
+def test_a_record_that_cant_be_saved_at_the_end_is_a_problem_not_a_crash(tmp_path, monkeypatch):
+    import errno
+    conn = small_library(tmp_path)
+    phone = fake_phone(tmp_path)
+
+    def fails(*args, **kwargs):
+        raise OSError(errno.EIO, "Input/output error")
+    monkeypatch.setattr(sync, "_save_manifest", fails)
+    report = run(conn, phone)                       # no exception
+    assert any("sync record couldn't be saved" in p for p in report.problems)
+
+
+def card_phone(tmp_path):
+    folder = tmp_path / "phone"
+    for name in ("Internal shared storage", "SD card"):
+        (folder / name).mkdir(parents=True, exist_ok=True)
+    return device.Phone(str(folder), "Google", "Pixel 7", "SERIAL1",
+                        {name: str(folder / name) for name in ("Internal shared storage", "SD card")})
+
+
+def test_a_failing_sd_card_is_named_as_such(tmp_path, monkeypatch):
+    import errno
+
+    from luxtunes.core.android import copier
+    conn = small_library(tmp_path)
+    phone = card_phone(tmp_path)
+
+    def fails(self, source, target, size, stop=None, progress=None):
+        raise OSError(errno.EIO, "Input/output error")
+    monkeypatch.setattr(copier.Copier, "copy", fails)
+    # Each song fails but the phone still answers: the advice comes once.
+    report = run(conn, phone, android_storage="SD card", android_storage_kind="removable")
+    assert sum(p == sync.CARD_ADVICE for p in report.problems) == 1
+    assert len(report.problems) == 5          # 3 songs, the advice, the library database
+    # The card stops answering altogether: the sync stops, and says it's the card.
+    monkeypatch.setattr(sync, "phone_answers", lambda root, seconds=15: False)
+    report = run(conn, phone, android_storage="SD card", android_storage_kind="removable")
+    assert report.cancelled
+    assert any("SD card stopped accepting data" in p and "counterfeit" in p for p in report.problems)
+    # On the phone's own storage, nothing about cards.
+    report = run(conn, phone, android_storage="Internal shared storage",
+                 android_storage_kind="internal")
+    assert not any("SD card" in p for p in report.problems)
+
+
+def test_library_renamed_on_the_phone(tmp_path):
+    from luxtunes.core import library as lib
+    conn = small_library(tmp_path)
+    phone = fake_phone(tmp_path)
+    root = _phone_root(tmp_path)
+    run(conn, phone)
+    before = lib.library_name(conn)
+    asked = []
+
+    def send(name, library=None):
+        lid = library if library is not None else sync.library_id(conn)
+        (root / "changes.json").write_text(json.dumps(
+            {"version": 2, "library_id": lid, "tracks": [], "playlists": [], "library_name": name}))
+
+    def sync_answering(answer):
+        record = settings.load_device(conn, phone.key, phone.name)
+        return sync.sync(conn, phone, record,
+                         confirm_rename=lambda current, new: asked.append((current, new)) or answer)
+
+    def info(key):
+        with _db(root) as out:
+            row = out.execute("SELECT value FROM info WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else None
+
+    # Another library's rename is ignored, without asking.
+    send("Somebody Else", library="0000000000000000")
+    report = sync_answering(True)
+    assert lib.library_name(conn) == before and report.library_renamed is None and asked == []
+    # You're asked; no keeps this computer's name, and the phone is told so.
+    send("Paper Tales")
+    report = sync_answering(False)
+    assert asked == [(before, "Paper Tales")] and lib.library_name(conn) == before
+    assert info("library_name") == before and info("library_name_declined") == "Paper Tales"
+    # The phone (an older app) sends the same name again: not asked again.
+    send("Paper Tales")
+    sync_answering(True)
+    assert len(asked) == 1 and lib.library_name(conn) == before
+    # A new name (spaces tidied), file with nothing else: asked, yes renames, and the
+    # phone's next library.db carries it (and no longer a turned-down name).
+    send("  Lantern   Valley ")
+    report = sync_answering(True)
+    assert asked[-1] == (before, "Lantern Valley")
+    assert lib.library_name(conn) == "Lantern Valley" and report.library_renamed == "Lantern Valley"
+    assert info("library_name") == "Lantern Valley" and info("library_name_declined") is None
+    assert "library_name" not in json.loads((root / "changes.json").read_text())
+    # The same name again changes nothing, and isn't asked.
+    send("Lantern Valley")
+    report = sync_answering(True)
+    assert report.library_renamed is None and len(asked) == 2
+    # Without anyone to ask, the name here stays.
+    send("Harbor Lights")
+    report = run(conn, phone)
+    assert lib.library_name(conn) == "Lantern Valley" and report.library_renamed is None
+
+
+def test_a_rename_made_while_the_file_was_read_stays_for_next_time():
+    from luxtunes.core.android import changes
+    merged = changes.PhoneChanges(text='{"library_name": "Harbor Lights"}',
+                                  library_name="Harbor Lights")
+    later = json.dumps({"version": 2, "tracks": [], "playlists": [], "library_name": "The Quay"})
+    assert changes.emptied(merged, later)["library_name"] == "The Quay"
+    same = json.dumps({"version": 2, "tracks": [], "playlists": [], "library_name": "Harbor Lights",
+                       "extra": 1})
+    assert "library_name" not in changes.emptied(merged, same)

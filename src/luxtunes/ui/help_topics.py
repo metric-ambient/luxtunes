@@ -232,6 +232,11 @@ Version</b>. The new file is made beside the original. (Needs FFmpeg:
 <li><b>Delete original after conversion</b> (Preferences → Advanced, off unless you turn
 it on): the original goes to the Trash and the new version takes its place, keeping
 its plays, rating and playlists.</li>
+<li><b>No need to convert for your iPod:</b> keep FLACs in your library. Songs the iPod
+can't play (FLAC, Ogg, Opus) are converted while they sync, and only the iPod's copy
+changes. On the iPod's Summary, <b>Sync lossless songs as</b> chooses AAC (small) or
+Apple Lossless (full quality, about 4–5 times bigger). High-resolution FLACs become
+16-bit, 44.1 or 48 kHz, which the iPod plays. Phones play FLAC as it is.</li>
 </ul>"""),
 
     ("Equalizer", "Shape the sound", """
@@ -306,6 +311,12 @@ what's already copied stays, and the next sync carries on from there.</li>
 <li>If the phone stops responding partway through a file, LuxTunes gives up on that file
 after a while (instead of waiting forever), stops the sync and says so. Unlock the phone
 and sync again. Don't unplug the phone while it's still syncing.</li>
+<li>Keep the phone unlocked with its screen on during a big sync: some phones slow down or
+pause file transfers when the screen turns off.</li>
+<li>Syncing to an SD card that keeps failing partway through big files (audiobooks,
+movies)? The card may be worn out or counterfeit; LuxTunes says so when it sees this.
+Choose the phone's internal storage under <b>Sync to</b> on its Summary, and test the card
+on a computer.</li>
 <li>Each sync keeps a log of what it did, file by file. If something goes wrong,
 <b>Help → Show Sync Logs</b> opens the folder.</li>
 <li>With the LuxTunes app for Android on the phone (luxtunes-mobile on GitHub), plays,

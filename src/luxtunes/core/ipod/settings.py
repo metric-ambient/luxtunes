@@ -34,6 +34,9 @@ class SyncSettings:
     only_checked: bool = False          # "Sync only checked songs and videos"
     convert: bool = False               # "Convert higher bit rate songs to ... AAC"
     convert_kbps: int = 128
+    # iPods: lossless songs (FLAC, WAV, AIFF) that are converted go as "aac"
+    # (the rate above, or 256 kbps) or "alac" (Apple Lossless: full quality, bigger)
+    lossless_format: str = "aac"
     manual: bool = False                # "Manually manage music and videos"
     disk_use: bool = False              # "Enable disk use"
     # Music tab

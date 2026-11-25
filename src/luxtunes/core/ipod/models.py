@@ -30,6 +30,7 @@ class Family:
     artwork: bool = False
     signature: str = NO_SIGNATURE
     unsupported: str = ""          # why LuxTunes can't sync it ("" = it can)
+    alac: bool = True              # plays Apple Lossless
     note: str = ""                 # shown on the device page
 
 
@@ -39,16 +40,18 @@ HASH_AB_NOTE = ("New in LuxTunes: LuxTunes keeps a copy of this iPod's song list
                 "sync, in case it needs to be put back.")
 
 FAMILIES = {
-    "first": Family("iPod (1st generation)"),
-    "second": Family("iPod (2nd generation)"),
+    "first": Family("iPod (1st generation)", alac=False),
+    "second": Family("iPod (2nd generation)", alac=False),
     "third": Family("iPod (3rd generation)"),
     "fourth": Family("iPod (4th generation)"),
     "photo": Family("iPod photo", photos=True, artwork=True),
     "mini_1": Family("iPod mini (1st generation)"),
     "mini_2": Family("iPod mini (2nd generation)"),
     "mini": Family("iPod mini"),
-    "shuffle_1": Family("iPod shuffle (1st generation)", note="Not tested with LuxTunes yet."),
-    "shuffle_2": Family("iPod shuffle (2nd generation)", note="Not tested with LuxTunes yet."),
+    "shuffle_1": Family("iPod shuffle (1st generation)", note="Not tested with LuxTunes yet.",
+                        alac=False),
+    "shuffle_2": Family("iPod shuffle (2nd generation)", note="Not tested with LuxTunes yet.",
+                        alac=False),
     "shuffle_3": Family("iPod shuffle (3rd generation)", note="Not tested with LuxTunes yet."),
     "shuffle_4": Family("iPod shuffle (4th generation)", note="Not tested with LuxTunes yet."),
     "nano_1": Family("iPod nano (1st generation)", photos=True, artwork=True),

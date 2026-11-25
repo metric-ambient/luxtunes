@@ -535,8 +535,20 @@ class DevicePage(QWidget):
         device_word = "phone" if android else "iPod"
         tip = (f"Songs above this rate (and lossless ones) are converted on their way to the "
                f"{device_word}. The files in your library are never changed.")
+        if not android:
+            tip = ("Songs above this rate are converted to it on their way to the iPod, and "
+                   "WAV and AIFF songs as chosen below. The files in your library are never "
+                   "changed.")
         self.convert.setToolTip(tip)
         self.convert_kbps.setToolTip(tip)
+        # Older iPods (1st/2nd generation, shuffle 1st/2nd) don't play Apple Lossless.
+        alac_ok = android or getattr(self.ipod, "supports_alac", True)
+        item = self.lossless_format.model().item(1)
+        if item is not None:
+            item.setEnabled(alac_ok)
+            item.setToolTip("" if alac_ok else "This iPod doesn't play Apple Lossless.")
+        if not alac_ok and self.lossless_format.currentIndex() == 1:
+            self.lossless_format.setCurrentIndex(0)
 
     @property
     def dirty(self) -> bool:
@@ -777,9 +789,28 @@ class DevicePage(QWidget):
             widget.setToolTip(tip)
         self.convert.toggled.connect(self._changed)
         self.convert_kbps.currentIndexChanged.connect(self._changed)
+        # iPods: what lossless songs (FLAC above all) become, and a word on it.
+        lossless_row = QHBoxLayout()
+        self.lossless_label = QLabel("Sync lossless songs (FLAC, WAV, AIFF) as")
+        self.lossless_format = QComboBox()
+        self.lossless_format.addItem("AAC", "aac")
+        self.lossless_format.addItem("Apple Lossless", "alac")
+        self.lossless_format.setToolTip(
+            "AAC: the rate above (256 kbps when that box is off), small files. Apple "
+            "Lossless: full quality, about 4–5 times bigger. High-resolution files become "
+            "16-bit, 44.1 or 48 kHz, which the iPod plays. Your library's files are never changed.")
+        self.lossless_format.currentIndexChanged.connect(self._changed)
+        lossless_row.addWidget(self.lossless_label)
+        lossless_row.addWidget(self.lossless_format)
+        lossless_row.addStretch(1)
+        self.convert_note = QLabel("Songs the iPod can't play as they are (FLAC, Ogg, Opus) are "
+                                   "converted while they sync; your library keeps the originals.")
+        self.convert_note.setObjectName("deviceNote")
+        self.convert_note.setWordWrap(True)
         self.manual = QCheckBox("Manually manage music and videos")
         self.disk_use = QCheckBox("Enable disk use")
-        self._ipod_only += [self.manual, self.disk_use]
+        self._ipod_only += [self.manual, self.disk_use, self.lossless_label, self.lossless_format,
+                            self.convert_note]
         # iPods that also run Rockbox (shown only for those).
         self.rockbox = QCheckBox("Make songs and playlists work in Rockbox too")
         self.rockbox.setToolTip(
@@ -795,6 +826,8 @@ class DevicePage(QWidget):
             "Only the LuxTunes folder on the phone is ever cleaned; nothing else is touched.")
         inner.addWidget(self.only_checked)
         inner.addLayout(convert_row)
+        inner.addLayout(lossless_row)
+        inner.addWidget(self.convert_note)
         inner.addWidget(self.delete_unselected)
         inner.addWidget(self.manual)
         inner.addWidget(self.disk_use)
@@ -1402,6 +1435,10 @@ class DevicePage(QWidget):
         self.only_checked.setChecked(s.only_checked)
         self.convert.setChecked(s.convert)
         self.convert_kbps.setCurrentIndex(max(0, self.convert_kbps.findData(s.convert_kbps)))
+        self.lossless_format.setCurrentIndex(max(0, self.lossless_format.findData(s.lossless_format)))
+        item = self.lossless_format.model().item(self.lossless_format.currentIndex())
+        if item is not None and not item.isEnabled():
+            self.lossless_format.setCurrentIndex(0)       # this iPod doesn't play Apple Lossless
         self.manual.setChecked(s.manual)
         self.disk_use.setChecked(s.disk_use)
         self.rockbox.setChecked(s.rockbox)
@@ -1435,6 +1472,8 @@ class DevicePage(QWidget):
         s.only_checked = self.only_checked.isChecked()
         s.convert = self.convert.isChecked()
         s.convert_kbps = self.convert_kbps.currentData() or s.convert_kbps
+        if not self.is_android:
+            s.lossless_format = self.lossless_format.currentData() or "aac"
         s.manual = self.manual.isChecked()
         s.disk_use = self.disk_use.isChecked()
         s.rockbox = self.rockbox.isChecked()
@@ -1541,6 +1580,9 @@ class DevicePage(QWidget):
         if self.is_android:
             from luxtunes.core.android import sync as android_sync
             kbps_for = android_sync.transfer_kbps
+        else:
+            alac_ok = getattr(self.ipod, "supports_alac", True)
+            kbps_for = lambda song, settings: ipod_plan.transfer_kbps(song, settings, alac_ok)
         return ipod_plan.build_plan(self.conn, self.settings, free_space=free, seed=0,
                                     kbps_for=kbps_for, phone=self.is_android,
                                     video=self.is_android or getattr(self.ipod, "supports_video",
