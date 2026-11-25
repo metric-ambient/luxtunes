@@ -42,6 +42,11 @@ def _drop_opened_items(argv: list[str]) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from luxtunes.core.android.copier import HELPER_FLAG
+    if (sys.argv[1:] if argv is None else list(argv)) == [HELPER_FLAG]:
+        # The packaged app started as the phone sync's copying helper (copier.py).
+        from luxtunes.core.android.copier import run_helper
+        return run_helper()
     _restore_library_path()
     argv = _drop_opened_items(sys.argv[1:] if argv is None else list(argv))
     parser = argparse.ArgumentParser(prog="luxtunes")

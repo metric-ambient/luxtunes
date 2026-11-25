@@ -1046,7 +1046,8 @@ def _finish(conn, root: Path, phone: Phone, record, report: SyncReport, manifest
         copier = Copier()
         try:
             _copy(local, root, DATABASE, None, copier)
-        except PhoneStalled as error:
+        except OSError as error:            # a stalled phone, or the copy didn't work
+            log.error("couldn't write the library database to the phone: %s", error)
             report.problems.append(f"The library database couldn't be written to the phone: "
                                    f"{error}. Sync again to update it.")
             return

@@ -1154,3 +1154,58 @@ def test_each_sync_writes_a_log(tmp_path):
     with sync_log.SyncLog(folder, "Pixel 7"):
         pass
     assert len(list(folder.glob("*.log"))) == sync_log.KEEP
+
+
+def test_the_packaged_app_runs_the_copy_helper_itself(tmp_path, monkeypatch):
+    """In the AppImage, sys.executable is LuxTunes, not Python: the helper is
+    LuxTunes started with HELPER_FLAG (0.9.3 started it with Python's -I -c,
+    which just opened another LuxTunes, so every copy failed)."""
+    import os
+    import sys
+    from pathlib import Path
+
+    import luxtunes
+    from luxtunes.core.android import copier
+
+    src = Path(luxtunes.__file__).resolve().parents[1]
+    app = tmp_path / "luxtunes"                     # stands in for the packaged LuxTunes
+    app.write_text(f'#!/bin/sh\nexec "{sys.executable}" -c "import sys; sys.path.insert(0, '
+                   f"'{src}'); from luxtunes.__main__ import main; sys.exit(main(sys.argv[1:]))\" "
+                   '"$@"\n')
+    os.chmod(app, 0o755)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(app))
+    assert copier.helper_command() == [str(app), copier.HELPER_FLAG]
+    source = tmp_path / "book.m4b"
+    source.write_bytes(b"x" * 300_000)
+    c = copier.Copier()
+    c.copy(str(source), str(tmp_path / "out.m4b"), 300_000)
+    c.close()
+    assert (tmp_path / "out.m4b").read_bytes() == source.read_bytes()
+
+
+def test_a_helper_that_fails_says_why(tmp_path, monkeypatch):
+    from luxtunes.core.android import copier
+    monkeypatch.setattr(copier, "HELPER", "import sys\nsys.stderr.write('no module named boom\\n')\n"
+                                          "sys.exit(3)\n")
+    source = tmp_path / "a.mp3"
+    source.write_bytes(b"x" * 10)
+    c = copier.Copier()
+    with pytest.raises(OSError) as error:
+        c.copy(str(source), str(tmp_path / "out.mp3"), 10)
+    c.close()
+    assert "ended unexpectedly" in str(error.value)
+    assert "exit code 3" in str(error.value) and "no module named boom" in str(error.value)
+
+
+def test_a_library_database_that_cant_be_copied_is_a_problem_not_a_crash(tmp_path, monkeypatch):
+    from luxtunes.core.android import copier
+    conn = small_library(tmp_path)
+    phone = fake_phone(tmp_path)
+
+    def broken(self, source, target, size, stop=None, progress=None):
+        raise OSError("the copying helper ended unexpectedly (exit code 2)")
+    monkeypatch.setattr(copier.Copier, "copy", broken)
+    report = run(conn, phone)                       # no exception
+    assert any("library database couldn't be written" in p for p in report.problems)
+    assert any("couldn't copy" in p.lower() or "ended unexpectedly" in p for p in report.problems)

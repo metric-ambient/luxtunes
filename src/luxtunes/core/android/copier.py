@@ -18,10 +18,18 @@ one file at a time, while LuxTunes watches:
 
 The helper stays running between files (starting one per song would add up
 over thousands of songs) and is started again after it's been ended.
+
+Run from source, the helper is Python running HELPER. In the packaged app
+(the AppImage), sys.executable is LuxTunes itself, not Python, so the helper
+is LuxTunes started with HELPER_FLAG, which runs HELPER and nothing else (see
+__main__.py). (0.9.3 started `LuxTunes -I -c …` there, which just opened and
+closed another LuxTunes: every copy failed with "the copying helper ended
+unexpectedly".)
 """
 
 from __future__ import annotations
 
+import collections
 import json
 import logging
 import queue
@@ -67,6 +75,22 @@ for line in sys.stdin:
 """
 
 
+HELPER_FLAG = "--luxtunes-copy-helper"
+
+
+def helper_command() -> list[str]:
+    """How to start the helper: Python, or the packaged LuxTunes in helper mode."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, HELPER_FLAG]
+    return [sys.executable, "-I", "-c", HELPER]
+
+
+def run_helper() -> int:
+    """The helper itself, in the packaged app (LuxTunes started with HELPER_FLAG)."""
+    exec(compile(HELPER, "<luxtunes copy helper>", "exec"), {"__name__": "__luxtunes_helper__"})
+    return 0
+
+
 class PhoneStalled(OSError):
     """The phone stopped taking a file (or never finished it)."""
 
@@ -79,20 +103,43 @@ class Copier:
     def __init__(self):
         self._process: subprocess.Popen | None = None
         self._lines: queue.Queue | None = None
+        self._errors: collections.deque = collections.deque(maxlen=20)   # its last error lines
 
     def _start(self):
         self._process = subprocess.Popen(
-            [sys.executable, "-I", "-c", HELPER], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, text=True, bufsize=1)
+            helper_command(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, bufsize=1)
         lines: queue.Queue = queue.Queue()
-        out = self._process.stdout
+        out, err = self._process.stdout, self._process.stderr
+        errors = self._errors = collections.deque(maxlen=20)
 
         def read():
             for line in out:
                 lines.put(line)
             lines.put(None)                     # the helper ended
         threading.Thread(target=read, daemon=True, name="copier-output").start()
+
+        def read_errors():
+            for line in err:
+                if line.strip():
+                    errors.append(line.rstrip())
+        threading.Thread(target=read_errors, daemon=True, name="copier-errors").start()
         self._lines = lines
+
+    def _why_it_ended(self, process) -> str:
+        """The helper's exit code and its last error line, for the log and the message."""
+        code = None
+        if process is not None:
+            try:
+                code = process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+        time.sleep(0.05)                        # let its last error lines arrive
+        last = self._errors[-1] if self._errors else ""
+        if self._errors:
+            log.error("the copying helper's last output:\n%s", "\n".join(self._errors))
+        return ", ".join(part for part in (f"exit code {code}" if code is not None else "",
+                                            last[:200]) if part)
 
     def _end(self):
         """End the helper now (it may be stuck in the phone's MTP layer)."""
@@ -142,8 +189,10 @@ class Copier:
                 line = ""
             now = time.monotonic()
             if line is None:
+                process = self._process
+                why = self._why_it_ended(process)
                 self._end()
-                raise OSError("the copying helper ended unexpectedly")
+                raise OSError("the copying helper ended unexpectedly" + (f" ({why})" if why else ""))
             if line:
                 message = json.loads(line)
                 if "wrote" in message:

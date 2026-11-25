@@ -530,6 +530,43 @@ def test_sync_page_lists_tick_anywhere_and_follow_the_search(window, tmp_path):
     assert window.search.isEnabled() and window.model.rowCount() > 0
 
 
+def test_background_work_never_touches_qt_from_its_thread(window):
+    import threading
+    import time
+
+    from PySide6.QtCore import QObject
+    from PySide6.QtWidgets import QApplication
+
+    from luxtunes.ui import background
+
+    app = QApplication.instance()
+    got, threads = [], []
+
+    def work(i):
+        threads.append(threading.current_thread() is threading.main_thread())
+        if i == 3:
+            raise OSError("disk asleep")
+        return i
+
+    gone = QObject()
+    for i in range(20):
+        background.run(lambda i=i: work(i), lambda result: got.append(result), window)
+    background.run(lambda: 99, lambda result: got.append(("late", result)), gone)
+    import shiboken6
+    shiboken6.delete(gone)                # its owner is gone before the result comes back
+    deadline = time.monotonic() + 10
+    while len(got) < 20 and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    for _ in range(10):
+        app.processEvents()
+        time.sleep(0.01)
+    assert sorted(r for r in got if isinstance(r, int)) == [i for i in range(20) if i != 3]
+    assert any(isinstance(r, OSError) for r in got)     # an error is handed to `done`
+    assert not any(isinstance(r, tuple) for r in got)   # dropped: the owner was gone
+    assert not any(threads)                             # the work ran off the window's thread
+
+
 def test_network_preferences_and_podcasts_window(window, monkeypatch):
     from PySide6.QtWidgets import QApplication, QMessageBox
 
