@@ -559,14 +559,14 @@ def radio_icon() -> QIcon:
 
 
 def playlist_icon(p: dict) -> QIcon:
-    """The sidebar icon for a playlist: folder, gear (smart) or list."""
+    """The sidebar icon for a playlist, as in the LuxTunes app: a folder, a
+    bolt in the accent colour (smart) or the playlist icon (QueueMusic)."""
+    from luxtunes.ui import line_icons, theme
     if p["is_folder"]:
         return themed_icon(["folder"], QStyle.StandardPixmap.SP_DirIcon)
     if p["is_smart"]:
-        return themed_icon(["emblem-system", "preferences-system"],
-                           QStyle.StandardPixmap.SP_FileDialogDetailedView)
-    return themed_icon(["view-media-playlist", "audio-x-mp3-playlist", "view-list"],
-                       QStyle.StandardPixmap.SP_FileDialogListView)
+        return line_icons.icon("bolt", theme.current["highlight"], 16)
+    return line_icons.icon("queue_music", theme.current["text"], 16)
 
 
 EJECT_WIDTH = 22
@@ -601,10 +601,33 @@ def draw_sync_arrows(painter, colour, cx: float, cy: float, angle: float) -> Non
     painter.restore()
 
 
+INDENT = 10                  # per level, drawn by SidebarDelegate (see Sidebar)
+
+
+def _inset(option, index):
+    """The item's own part of the row: in from the left by its level's indent.
+    The tree's indentation is 0, because Qt paints the selection across the
+    indent strip on its own (a separate rounded blob left of the highlight);
+    indenting here instead leaves that strip blank."""
+    depth = 0
+    parent = index.parent()
+    while parent.isValid():
+        depth += 1
+        parent = parent.parent()
+    opt = QStyleOptionViewItem(option)
+    opt.rect = option.rect.adjusted(INDENT * depth, 0, 0, 0)
+    return opt
+
+
 class SidebarDelegate(QStyledItemDelegate):
-    """Draws the little eject button at the right end of a device's row."""
+    """Indents each item (see _inset) and draws the little eject button at the
+    right end of a device's row."""
+
+    def updateEditorGeometry(self, editor, option, index):
+        super().updateEditorGeometry(editor, _inset(option, index), index)
 
     def paint(self, painter, option, index):
+        option = _inset(option, index)
         source = index.data(Qt.ItemDataRole.UserRole)
         if not (isinstance(source, tuple) and source and source[0] == "device"):
             super().paint(painter, option, index)
@@ -655,6 +678,8 @@ class Sidebar(QTreeWidget):
     delete_requested = Signal(object)       # source (Delete key)
     device_renamed = Signal(str, str)       # device key, new name
     eject_requested = Signal(str)           # device key (the eject button next to an iPod)
+    new_playlist_requested = Signal()       # the + beside PLAYLISTS
+    new_smart_playlist_requested = Signal()  # the bolt beside PLAYLISTS
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -677,7 +702,7 @@ class Sidebar(QTreeWidget):
         self.customContextMenuRequested.connect(self._on_context_menu)
         self.setHeaderHidden(True)
         self.setRootIsDecorated(False)
-        self.setIndentation(10)
+        self.setIndentation(0)              # SidebarDelegate indents (and keeps the indent blank)
         self.setIconSize(QSize(16, 16))
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.itemSelectionChanged.connect(self._on_selection)
@@ -701,6 +726,9 @@ class Sidebar(QTreeWidget):
         self._section_color = section_color
 
         section = self._section("LIBRARY")
+        # The Library's sections are tabs at the top of the window now. Their
+        # entries stay here, hidden, so choosing a tab selects them as before.
+        section.setHidden(True)
         # Songs dropped on a section move there (those already in it stay as they are).
         self._item(section, "Music", SOURCE_MUSIC,
                    themed_icon(["audio-x-generic"], QStyle.StandardPixmap.SP_MediaVolume),
@@ -723,11 +751,11 @@ class Sidebar(QTreeWidget):
                                     "x-office-document"], QStyle.StandardPixmap.SP_FileIcon),
                        droppable=True)
 
+        from luxtunes.ui import line_icons, theme
         section = self._section("PLAYING")
         self._up_next_item = self._item(
             section, "Up Next", SOURCE_UP_NEXT,
-            themed_icon(["view-media-playlist", "media-playlist-append", "view-list"],
-                        QStyle.StandardPixmap.SP_ArrowForward),
+            line_icons.icon("queue_music", theme.current["text"], 16),
             droppable=True)
         self.set_queue_length(queue_length)
         self._item(section, "Radio Mix", SOURCE_RADIO, radio_icon())
@@ -741,6 +769,7 @@ class Sidebar(QTreeWidget):
                 self._item(section, name, ("device", key), icon, editable=not is_cd)
 
         section = self._section("PLAYLISTS")
+        self._add_playlist_buttons(section)
         by_persistent_id = {}
         for p in playlists:
             kind = p["distinguished_kind"]
@@ -761,6 +790,31 @@ class Sidebar(QTreeWidget):
                 stack.extend(item.child(i) for i in range(item.childCount()))
         self.expandAll()
         self.blockSignals(False)
+
+    def _add_playlist_buttons(self, section: QTreeWidgetItem):
+        """+ (New Playlist) and a bolt (New Smart Playlist, in the accent, as smart
+        playlists are) at the right of the PLAYLISTS heading."""
+        from luxtunes.ui import line_icons, theme
+        holder = QWidget()
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 4, 0)
+        row.setSpacing(2)
+        row.addStretch(1)
+        color = theme.current["text"]
+        for shape, tip, signal in (("plus", "New Playlist", self.new_playlist_requested),
+                                   ("bolt", "New Smart Playlist…",
+                                    self.new_smart_playlist_requested)):
+            button = QToolButton()
+            button.setObjectName("sidebarHeaderButton")
+            button.setIcon(line_icons.icon(
+                shape, theme.current["highlight"] if shape == "bolt" else color, 14))
+            button.setToolTip(tip)
+            button.setAccessibleName(tip)
+            button.setAutoRaise(True)
+            button.setFixedSize(22, 20)
+            button.clicked.connect(signal.emit)
+            row.addWidget(button)
+        self.setItemWidget(section, 0, holder)
 
     def set_queue_length(self, length: int):
         if self._up_next_item is not None:
@@ -961,6 +1015,10 @@ class ArtworkPane(QWidget):
 
     def set_title(self, text: str):
         self.header.setText(text)
+
+    def picture(self) -> QPixmap | None:
+        """The art at full size (for the media bar's thumbnail), or None."""
+        return self._pixmap
 
     def set_image(self, data: bytes | None, placeholder: str = "No Artwork", caption: str = ""):
         pixmap = QPixmap()

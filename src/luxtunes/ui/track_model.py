@@ -134,10 +134,10 @@ _EDIT = Qt.ItemDataRole.EditRole.value
 _TRACK = TrackRole.value
 _CHECK = Qt.ItemDataRole.CheckStateRole.value
 _ALIGN = Qt.ItemDataRole.TextAlignmentRole.value
-_BACKGROUND = Qt.ItemDataRole.BackgroundRole.value
+_FOREGROUND = Qt.ItemDataRole.ForegroundRole.value
 _DECORATION = Qt.ItemDataRole.DecorationRole.value
 _TOOLTIP = Qt.ItemDataRole.ToolTipRole.value
-_ANSWERED = {_DISPLAY, _EDIT, _TRACK, _CHECK, _ALIGN, _BACKGROUND, _DECORATION, _TOOLTIP}
+_ANSWERED = {_DISPLAY, _EDIT, _TRACK, _CHECK, _ALIGN, _FOREGROUND, _DECORATION, _TOOLTIP}
 _DRAWN = ("enabled", "rating", "album_group", "radio_opinion")   # a checkbox / stars / album cell / ♥ ⊘
 # Cells whose text comes from other fields too ("3 of 12", Album List's "#").
 _SOURCES = {"name": ("name", "featured_artist"),
@@ -290,9 +290,9 @@ class TrackTableModel(QAbstractTableModel):
             return Qt.CheckState.Checked if track.get("enabled", 1) else Qt.CheckState.Unchecked
         if role == _ALIGN and column.align_right:
             return RIGHT_ALIGNED
-        if role == _BACKGROUND and track["id"] == self._now_playing_id \
+        if role == _FOREGROUND and track["id"] == self._now_playing_id \
                 and self._now_playing_id is not None:
-            return theme.now_playing_color()        # a grey bar; the selection's blue covers it
+            return theme.now_playing_color()        # the accent, as in the app
         if role == _DECORATION and column.key == "name":
             if track["id"] == self._now_playing_id:
                 if self._speaker_icon is None:

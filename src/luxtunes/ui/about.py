@@ -89,7 +89,8 @@ def _version_of(module_name: str) -> str:
 
 
 def _ffmpeg_version() -> str:
-    path = shutil.which("ffmpeg")
+    from luxtunes.core.paths import find_program
+    path = find_program("ffmpeg")
     if path is None:
         return "not installed (needed for Create MP3 Version)"
     try:

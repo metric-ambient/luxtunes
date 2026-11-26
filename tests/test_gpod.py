@@ -364,7 +364,7 @@ def test_a_nano_7th_generation_is_signed_with_hash_ab(tmp_path, monkeypatch):
 
 
 def sync_a_hash_ab_nano(tmp_path, monkeypatch, usb_product, user_version, versions,
-                        song_list_version):
+                        song_list_version, new_engine=False):
     from luxtunes.core.ipod import hashab, models
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))   # (where the song list is backed up)
     mount = tmp_path / "IPOD"
@@ -374,6 +374,7 @@ def sync_a_hash_ab_nano(tmp_path, monkeypatch, usb_product, user_version, versio
     assert nano5 and models.identify(nano5).family_key == "nano_5"
     gpod.init_ipod(str(mount), "xB147", "Test nano")           # (an empty iPod to start from)
     conn = small_library(tmp_path)
+    settings.set_new_engine(conn, new_engine)
     ipod = device.read_ipod(str(mount), "", "vfat")
     ipod.identity = models.identify("", usb_product)             # as its USB product says
     record = settings.load_device(conn, ipod.key, ipod.name)
@@ -385,7 +386,11 @@ def sync_a_hash_ab_nano(tmp_path, monkeypatch, usb_product, user_version, versio
     locations = (itunes / "iTunes Library.itlp" / "Locations.itdb").read_bytes()
     cbk = (itunes / "iTunes Library.itlp" / "Locations.itdb.cbk").read_bytes()
     assert cbk == hashab.locations_checksum(locations, guid, hashab.random_part(cbk[:57]))
-    assert not (itunes / "iTunesDB").exists()
+    plain = itunes / "iTunesDB"
+    if new_engine:      # a full one (here: left by setting up the blank iPod) is kept, as iTunes
+        assert not plain.exists() or plain.stat().st_size > 0      # keeps one on the 7th
+    else:
+        assert not plain.exists()
     assert not (mount / "iPod_Control" / "Device" / "HashInfo").exists()
     assert not (mount / "iPod_Control" / "Device" / "SysInfoExtended").exists()
     import sqlite3
@@ -402,6 +407,7 @@ def sync_a_hash_ab_nano(tmp_path, monkeypatch, usb_product, user_version, versio
             ["Caramel", "Rovers", "Westland"]
     backups = list((tmp_path / "data" / "luxtunes" / "iPod backups" / ipod.key).iterdir())
     assert len(backups) == 1 and (backups[0] / "iTunesDB").exists()   # the song list as it was
+    return mount
 
 
 def test_ipod_with_rockbox_too(tmp_path):
@@ -434,3 +440,103 @@ def test_ipod_with_rockbox_too(tmp_path):
     # Turned off: no playlists written, nothing removed.
     report = do_sync(conn, mount, rockbox=False)
     assert report.rockbox_playlists == 0 and (mount / "Playlists" / "Mix.m3u8").exists()
+
+
+# ---- LuxTunes' own engine (core/ipod/itdb) against libgpod ---------------------------------
+
+def test_new_engine_signs_exactly_as_libgpod(tmp_path):
+    from luxtunes.core.ipod.itdb import hash58
+    mount, conn = fake_ipod(tmp_path), small_library(tmp_path)
+    do_sync(conn, mount)                                     # written and signed by libgpod
+    data = (mount / "iPod_Control/iTunes/iTunesDB").read_bytes()
+    assert hash58.sign(data, hash58.parse_guid("0x000A27001387CE50")) == data
+
+
+def test_libgpod_reads_what_the_new_engine_writes(tmp_path, monkeypatch):
+    from luxtunes.core.ipod.itdb import itunesdb
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    mount, conn = fake_ipod(tmp_path), small_library(tmp_path)
+    do_sync(conn, mount)                                     # libgpod first, as on a real iPod
+    with gpod.Database(str(mount)) as ipod_db:
+        before = {gpod.get_str(t.contents, "title"): t.contents.dbid for t in ipod_db.tracks()}
+    settings.set_new_engine(conn, True)
+    library.update_track_fields(conn, 1, {"media_kind": "podcast"})
+    report = do_sync(conn, mount, sync_podcasts=True)
+    assert not report.problems or all("Photos" in p for p in report.problems)
+    with gpod.Database(str(mount)) as ipod_db:
+        tracks = {gpod.get_str(t.contents, "title"): t.contents for t in ipod_db.tracks()}
+        assert {name: t.dbid for name, t in tracks.items()} == before   # the same songs
+        for t in tracks.values():
+            path = gpod.get_str(t, "ipod_path")
+            assert (mount / path.lstrip(":").replace(":", "/")).exists()
+            assert t.size and t.tracklen == 2600
+        names = [gpod.playlist_name(p) for p in ipod_db.playlists()]
+        assert "Mix" in names
+        podcasts = ipod_db.podcasts_playlist(create=False)
+        assert [gpod.get_str(t.contents, "title") for t in ipod_db.playlist_tracks(podcasts)] \
+            == ["Rovers"]
+        assert tracks["Rovers"].mediatype == itunesdb.MEDIATYPE_PODCAST
+    # …and libgpod writing it again keeps what the new engine wrote.
+    settings.set_new_engine(conn, False)
+    do_sync(conn, mount, sync_podcasts=True)
+    with gpod.Database(str(mount)) as ipod_db:
+        assert len(ipod_db.tracks()) == 3
+
+
+def test_libgpod_shows_the_covers_the_new_engine_writes(tmp_path, monkeypatch):
+    from mutagen.id3 import APIC, ID3
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    mount, conn = fake_ipod(tmp_path), small_library(tmp_path)
+    for i in range(3):
+        id3 = ID3(str(tmp_path / f"{i}.mp3"))
+        id3.add(APIC(encoding=3, mime="image/png", type=3, desc="",
+                     data=png_bytes(tmp_path, (20, 40, 200))))
+        id3.save()
+    settings.set_new_engine(conn, True)
+    do_sync(conn, mount)
+    with gpod.Database(str(mount), model_hint="xB147") as ipod_db:
+        assert all(ipod_db.has_artwork(t) for t in ipod_db.tracks())
+        assert all(ipod_db.artwork_formats(t) for t in ipod_db.tracks())
+
+
+def png_bytes(tmp_path, rgb):
+    path = tmp_path / "cover.png"
+    png(path, rgb)
+    return path.read_bytes()
+
+
+@pytest.mark.parametrize("usb_product, user_version, versions, song_list_version", [
+    ("1266", 25, (1, 74, 1104), 0x4A), ("1267", 26, (1, 109, 1109), 0x6D)])
+def test_new_engine_writes_a_nano_library_as_libgpod_and_luxtunes_did(
+        tmp_path, monkeypatch, usb_product, user_version, versions, song_list_version):
+    """The new engine's nano 6th/7th generation library: the same tables, columns,
+    versions and header as libgpod's (finished by LuxTunes), which real nanos read."""
+    import sqlite3
+
+    from luxtunes.core.ipod.itdb import cdb
+    old = sync_a_hash_ab_nano(tmp_path / "old", monkeypatch, usb_product, user_version,
+                              versions, song_list_version)
+    new = sync_a_hash_ab_nano(tmp_path / "new", monkeypatch, usb_product, user_version,
+                              versions, song_list_version, new_engine=True)
+
+    def schema(mount):
+        itlp = mount / "iPod_Control/iTunes/iTunes Library.itlp"
+        out = {}
+        for name in ("Library.itdb", "Locations.itdb", "Dynamic.itdb", "Extras.itdb",
+                     "Genius.itdb"):
+            conn = sqlite3.connect(itlp / name)
+            out[name] = sorted(r for r in conn.execute(
+                "SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'"))
+            conn.close()
+        return out
+    assert schema(new) == schema(old)
+
+    def header(mount):
+        data = cdb.decompress((mount / "iPod_Control/iTunes/iTunesCDB").read_bytes())
+        return {at: data[at:at + 4] for at in (0x04, 0x0C, 0x10, 0x20, 0x30, 0x70, 0xA0, 0xA8)}
+    new_header, old_header = header(new), header(old)
+    # At 0x70 the new engine writes 4, as iTunes does on real nano 6th and 7th
+    # generations; libgpod (which thinks it's writing a 5th) writes 2.
+    assert new_header.pop(0x70)[:2] == b"\x04\x00"
+    old_header.pop(0x70)
+    assert new_header == old_header

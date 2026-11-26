@@ -3,7 +3,9 @@
 In Album List view every run of songs from the same album gets one tall
 "Album by Artist" cell on the left (a QTableView *span*), showing the art,
 album name, artist and album rating. A line separates albums, and albums
-with only a few songs get a taller last row so the art always fits.
+with only a few songs get a taller last row so the art always fits; that
+row's song is drawn at the top, as high as the others, and the room under it
+is left blank (TopStripDelegate, TrackTableView.paintEvent).
 The same table is used for the plain song list; album mode just switches
 those extras on.
 """
@@ -13,7 +15,7 @@ from __future__ import annotations
 from PySide6.QtCore import QItemSelection, QItemSelectionModel, QPoint, QRect, QRectF, Qt
 from PySide6.QtGui import (QColor, QDrag, QFont, QPainter, QPainterPath, QPalette, QPen,
                            QPixmap)
-from PySide6.QtWidgets import QApplication, QStyledItemDelegate, QTableView
+from PySide6.QtWidgets import QApplication, QStyledItemDelegate, QStyleOptionViewItem, QTableView
 
 from luxtunes.core import albums
 from luxtunes.ui.art_cache import ART_CACHE
@@ -131,6 +133,24 @@ def drag_icon(count: int, ratio: float = 1.0) -> QPixmap:
     return pixmap
 
 
+class TopStripDelegate(QStyledItemDelegate):
+    """While the table paints: draws a cell of an album's taller last row with
+    its usual delegate, in the row's top ROW_HEIGHT only, so the song lines up
+    with the others instead of sitting in the middle of the tall row."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.inner = None
+        self.used = False
+
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem(option)
+        r = option.rect
+        opt.rect = QRect(r.x(), r.y(), r.width(), min(r.height(), ROW_HEIGHT))
+        self.used = True
+        self.inner.paint(painter, opt, index)
+
+
 class TrackTableView(QTableView):
     """The song list. set_album_mode(True) turns on the Album List look."""
 
@@ -141,6 +161,9 @@ class TrackTableView(QTableView):
         self.album_mode = False
         self._group_starts: dict[int, int] = {}   # first row -> number of rows
         self._tall_rows: list[int] = []
+        self._tall_set: set[int] = set()
+        self._painting = False
+        self._top_strip = TopStripDelegate(self)
         self._album_delegate = AlbumCellDelegate(self)
         self.setItemDelegateForColumn(ALBUM_GROUP_COLUMN, self._album_delegate)
         self.clicked.connect(self._on_clicked)
@@ -170,6 +193,7 @@ class TrackTableView(QTableView):
             if row < rows:
                 header.resizeSection(row, ROW_HEIGHT)
         self._tall_rows = []
+        self._tall_set = set()
         self._group_starts = {}
         if not self.album_mode or rows == 0:
             self.viewport().update()
@@ -184,6 +208,7 @@ class TrackTableView(QTableView):
                 last = start + count - 1
                 header.resizeSection(last, ROW_HEIGHT + missing)
                 self._tall_rows.append(last)
+        self._tall_set = set(self._tall_rows)
         self.viewport().update()
 
     def _on_clicked(self, index):
@@ -222,13 +247,47 @@ class TrackTableView(QTableView):
             action = Qt.DropAction.CopyAction
         drag.exec(supported_actions, action)
 
+    def itemDelegateForIndex(self, index):
+        inner = super().itemDelegateForIndex(index)
+        if self._painting and index.row() in self._tall_set \
+                and index.column() != ALBUM_GROUP_COLUMN:
+            self._top_strip.inner = inner
+            return self._top_strip
+        return inner
+
     def paintEvent(self, event):
-        super().paintEvent(event)
+        self._top_strip.used = False
+        self._painting = self.album_mode and bool(self._tall_set)
+        try:
+            super().paintEvent(event)
+        finally:
+            self._painting = False
         if not self.album_mode or not self._group_starts:
             return
-        # A thin line above each album, across the whole width.
         painter = QPainter(self.viewport())
         try:
+            # Under the song of an album's taller last row: blank, as the room
+            # below the list is (not the row's stripe or selection), apart
+            # from the album's own cell on the left. Only once the song has
+            # been drawn at the top (TopStripDelegate), never over it.
+            if self._top_strip.used:
+                base = self.palette().color(QPalette.ColorRole.Base)
+                width = self.viewport().width()
+                album_x = self.columnViewportPosition(ALBUM_GROUP_COLUMN)
+                album_w = 0 if self.isColumnHidden(ALBUM_GROUP_COLUMN) \
+                    else self.columnWidth(ALBUM_GROUP_COLUMN)
+                for row in self._tall_rows:
+                    y = self.rowViewportPosition(row) + ROW_HEIGHT
+                    height = self.rowHeight(row) - ROW_HEIGHT
+                    if height <= 0 or y > self.viewport().height() or y + height < 0:
+                        continue
+                    if album_w:
+                        painter.fillRect(QRect(0, y, max(0, album_x), height), base)
+                        painter.fillRect(QRect(album_x + album_w, y,
+                                               width - album_x - album_w, height), base)
+                    else:
+                        painter.fillRect(QRect(0, y, width, height), base)
+            # A thin line above each album, across the whole width.
             color = QColor(self.palette().color(QPalette.ColorRole.Text))
             color.setAlpha(60)
             painter.setPen(color)

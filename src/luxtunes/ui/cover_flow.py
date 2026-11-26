@@ -1,5 +1,6 @@
-"""Cover Flow: album covers in a row on black, the centred one facing
-you and the others turned sideways, with reflections underneath.
+"""Carousel (View → as Carousel; called "cover flow" inside the code): album
+covers in a row on black, the centred one facing you and the others turned
+sideways, with reflections underneath.
 
 - Scroll with the scrollbar, the mouse wheel or the arrow keys, or click a
   side cover: it glides to the centre and `album_centered` is sent, so the
@@ -39,6 +40,10 @@ def quad_transform(source: QPolygonF, target: QPolygonF) -> QTransform | None:
         ok, *rest = result
         return next((r for r in rest if isinstance(r, QTransform)), transform) if ok else None
     return transform if result else None
+
+
+TOP = 18.0                   # above the covers
+TEXT_BLOCK = 50              # the album's name and artist, and a little reflection
 
 
 class CoverFlow(QWidget):
@@ -93,6 +98,20 @@ class CoverFlow(QWidget):
         index = self._index_of_key.get(album_key(track))
         if index is not None and index != self._target:
             self._go_to(index, user=False)
+
+    # ---- Height ------------------------------------------------------------------
+
+    def _bar_space(self) -> int:
+        return self.scrollbar.sizeHint().height() + 24
+
+    def height_for(self, size: float) -> int:
+        """How tall the carousel is with covers `size` high and no empty floor."""
+        return int(TOP + size + TEXT_BLOCK + self._bar_space())
+
+    def old_cover_size(self, height: int) -> float:
+        """The cover size the carousel used to give a given height (72% of it,
+        less the scrollbar), which left a wide empty strip under the name."""
+        return max(60.0, (height - self._bar_space()) * 0.72)
 
     # ---- Movement ---------------------------------------------------------------
 
@@ -166,10 +185,15 @@ class CoverFlow(QWidget):
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No albums")
             return
 
-        bar_space = self.scrollbar.height() + 24
-        size = max(60.0, min((self.height() - bar_space) * 0.72, self.width() * 0.3))
+        # The covers take all the height left after the gap above them, the
+        # album's name and artist under them (with a little reflection) and
+        # the scrollbar, so there's no empty floor under the name; dragging
+        # the divider below resizes them. If the width limits them instead,
+        # the spare height is shared above and below.
+        room = self.height() - self._bar_space() - TEXT_BLOCK
+        size = max(60.0, min(room - TOP, self.width() * 0.3))
         cx = self.width() / 2
-        top = 18.0
+        top = max(TOP, (room - size) / 2 + TOP / 2)
         floor = top + size                    # where covers stand; reflections go below
 
         first = max(0, int(self._pos) - VISIBLE_EACH_SIDE)

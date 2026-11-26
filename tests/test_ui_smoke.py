@@ -92,9 +92,10 @@ def test_views_and_features(window):
 
     window._on_search("opening")
     window._on_search("")
-    window._toggle_dark_mode(True)
-    window.grab()
-    window._toggle_dark_mode(False)
+    from dataclasses import replace
+    for style in ("dark", "material", "light"):
+        window._set_look(replace(window.look, style=style))
+        window.grab()
     window._set_column_shown(14, True)
     window._auto_size_all()
     window._on_column_dropped_off(14)
@@ -206,7 +207,7 @@ def test_menus_duplicates_recent_and_adding(window, tmp_path):
 
     app = QApplication.instance()
     window.show_source(("library", "music"))
-    for mode, action in window.view_actions.items():          # View → as List ... as Cover Flow
+    for mode, action in window.view_actions.items():          # View → as List ... as Carousel
         action.trigger()
         app.processEvents()
         assert window.view_mode == mode
@@ -383,9 +384,10 @@ def test_ipod_device_page(window, tmp_path):
     if page.playlist_list.count():
         page.playlist_list.item(0).setCheckState(Qt.CheckState.Checked)
     app.processEvents()
-    assert page.dirty and page.apply_button.isVisibleTo(page)
+    assert page.dirty and not page.apply_button.isHidden()
+    assert page.actions.isVisible()                  # its buttons are in the media bar
     page.revert()
-    assert not page.dirty and page.sync_button.isVisibleTo(page)
+    assert not page.dirty and not page.sync_button.isHidden()
     window._on_device_renamed(ipod.key, "Alex's iPod")
     app.processEvents()
     assert window._device_name(ipod) == "Alex's iPod"
@@ -622,6 +624,9 @@ def test_network_preferences_and_podcasts_window(window, monkeypatch):
     app.processEvents()
     bar = window.podcast_bar
     assert bar.isVisibleTo(window) and bar.label.text() == "1 podcast subscription"
+    assert bar.parent() is window.bar_actions                  # in the media bar
+    window.statusBar().clearMessage()                          # ("Connecting to…" above)
+    assert window.summary_label.text().startswith("1 podcast subscription")
     assert bar.refresh.isEnabled() and bar.subscribe.isEnabled()
     window.show_source(SOURCE_MUSIC)
     assert not bar.isVisibleTo(window)
@@ -833,7 +838,7 @@ def test_video_plays_inside_the_window(window):
     app.processEvents()
     panel = window.video_panel
     assert window.showing_video() and not window.splitter.isVisible()
-    assert window.toolbar.isVisible() and window.statusBar().isVisible()   # bars stay
+    assert window.toolbar.isVisible() and window.media_bar.isVisible()     # bars stay
     assert panel.controls.isVisible() and panel.close_button.isVisible()
     window._on_position(5000, 60000)
     assert panel.elapsed.text() == "0:05" and panel.remaining.text() == "-0:55"
@@ -1333,15 +1338,16 @@ def test_unusable_menu_items_look_greyed_out(window):
     from PySide6.QtGui import QPalette
     from PySide6.QtWidgets import QApplication
 
+    from dataclasses import replace
     palette = QApplication.instance().palette()
-    for dark in (False, True):
-        window._toggle_dark_mode(dark)
+    for style in ("light", "dark", "material"):
+        window._set_look(replace(window.look, style=style))
         palette = QApplication.instance().palette()
         for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text,
                      QPalette.ColorRole.ButtonText):
             assert palette.color(QPalette.ColorGroup.Disabled, role) != \
                 palette.color(QPalette.ColorGroup.Active, role)
-    window._toggle_dark_mode(False)
+    window._set_look(replace(window.look, style="light"))
     assert not window.eject_action.isEnabled()               # and Eject is one of them
 
 
@@ -1462,13 +1468,15 @@ def test_checkboxes_are_easy_to_see_in_both_themes(window):
     from luxtunes.ui import theme
 
     app = QApplication.instance()
-    for dark, colors in ((True, theme.DARK), (False, theme.LIGHT)):
-        window._toggle_dark_mode(dark)
+    from dataclasses import replace
+    for style in theme.STYLES:
+        window._set_look(replace(window.look, style=style, auto_accent=False))
+        colors = theme.build_colors(style, *window.look.of(style))
         sheet = app.styleSheet()
         assert f"border: 1px solid {colors['indicator_border']}" in sheet
-        assert ("check-light.svg" if dark else "check-dark.svg") in sheet
+        assert ("check-dark.svg" if colors["light"] else "check-light.svg") in sheet
         window.grab()                                       # draws with the new style
-    window._toggle_dark_mode(False)
+    window._set_look(replace(window.look, style="light"))
 
 
 def _fake_phone(tmp_path):
@@ -1955,9 +1963,9 @@ def test_now_playing_bar_and_mini_player(window):
     model.set_now_playing(first["id"])
     row = model.row_of(first["id"])
     for column in (1, 3):                                 # the whole row, not just the name
-        assert model.index(row, column).data(Qt.ItemDataRole.BackgroundRole) == \
-            theme.now_playing_color()
-    assert model.index(row + 1, 1).data(Qt.ItemDataRole.BackgroundRole) is None
+        assert model.index(row, column).data(Qt.ItemDataRole.ForegroundRole) == \
+            theme.now_playing_color()                     # the accent, as in the app
+    assert model.index(row + 1, 1).data(Qt.ItemDataRole.ForegroundRole) is None
     window.grab()
     model.set_now_playing(None)
 
@@ -2164,26 +2172,31 @@ def test_help_guides(window):
 def test_sleep_timer(window, monkeypatch):
     from datetime import datetime, timedelta
 
-    from PySide6.QtWidgets import QApplication, QDialog
+    from PySide6.QtWidgets import QApplication
 
     from luxtunes.ui import sleep_timer
 
-    dialog = sleep_timer.SleepTimerDialog(60, window)
-    assert dialog.minutes == 60 and "Music will stop at" in dialog.preview.text()
-    dialog.group.button(240).setChecked(True)
+    popup = sleep_timer.SleepTimerPopup(60, window)
+    assert popup.minutes == 60 and len(popup.choices) == 6
     expected = sleep_timer.clock(datetime.now() + timedelta(minutes=240))
-    assert expected in dialog.preview.text()
-    dialog.deleteLater()
+    assert popup.choices[4].end_text() == expected
+    popup.deleteLater()
 
-    monkeypatch.setattr(sleep_timer.SleepTimerDialog, "exec",
-                        lambda self: QDialog.DialogCode.Accepted)
-    window._sleep_timer_dialog()                         # 30 minutes (offered first)
+    window._sleep_timer_dialog()                         # grows up from above the moon
     QApplication.instance().processEvents()
-    assert window.sleep_timer.active and not window.sleep_button.isHidden()
-    assert window.sleep_button.text() in ("☾ 30m", "☾ 29m")
+    popup = window._sleep_popup
+    moon_top = window.sleep_button.mapToGlobal(window.sleep_button.rect().topLeft()).y()
+    assert popup.isVisible() and popup.geometry().bottom() < moon_top   # just above the moon
+    popup.choices[1].click()                             # 30 minutes; the pop-up closes
+    QApplication.instance().processEvents()
+    assert not popup.isVisible()
+    assert window.sleep_timer.active and window.sleep_button.isChecked()   # lit while it runs
+    assert "30m" in window.sleep_button.toolTip() or "29m" in window.sleep_button.toolTip()
     assert window.sleep_off_action.isVisible()
+    window._sleep_popup_closed_at = 0.0
     window.sleep_button.click()                          # clicking it turns it off
-    assert not window.sleep_timer.active and window.sleep_button.isHidden()
+    assert not window.sleep_timer.active and not window.sleep_button.isChecked()
+    assert not window.sleep_button.isHidden()            # the moon is always there
     assert sleep_timer.left_text(30) == "1m" and sleep_timer.left_text(3900) == "1:05"
 
 
@@ -2787,3 +2800,116 @@ def test_phone_rename_question(window, monkeypatch):
     window._sync_worker = None
     assert Worker.answers == [True, False]
     assert "Lantern Valley" in shown[0] and "My Library" in shown[0]
+
+
+def test_view_appearance_styles_colours_and_auto_accent(window, tmp_path):
+    """View → Appearance…: three styles, each with its own colours, applied at
+    once and kept; Material's chosen tab is filled with the accent; Auto Accent
+    from the art."""
+    from dataclasses import replace
+
+    from PySide6.QtCore import QSettings
+    from PySide6.QtGui import QColor, QImage
+    from PySide6.QtWidgets import QApplication
+
+    from luxtunes.ui import theme
+    app = QApplication.instance()
+    window._show_appearance()
+    dialog = window._appearance_window
+    dialog._use_style("material")
+    assert window.look.style == "material"
+    material = theme.build_colors("material", *theme.DEFAULTS["material"])
+    assert f"background: {theme.LUX_BLUE}" in material["tab_checked"]    # the accent box
+    assert f"background: {material['play_bg']}" in app.styleSheet()
+    dialog.grab()
+    # A style's own colours, kept per style.
+    look = window.look.with_colors("light", ("#FFFFFF", "#212121", "#43A047"))
+    dialog._changed(replace(look, style="light"))
+    assert window.look.of("light")[2] == "#43A047" and window.look.of("dark") == theme.DEFAULTS["dark"]
+    dialog._reset_style("light")
+    assert window.look.of("light") == theme.DEFAULTS["light"]
+    dialog.close()
+    # Kept in the settings; the old Dark Mode becomes the Dark style.
+    settings = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
+    settings.setValue("dark_mode", True)
+    assert theme.load_look(settings).style == "dark"
+    theme.save_look(settings, theme.Look("material", (), False))
+    again = theme.load_look(settings)
+    assert (again.style, again.auto_accent, again.of("light")) == \
+        ("material", False, theme.DEFAULTS["light"])
+    # Auto Accent: a colourful cover gives its colour; a grey one gives none.
+    red = QImage(40, 40, QImage.Format.Format_RGB32)
+    red.fill(QColor("#E53935"))
+    assert QColor(theme.accent_from_image(red, "#000000")).red() > 200
+    grey = QImage(40, 40, QImage.Format.Format_RGB32)
+    grey.fill(QColor("#808080"))
+    assert theme.accent_from_image(grey, "#000000") is None
+    dark_on_dark = QImage(40, 40, QImage.Format.Format_RGB32)
+    dark_on_dark.fill(QColor("#1A0A40"))                  # can't be read on black
+    assert theme.accent_from_image(dark_on_dark, "#000000") is None
+    window._set_look(replace(window.look, style="light", auto_accent=True))
+
+
+def test_every_style_stays_readable():
+    from luxtunes.ui import theme
+    for style in theme.STYLES:
+        c = theme.build_colors(style, *theme.DEFAULTS[style])
+        assert theme.contrast(c["text"], c["base"]) > 7
+        assert theme.contrast(c["text_dim"], c["base"]) > 3
+        assert theme.contrast(c["highlight_text"], c["highlight"]) > 2.5
+        assert theme.contrast(c["toolbar_text"], c["toolbar_top"]) > 2.5
+    # A pale accent gets dark text on it.
+    assert theme.on_color("#FDD835") == "#000000" and theme.on_color("#0099CC") == "#FFFFFF"
+
+
+def test_new_layout_tabs_media_bar_and_art_corner(window):
+    """Library tabs at the top left, the display exactly centred, the media
+    bar along the bottom (playback, position, sleep, volume, library stats)
+    and the album art that opens over the bottom-left corner."""
+    from PySide6.QtWidgets import QApplication
+
+    from luxtunes.ui.widgets import SOURCE_MUSIC
+    app = QApplication.instance()
+    window.resize(1280, 800)
+    window.show()
+    app.processEvents()
+    window._pick_library_tab(SOURCE_MUSIC)
+    app.processEvents()
+    assert window._current_source == SOURCE_MUSIC
+    assert window.library_tabs[SOURCE_MUSIC].isChecked()
+    centre = window.lcd.mapTo(window, window.lcd.rect().center()).x()
+    assert abs(centre - window.width() / 2) <= 2                    # exactly in the middle
+    assert window.media_bar.isVisible() and not window.statusBar().isVisible()
+    assert window.summary_label.text()                              # the library stats
+    window.statusBar().showMessage("Saved.", 1000)
+    assert window.summary_label.text() == "Saved."                  # messages show there
+    window.statusBar().clearMessage()
+    assert window.summary_label.text() == window._summary_text
+    window._toggle_artwork(False)
+    app.processEvents()
+    assert window.art_thumb.isVisible() and not window.art.isVisible()
+    window._toggle_artwork(True)
+    app.processEvents()
+    assert window.art.isVisible() and not window.art_thumb.isVisible()
+    art = window.art.geometry()
+    bar = window.media_bar.geometry()
+    assert art.left() == 0 and art.bottom() == bar.bottom()          # over the bar's corner…
+    assert art.top() < bar.top()                                    # …and up into the sidebar
+    assert window.art_room.height() == art.height() - bar.height()
+    window.grab()
+
+
+def test_sidebar_arrow_hides_and_shows_the_sidebar(window):
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    assert not window.left_panel.isHidden() and "Hide" in window.sidebar_toggle.toolTip()
+    window.sidebar_toggle.click()                         # ◀: the sidebar goes
+    app.processEvents()
+    assert window.left_panel.isHidden() and "Show" in window.sidebar_toggle.toolTip()
+    assert not window.show_sidebar_action.isChecked() and window.art_toggle.isHidden()
+    assert not window.art_thumb.isHidden()                # the art stays as the thumbnail
+    window.sidebar_toggle.click()                         # ▶: it comes back
+    app.processEvents()
+    assert not window.left_panel.isHidden() and window.show_sidebar_action.isChecked()
+    assert window.settings.value("sidebar_visible", type=bool)

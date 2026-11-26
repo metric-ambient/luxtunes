@@ -71,7 +71,10 @@ class OpinionDelegate(QStyledItemDelegate):
 
 
 class RadioBar(QWidget):
-    """Along the bottom of PLAYING → Radio (and of View → Radio Likes & Dislikes)."""
+    """The buttons of PLAYING → Radio (and of View → Radio Likes & Dislikes),
+    in the media bar beside the playback buttons. Its label isn't shown here:
+    the window shows it under the volume, with the song counts."""
+    changed = Signal()            # the label's text changed
     save_clicked = Signal()
     refresh_clicked = Signal()
     discover_toggled = Signal(bool)
@@ -79,19 +82,18 @@ class RadioBar(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setObjectName("dupBar")                     # looks like the Duplicates bar
+        self.setObjectName("barGroup")
         row = QHBoxLayout(self)
-        row.setContentsMargins(8, 6, 8, 6)
+        row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(6)
-        self.label = QLabel()
-        self.label.setObjectName("dupLabel")
+        self.label = QLabel(self)
+        self.label.hide()
         self.save = self._button("Save as Playlist", "Make a playlist with the songs on this radio")
         self.refresh = self._button("Refresh", "A new mix from the same start")
         self.discover = self._button("Discover", "Prioritizes related songs you rarely or never play.")
         self.discover.setCheckable(True)
         # "&&": a single & would be taken as a keyboard shortcut marker and vanish.
         self.likes = self._button("Likes && Dislikes…", "Every song you've liked or disliked on a Radio Mix")
-        row.addWidget(self.label, 1)
         for button in (self.save, self.refresh, self.discover, self.likes):
             row.addWidget(button)
         self.save.clicked.connect(self.save_clicked)
@@ -110,10 +112,11 @@ class RadioBar(QWidget):
     def show_radio(self, title: str | None, count: int, discover: bool):
         """For PLAYING → Radio: the radio's name and its buttons."""
         if title:
-            self.label.setText(f"{title} · {count:,} song{'s' if count != 1 else ''}"
-                               + (" · Discover" if discover else ""))
+            self.label.setText(title + (" · Discover" if discover else ""))
+            self.label.setToolTip("")
         else:
-            self.label.setText("No Radio Mix yet: right-click a song and choose Start Radio Mix.")
+            self.label.setText("No Radio Mix yet")
+            self.label.setToolTip("Right-click a song and choose Start Radio Mix.")
         for button in (self.save, self.refresh, self.discover):
             button.setVisible(True)
             button.setEnabled(bool(title))
@@ -122,12 +125,14 @@ class RadioBar(QWidget):
         self.discover.setChecked(discover)
         self.discover.blockSignals(False)
         self.show()
+        self.changed.emit()
 
     def show_likes(self, count: int):
         """For View → Radio Likes & Dislikes: a note, no buttons."""
-        self.label.setText(f"{count:,} song{'s' if count != 1 else ''} you've liked or disliked "
-                           "on radios. Click the heart or circle again (or press Delete) to set "
-                           "a song back to neutral.")
+        self.label.setText("Liked & disliked on radios")
+        self.label.setToolTip("Click the heart or circle again (or press Delete) to set "
+                              "a song back to neutral.")
         for button in (self.save, self.refresh, self.discover, self.likes):
             button.setVisible(False)
         self.show()
+        self.changed.emit()

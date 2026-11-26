@@ -65,8 +65,9 @@ def persistent_id(dbid: int) -> str | None:
 # ---- What's on the iPod (libgpod) ------------------------------------------------------
 
 def read_songs(db) -> list[IPodSong]:
-    """Every song in the iPod's database whose file is there."""
+    """Every song in the iPod's database (either engine's) whose file is there."""
     from luxtunes.core.ipod import gpod
+    from luxtunes.core.ipod.sync import get_str
     kinds = {gpod.MEDIATYPE_MOVIE: "movie", gpod.MEDIATYPE_PODCAST: "podcast",
              gpod.MEDIATYPE_AUDIOBOOK: "audiobook", gpod.MEDIATYPE_TVSHOW: "tvshow",
              gpod.MEDIATYPE_MUSICVIDEO: "movie"}
@@ -76,7 +77,7 @@ def read_songs(db) -> list[IPodSong]:
         if not path or not os.path.isfile(path):
             continue
         t = pointer.contents
-        text = lambda name: (gpod.get_str(t, name) or "").strip() or None   # noqa: E731
+        text = lambda name: (get_str(t, name) or "").strip() or None   # noqa: E731
         kind = next((k for bit, k in kinds.items() if t.mediatype & bit), "music")
         fields = {
             "name": text("title"), "artist": text("artist"), "album": text("album"),
@@ -103,7 +104,13 @@ def read_songs(db) -> list[IPodSong]:
 
 def read_ipod(mountpoint: str, model_hint: str | None = None,
               sysinfo_extended: bytes | None = None) -> list[IPodSong]:
+    """The iPod's songs, read with libgpod, or LuxTunes' own engine where
+    there's no libgpod (Windows)."""
     from luxtunes.core.ipod import gpod
+    if not gpod.available():
+        from luxtunes.core.ipod.itdb import database
+        with database.Database(mountpoint, read_only=True) as db:
+            return read_songs(db)
     with gpod.Database(mountpoint, model_hint=model_hint,
                        sysinfo_extended=sysinfo_extended) as db:
         return read_songs(db)

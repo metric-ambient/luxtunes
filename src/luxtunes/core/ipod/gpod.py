@@ -177,8 +177,7 @@ class Itdb_IpodInfo(Structure):
                 ("reserved1", c_void_p), ("reserved2", c_void_p)]
 
 
-class GpodError(Exception):
-    pass
+from luxtunes.core.ipod.errors import IPodDatabaseError as GpodError  # noqa: E402  (both engines)
 
 
 _lib = None

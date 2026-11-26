@@ -3,17 +3,44 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+
+WINDOWS = sys.platform == "win32"
+
+
+def _local_app_data() -> Path:
+    return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
 
 
 def data_home() -> Path:
-    """~/.local/share, or $XDG_DATA_HOME: where LuxTunes keeps its own files."""
-    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    """~/.local/share, or $XDG_DATA_HOME: where LuxTunes keeps its own files.
+    On Windows, AppData\\Local (settings, logs and backups stay on this computer)."""
+    if os.environ.get("XDG_DATA_HOME"):
+        return Path(os.environ["XDG_DATA_HOME"])
+    return _local_app_data() if WINDOWS else Path.home() / ".local" / "share"
 
 
 def cache_home() -> Path:
     """~/.cache, or $XDG_CACHE_HOME: files LuxTunes can always make again."""
-    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    if os.environ.get("XDG_CACHE_HOME"):
+        return Path(os.environ["XDG_CACHE_HOME"])
+    return _local_app_data() / "cache" if WINDOWS else Path.home() / ".cache"
+
+
+def find_program(name: str) -> str | None:
+    """A program LuxTunes runs (ffmpeg, ffprobe): the one installed, or on
+    Windows the one that comes with LuxTunes (in ffmpeg\\ beside LuxTunes.exe)."""
+    import shutil
+    found = shutil.which(name)
+    if found or not WINDOWS:
+        return found
+    base = Path(sys.executable).parent if getattr(sys, "frozen", False) else \
+        Path(__file__).resolve().parents[3]
+    for candidate in (base / "ffmpeg" / f"{name}.exe", base / f"{name}.exe"):
+        if candidate.is_file():
+            return str(candidate)
+    return None
 
 
 def make_private(path: Path) -> None:

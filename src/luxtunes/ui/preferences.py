@@ -334,6 +334,17 @@ class PreferencesDialog(QDialog):
         delete_note.setContentsMargins(24, 0, 0, 0)
         delete_note.setEnabled(False)            # lighter grey, like the Playback notes
 
+        from luxtunes.core.ipod import settings as ipod_settings
+        self.new_engine = QCheckBox("Use the new iPod sync engine (experimental)")
+        self.new_engine.setChecked(ipod_settings.new_engine_chosen(self.conn))
+        engine_note = QLabel("LuxTunes' own way of writing an iPod's song list and album "
+                             "artwork, in place of libgpod. For iPod classics, the iPod with "
+                             "video, and the iPod nano 1st–4th generation; other iPods still use "
+                             "libgpod. A copy of the iPod's song list is kept before each sync.")
+        engine_note.setWordWrap(True)
+        engine_note.setContentsMargins(24, 0, 0, 0)
+        engine_note.setEnabled(False)            # lighter grey, like the Playback notes
+
         layout = QVBoxLayout(page)
         layout.addWidget(box)
         layout.addWidget(self.keep_organized)
@@ -342,6 +353,8 @@ class PreferencesDialog(QDialog):
         layout.addWidget(move_note)
         layout.addWidget(self.delete_original)
         layout.addWidget(delete_note)
+        layout.addWidget(self.new_engine)
+        layout.addWidget(engine_note)
         layout.addStretch(1)
         return page
 
@@ -349,7 +362,7 @@ class PreferencesDialog(QDialog):
         page = QWidget()
         layout = QVBoxLayout(page)
         intro = QLabel("LuxTunes only goes online when you ask it to, and asks you first each "
-                       "time. Tick what may go ahead without asking. The status bar shows "
+                       "time. Tick what may go ahead without asking. The bottom bar shows "
                        "whenever LuxTunes connects, and each connection is only as long as that "
                        "one request: nothing stays connected or runs in the background, and "
                        "LuxTunes never accepts connections from outside.")
@@ -419,6 +432,8 @@ class PreferencesDialog(QDialog):
         organize.set_media_folder(self.conn, self._folder)
         add_files.set_move_when_adding(self.conn, self.move_files.isChecked())
         convert.set_delete_original(self.conn, self.delete_original.isChecked())
+        from luxtunes.core.ipod import settings as ipod_settings
+        ipod_settings.set_new_engine(self.conn, self.new_engine.isChecked())
         for feature, box in self.network_boxes.items():
             network_prefs.set_allowed(self.conn, feature, box.isChecked() and box.isEnabled())
         cd.set_insert_action(self.conn, self.insert_action.currentData())

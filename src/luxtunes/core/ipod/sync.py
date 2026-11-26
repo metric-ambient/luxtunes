@@ -1,4 +1,5 @@
-"""Syncing an iPod, using libgpod (gpod.py).
+"""Syncing an iPod, with libgpod (gpod.py) or LuxTunes' own engine (itdb/),
+which Preferences → Advanced chooses (the new engine is still optional).
 
 The order of a sync:
   1. Open the iPod's database. libgpod also reads "Play Counts", the iPod's
@@ -11,7 +12,7 @@ The order of a sync:
      counts...) from the library. A wanted song whose file can't be found on
      this computer stays on the iPod.
   4. Rebuild the playlists, set the iPod's name, and save the database
-     (libgpod adds the 6G/7G signature).
+     (with the signature the iPod checks).
   5. On an iPod that also runs Rockbox: its plays, playlists, and tags and
      covers it can read (rockbox.py).
 
@@ -77,21 +78,43 @@ class Removal:
     reason: str
 
 
+def get_str(track, field: str) -> str | None:
+    """A song's text field, from either engine's track."""
+    if isinstance(track, ctypes.Structure):
+        return gpod.get_str(track, field)
+    return getattr(track, field)
+
+
+def set_str(track, field: str, value) -> None:
+    if isinstance(track, ctypes.Structure):
+        gpod.set_str(track, field, value)
+    else:
+        setattr(track, field, None if value in (None, "") else str(value))
+
+
+def same_track(a, b) -> bool:
+    """Two pointers to the same song on the iPod (not just the same ID)."""
+    a, b = a.contents, b.contents
+    if isinstance(a, ctypes.Structure):
+        return ctypes.addressof(a) == ctypes.addressof(b)
+    return a is b
+
+
 def describe_removals(to_remove, on_ipod: dict, library_ids: set[int]) -> list[Removal]:
     removals = []
     for pointer in to_remove:
         t = pointer.contents
-        if ctypes.addressof(on_ipod[t.dbid].contents) != ctypes.addressof(t):
+        if not same_track(on_ipod[t.dbid], pointer):
             reason = "A second copy of a song that stays on the iPod"
         elif t.dbid not in library_ids:
             reason = "Not in your LuxTunes library"
-            kind = (gpod.get_str(t, "filetype") or "") + (gpod.get_str(t, "ipod_path") or "")
+            kind = (get_str(t, "filetype") or "") + (get_str(t, "ipod_path") or "")
             if "protected" in kind.lower() or kind.lower().endswith(".m4p"):
                 reason += " (protected file from the iTunes Store)"
         else:
             reason = "Not in your sync settings"
-        removals.append(Removal(gpod.get_str(t, "title") or "", gpod.get_str(t, "artist") or "",
-                                gpod.get_str(t, "album") or "", reason))
+        removals.append(Removal(get_str(t, "title") or "", get_str(t, "artist") or "",
+                                get_str(t, "album") or "", reason))
     return removals
 
 
@@ -229,12 +252,12 @@ STRING_MAP = {
 }
 
 
-def fill_track(t: "gpod.Itdb_Track", song: dict) -> None:
-    """Copy one library song's details onto its iPod track."""
+def fill_track(t, song: dict) -> None:
+    """Copy one library song's details onto its iPod track (either engine's)."""
     for field_name, key in STRING_MAP.items():
-        gpod.set_str(t, field_name, song.get(key))
+        set_str(t, field_name, song.get(key))
     # iPods have no Featured Artist field: it goes after the name, "Song (ft. Ann, Bo)".
-    gpod.set_str(t, "title", name_with_featured(song) or None)
+    set_str(t, "title", name_with_featured(song) or None)
     movie = song.get("media_kind") == "movie"
     tv = song.get("media_kind") == "tvshow"
     t.size = int(song.get("size") or t.size or 0)
@@ -273,8 +296,8 @@ def fill_track(t: "gpod.Itdb_Track", song: dict) -> None:
     t.lyrics_flag = 1 if song.get("lyrics") else 0
     if tv:
         t.mediatype = gpod.MEDIATYPE_TVSHOW
-        gpod.set_str(t, "tvshow", song.get("show") or song.get("album"))
-        gpod.set_str(t, "tvepisode", song.get("episode_id"))
+        set_str(t, "tvshow", song.get("show") or song.get("album"))
+        set_str(t, "tvepisode", song.get("episode_id"))
         t.season_nr = int(song.get("season") or 0)
         t.episode_nr = int(song.get("episode_number") or 0)
     else:
@@ -359,8 +382,7 @@ def needs_room(mountpoint: str, songs: list) -> bool:
                 needed += os.path.getsize(path)
             except OSError:
                 pass
-    space = os.statvfs(mountpoint)
-    return needed > space.f_bavail * space.f_frsize
+    return needed > shutil.disk_usage(mountpoint).free
 
 
 def unlisted_song_files(mountpoint: str, listed: list) -> list[str]:
@@ -447,7 +469,9 @@ BACKUPS_KEPT = 3
 def back_up_song_list(ipod: IPod, root: Path | None = None) -> Path | None:
     """Copy the iPod's song list (iPod_Control/iTunes, not the songs) to
     ~/.local/share/luxtunes/iPod backups/<iPod>/<date>, keeping the last few.
-    Copying that folder back onto the iPod undoes a sync."""
+    Copying that folder back onto the iPod undoes a sync. Its album artwork
+    list (iPod_Control/Artwork/ArtworkDB, not the pictures) goes in an
+    "Artwork" folder inside it, to copy back to iPod_Control/Artwork."""
     import shutil
     from luxtunes.core.paths import data_home, make_private
     source = ipod.control / "iTunes"
@@ -460,6 +484,10 @@ def back_up_song_list(ipod: IPod, root: Path | None = None) -> Path | None:
         folder.mkdir(parents=True, exist_ok=True)
         make_private(backups)                # only you can open them
         shutil.copytree(source, target)
+        art = ipod.control / "Artwork" / "ArtworkDB"
+        if art.is_file():
+            (target / "Artwork").mkdir()
+            shutil.copy2(art, target / "Artwork" / "ArtworkDB")
     except OSError as error:
         log.warning("couldn't back up the iPod's song list: %s", error)
         return None
@@ -569,6 +597,16 @@ def database_options(ipod: IPod) -> dict:
     return {"model_hint": hint, "sysinfo_extended": extended}
 
 
+def open_database(ipod: IPod, engine: str, options: dict):
+    """The iPod's database, opened by libgpod ("gpod") or LuxTunes' own engine ("itdb")."""
+    if engine == "itdb":
+        from luxtunes.core.ipod.itdb import database
+        guid = ipod.firewire_guid or usb_details(ipod.device)[1] or ""
+        return database.Database(ipod.mountpoint, ipod.identity.family_key, guid,
+                                 ipod.identity.family.signature)
+    return gpod.Database(ipod.mountpoint, **options)
+
+
 def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
          confirm=None) -> SyncReport:
     """Sync this iPod. progress(text, done, total) may return False to stop
@@ -589,16 +627,24 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
             raise SyncCancelled()
 
     tell("Reading the iPod…")
-    hash_ab = ipod.identity.family.signature == models.HASH_AB
-    options = database_options(ipod)
+    engine = ipod_settings.engine_for(conn, ipod.identity.family_key,
+                                      ipod.identity.family.signature)
+    if engine == "gpod" and not gpod.available():
+        raise gpod.GpodError(f"LuxTunes can't sync the {ipod.identity.name} on this computer "
+                             "yet.")
+    hash_ab = engine == "gpod" and ipod.identity.family.signature == models.HASH_AB
+    options = database_options(ipod) if engine == "gpod" else {}
     nano = art_sizes = None
     if hash_ab:
         from luxtunes.core.ipod import hash_ab_nanos
         nano = hash_ab_nanos.NANOS[ipod.identity.family_key]
         if options["sysinfo_extended"]:
             art_sizes = nano.art_sizes
-    with gpod.Database(ipod.mountpoint, **options) as db:
-        prepare_device_info(db, ipod)
+    log.info("syncing %s with %s", ipod.identity.name,
+             "LuxTunes' own iPod engine" if engine == "itdb" else "libgpod")
+    with open_database(ipod, engine, options) as db:
+        if engine == "gpod":
+            prepare_device_info(db, ipod)
         settings = record.settings
         all_tracks = db.tracks()
         on_ipod = {}
@@ -612,8 +658,7 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
         if settings.manual:
             wanted = {}
         else:
-            space = os.statvfs(ipod.mountpoint)
-            capacity = space.f_blocks * space.f_frsize
+            capacity = shutil.disk_usage(ipod.mountpoint).total
             from luxtunes.core import smart
             smart.refresh_all(conn)          # smart playlists go over as they are right now
             the_plan = ipod_plan.build_plan(conn, settings, free_space=capacity,
@@ -630,8 +675,7 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
         # Unwanted songs, plus any second copy of a song (same ID twice).
         to_remove = [] if settings.manual else [
             p for p in all_tracks
-            if p.contents.dbid not in keep
-            or ctypes.addressof(on_ipod[p.contents.dbid].contents) != ctypes.addressof(p.contents)]
+            if p.contents.dbid not in keep or not same_track(on_ipod[p.contents.dbid], p)]
         to_add = [t for dbid, t in wanted.items() if dbid not in on_ipod]
 
         if confirm is not None and not confirm(
@@ -640,8 +684,8 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
             report.cancelled = True
             return report
 
-        if ipod.identity.family.signature == models.HASH_AB:
-            back_up_song_list(ipod)      # a way back, should the nano not read the new one
+        if hash_ab or engine == "itdb":
+            back_up_song_list(ipod)      # a way back, should the iPod not read the new one
 
         # 1. Plays, skips and ratings from the iPod into the library.
         first_sync = record.last_sync is None
@@ -688,7 +732,7 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
                     finish_nano_library(ipod, nano)
                     sign_with_hash_ab(ipod, guid)       # …then it's signed as the nano wants
             except gpod.GpodError as error:
-                if ipod.identity.family.signature == models.HASH72:
+                if engine == "gpod" and ipod.identity.family.signature == models.HASH72:
                     raise gpod.GpodError(
                         f"{error}. This iPod nano needs to have been synced with iTunes once, "
                         "so LuxTunes can reuse its signature.") from error
@@ -743,11 +787,11 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
                         length = song.get("total_time") or 0
                         pointer.contents.bitrate = (round(pointer.contents.size * 8 / length)
                                                     if length else 0)
-                        gpod.set_str(pointer.contents, "filetype", "Apple Lossless audio file")
+                        set_str(pointer.contents, "filetype", "Apple Lossless audio file")
                     else:
                         pointer.contents.bitrate = kbps
                         pointer.contents.samplerate = 44100
-                        gpod.set_str(pointer.contents, "filetype", "AAC audio file")
+                        set_str(pointer.contents, "filetype", "AAC audio file")
                 try:
                     db.copy_file(pointer, upload)
                 except gpod.GpodError as error:
@@ -844,8 +888,13 @@ def sync(conn, ipod: IPod, record: ipod_settings.DeviceRecord, progress=None,
             rockbox.save_state(ipod.mountpoint, rockbox_state)
 
     # 7. Photos: one way, from the chosen folder (never back from the iPod).
+    # (They're written with libgpod: without it, photos wait for the new engine's.)
     if not report.cancelled and ipod.supports_photos:
-        _sync_photos(ipod, settings, report, progress)
+        if gpod.available():
+            _sync_photos(ipod, settings, report, progress)
+        elif settings.sync_photos:
+            report.problems.append("Photos: LuxTunes can't put photos on an iPod on this "
+                                   "computer yet.")
 
     ipod_settings.mark_synced(conn, record.id, name)
     log.info("synced %s: +%d -%d ~%d, %d playlists, plays %s", name, report.added,

@@ -6,13 +6,12 @@ carries on with the rest."""
 from __future__ import annotations
 
 import os
-import shutil
 import threading
 
 from PySide6.QtCore import QThread, Signal
 
 from luxtunes.core import db, loudness
-from luxtunes.core.paths import find_file
+from luxtunes.core.paths import find_file, find_program
 
 # Songs measured as unmeasurable (silent, unreadable) get this, so they aren't
 # tried again at every start.
@@ -48,7 +47,7 @@ class LoudnessWorker(QThread):
                     continue                          # missing: maybe later
                 gain = loudness.from_tags(path)
                 if gain is None:
-                    if shutil.which("ffmpeg") is None:
+                    if find_program("ffmpeg") is None:
                         no_ffmpeg = True
                         continue
                     gain = loudness.measure(path)

@@ -594,11 +594,11 @@ def export_playlist(tracks: list[dict], path: str, kind: str) -> None:
 def default_library_name() -> str:
     """"Alex's Library": your first name from the system account, else the username."""
     import getpass
-    import pwd
     try:
+        import pwd
         user = pwd.getpwuid(os.getuid())
         name = (user.pw_gecos.split(",")[0].split() or [""])[0] or user.pw_name
-    except (KeyError, OSError):
+    except (ImportError, KeyError, OSError):        # (Windows has no pwd)
         name = getpass.getuser()
     return f"{name}’s Library"
 

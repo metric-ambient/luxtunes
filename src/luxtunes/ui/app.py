@@ -24,6 +24,8 @@ def server_name(db_path: str | None) -> str:
     from luxtunes.core import db as library_db
     import hashlib
     path = os.path.abspath(os.path.expanduser(str(db_path or library_db.default_db_path())))
+    if not hasattr(os, "getuid"):             # Windows: local server names are per session
+        return f"luxtunes-{hashlib.sha1(path.encode()).hexdigest()[:10]}"
     name = f"luxtunes-{os.getuid()}-{hashlib.sha1(path.encode()).hexdigest()[:10]}"
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if runtime and os.path.isdir(runtime) and os.stat(runtime).st_uid == os.getuid():

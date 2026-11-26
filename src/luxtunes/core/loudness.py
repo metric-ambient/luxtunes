@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import math
 import re
-import shutil
 import subprocess
 
 TARGET_LUFS = -18.0
@@ -113,7 +112,8 @@ def parse_ebur128(output: str) -> float | None:
 
 def measure(path: str, timeout: float = 600) -> float | None:
     """Measure with FFmpeg (needs it installed). The correction, or None."""
-    ffmpeg = shutil.which("ffmpeg")
+    from luxtunes.core.paths import find_program
+    ffmpeg = find_program("ffmpeg")
     if ffmpeg is None:
         return None
     try:

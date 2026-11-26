@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -182,25 +182,26 @@ class PodcastWindow(QDialog):
 
 
 class PodcastBar(QWidget):
-    """Along the bottom of the Podcasts section: Subscribe to Podcast…,
-    Refresh Podcasts and Podcasts… (the same as in the File menu)."""
+    """The Podcasts section's buttons, in the media bar beside the playback
+    buttons: Subscribe…, Refresh and Podcasts… (as in the File menu). Its label
+    isn't shown here: the window shows it under the volume."""
+    changed = Signal()            # the label's text changed
 
     def __init__(self, window, parent=None):
         super().__init__(parent)
         self.window = window
-        self.setObjectName("dupBar")                     # looks like the Duplicates bar
+        self.setObjectName("barGroup")
         row = QHBoxLayout(self)
-        row.setContentsMargins(8, 6, 8, 6)
+        row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(6)
-        self.label = QLabel()
-        self.label.setObjectName("dupLabel")
-        self.subscribe = self._button("Subscribe to Podcast…", "Paste a podcast's feed address "
+        self.label = QLabel(self)
+        self.label.hide()
+        self.subscribe = self._button("Subscribe…", "Subscribe to a podcast: paste a podcast's feed address "
                                       "(its RSS link) to get its episodes")
-        self.refresh = self._button("Refresh Podcasts", "Check every podcast for new episodes "
+        self.refresh = self._button("Refresh", "Check every podcast for new episodes "
                                     "and download them")
         self.manage = self._button("Podcasts…", "Every episode your podcasts offer, to download "
                                    "older ones, or unsubscribe")
-        row.addWidget(self.label, 1)
         for button in (self.subscribe, self.refresh, self.manage):
             row.addWidget(button)
         self.subscribe.clicked.connect(lambda: window.subscribe_to_podcast())
@@ -226,6 +227,7 @@ class PodcastBar(QWidget):
                            else "No podcast subscriptions yet")
         self.subscribe.setEnabled(not busy)
         self.refresh.setEnabled(not busy and count > 0)
+        self.changed.emit()
 
 
 def _html(text: str) -> str:

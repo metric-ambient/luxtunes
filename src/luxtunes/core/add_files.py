@@ -207,14 +207,15 @@ def video_fields(path: str) -> dict:
     """Details for a video file without readable tags: its name, size and,
     if ffprobe (part of FFmpeg) is installed, its length."""
     import json
-    import shutil
     import subprocess
     fields = {"name": Path(path).stem, "size": os.path.getsize(path),
               "kind": VIDEO_KINDS.get(Path(path).suffix.lower(), "Video file")}
-    if shutil.which("ffprobe"):
+    from luxtunes.core.paths import find_program
+    ffprobe = find_program("ffprobe")
+    if ffprobe:
         try:
             result = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration,bit_rate:format_tags=title",
+                [ffprobe, "-v", "error", "-show_entries", "format=duration,bit_rate:format_tags=title",
                  "-of", "json", path], capture_output=True, text=True, timeout=30)
             info = json.loads(result.stdout or "{}").get("format", {})
             if info.get("duration"):

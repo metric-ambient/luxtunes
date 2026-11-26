@@ -19,7 +19,6 @@ No Qt in here: the window runs these in background threads.
 from __future__ import annotations
 
 import base64
-import fcntl
 import glob
 import hashlib
 import json
@@ -28,6 +27,12 @@ import os
 import re
 import shutil
 import sqlite3
+import sys
+
+try:
+    import fcntl
+except ImportError:              # Windows: CDs aren't read there yet
+    fcntl = None
 import struct
 import subprocess
 import sys
@@ -36,12 +41,12 @@ import threading
 import time
 import urllib.error
 import urllib.parse
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from luxtunes.core import add_files, encoders, net, organize
 from luxtunes.core.db import get_setting, set_setting
-from luxtunes.core.net import NotApproved
+from luxtunes.core.net import NotApproved  # noqa: F401  (cd.NotApproved, for callers)
 from luxtunes.core.tags import UNCHANGED, write_tags
 
 # ---- linux/cdrom.h -----------------------------------------------------------------
@@ -193,7 +198,9 @@ class Disc:
 
 
 def drives() -> list[str]:
-    """CD/DVD drives on this computer (/dev/sr0, /dev/sr1, ...)."""
+    """CD/DVD drives on this computer (/dev/sr0, /dev/sr1, ...). None on Windows yet."""
+    if fcntl is None or not sys.platform.startswith("linux"):
+        return []
     return sorted(glob.glob("/dev/sr[0-9]*"))
 
 
@@ -610,7 +617,8 @@ def _error_text(stream) -> str:
 def rip_and_encode(device: str, track: CdTrack, settings: encoders.ImportSettings, target: str,
                    progress=None, stop: threading.Event | None = None) -> None:
     """Read one track and encode it into `target` as it's read."""
-    ffmpeg = shutil.which("ffmpeg")
+    from luxtunes.core.paths import find_program
+    ffmpeg = find_program("ffmpeg")
     if not ffmpeg:
         raise CdError("Importing needs FFmpeg: sudo apt install ffmpeg")
     if not cdparanoia_path():

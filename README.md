@@ -40,16 +40,27 @@ LuxTunes is that program:
 - **Your devices keep working.** Classic iPods sync like they always did, and Android
   phones get a tidy copy of your library that any music player can use, or that the
   [LuxTunes app for Android](https://github.com/metric-ambient/luxtunes-mobile) turns into your whole library in your pocket.
-- **Familiar from the first minute.** Playback controls on top, sources on the left, your
-  songs on the right, and album art in the corner.
 
 Made for Linux Mint, and it runs on most recent Linux systems.
 
 ## What it does
 
+### The window
+
+- **Three looks, as on the phone:** View → Appearance… offers Dark, Material (the
+  default) and Light, each with your own background, text and accent colours, or an
+  accent picked from the playing song's album art.
+- Music, Movies, TV Shows, Podcasts and Audiobooks are tabs along the top, with the song
+  playing in the middle and the views and search on the right. Along the bottom: the album
+  art, the sleep timer, the playback controls, the buttons for what's on screen (Sync,
+  Display All, the Radio Mix's and podcasts' buttons) and the volume. The sidebar folds
+  away with one click when the list needs the room.
+- On Linux, LuxTunes draws its own title bar in the look's colours, with the menus in it
+  (it can be turned off in View → Appearance…).
+
 ### Your library
 
-- List, Album List, Grid and Cover Flow views. Each Library section keeps its own view,
+- List, Album, Grid and Carousel views. Each Library section keeps its own view,
   columns and sort; search everything or just artists, albums, composers or song names.
   Accents and capitals don't matter: "beyonce" finds Beyoncé.
 - Music, Movies, TV Shows, Podcasts and Audiobooks, kept apart.
@@ -98,7 +109,7 @@ Made for Linux Mint, and it runs on most recent Linux systems.
 
 ### Devices
 
-- **iPods:** classic, mini, shuffle, nano 1st–7th generation and the original models. Sync
+- **iPods:** Supports all Classics, Minis, Nanos, and Shuffles. Sync
   music, podcasts, audiobooks, and, on models that show them, videos and photos. Play
   counts and ratings come back from the iPod, and missing album artwork is put back at the
   next sync. An iPod synced with another computer? LuxTunes offers to add its songs that
@@ -107,6 +118,10 @@ Made for Linux Mint, and it runs on most recent Linux systems.
   Keep FLACs in your library: songs the iPod can't play are converted as they sync, to AAC
   or (your choice) Apple Lossless, and your library's files are never changed.
   (The iPod touch can't be supported.)
+- **A new iPod sync engine (experimental),** in Preferences → Advanced: LuxTunes' own way of
+  writing the iPod's song list, album artwork and signatures, in place of libgpod. It covers
+  every iPod above except the shuffles, keeps a copy of the song list before each sync, and
+  checks what it wrote by reading it back. libgpod stays the default for now.
 - **iPods that also run Rockbox or RepriseOS:** one normal sync serves every firmware on the
   iPod. RepriseOS is built on Apple's own software and reads the same song list; it's
   expected to work but hasn't been tested yet. For Rockbox, LuxTunes also writes your
@@ -131,7 +146,7 @@ LuxTunes asks before it ever goes online, which only happens for CD names, Get T
 Online…, Get Lyrics Online…, podcasts, and checking for updates. There's no account and
 nothing is collected. **Preferences → Network** can let any of those go ahead without asking
 (all off at first); updates can then be checked, and podcasts refreshed, when LuxTunes
-starts. The status bar shows whenever LuxTunes connects, only secure (https://) connections
+starts. The bottom bar shows whenever LuxTunes connects, only secure (https://) connections
 are made, and LuxTunes never accepts connections from outside.
 
 ## Get LuxTunes
@@ -219,7 +234,7 @@ music.
 | Interface and playback | Qt 6 via [PySide6](https://doc.qt.io/qtforpython-6/) (Qt Multimedia, FFmpeg) |
 | Tags | [mutagen](https://mutagen.readthedocs.io/) |
 | Equalizer | [NumPy](https://numpy.org/) |
-| iPod | [libgpod](https://sourceforge.net/projects/gtkpod/) |
+| iPod | [libgpod](https://sourceforge.net/projects/gtkpod/), or LuxTunes' own engine (`core/ipod/itdb/`, ported from [ZenPod](https://github.com/ishiichan-dayo/ZenPod)) |
 | iPod nano 6th/7th generation signature | a Python translation of [hashab](https://github.com/dstaley/hashab) by Dylan Staley |
 | CDs | cdparanoia and FFmpeg; names from [MusicBrainz](https://musicbrainz.org/) |
 | Lyrics | [LRCLIB](https://lrclib.net/), only when you ask |
@@ -229,6 +244,7 @@ music.
 src/luxtunes/
     core/          library database, tags, organizing, smart playlists, CDs, sound, updates
     core/ipod/     iPod sync (libgpod); models.py says what each model can do
+    core/ipod/itdb/  LuxTunes' own iPod engine (song list, artwork, signatures, nano SQLite)
     core/android/  Android sync (over USB file transfer)
     importer/      iTunes library import
     ui/            the Qt interface
@@ -247,6 +263,13 @@ signature these nanos check on their song list, reverse-engineered from the nano
 firmware and released under the Unlicense. LuxTunes' `core/ipod/hashab.py` is a Python
 translation of it, and its lookup tables are copied from it unchanged. hashab in turn
 uses the EDON-R hash from Aleksey Kravchenko's [RHash](https://github.com/rhash/RHash).
+
+iPod database formats ported from [ZenPod](https://github.com/ishiichan-dayo/ZenPod) by
+ishiichan-dayo (GPL-3.0-or-later), which builds on
+[libgpod](https://sourceforge.net/projects/gtkpod/). LuxTunes' new iPod engine
+(`core/ipod/itdb/`: the song list, album artwork, the hash58 and hash72 signatures and the
+newer nanos' SQLite library) is a Python port of ZenPod's code, and was checked against
+libgpod's own output.
 
 ## License
 

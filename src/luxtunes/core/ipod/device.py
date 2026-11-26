@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from luxtunes.core.ipod import models
+from luxtunes.core.paths import WINDOWS
 
 CONTROL = "iPod_Control"
 
@@ -92,6 +93,11 @@ class IPod:
 def usb_details(device_node: str) -> tuple[str, str]:
     """(USB product id, USB serial) of the iPod behind e.g. /dev/sdb2, read
     from /sys. An iPod's USB serial number is its FireWire GUID."""
+    if WINDOWS:
+        if not device_node:
+            return "", ""
+        from luxtunes.core import windows_devices
+        return windows_devices.ipod_usb_details()
     name = os.path.basename(device_node or "")
     if not name:
         return "", ""
@@ -119,7 +125,13 @@ def _unescape(path: str) -> str:
 
 
 def mounted_filesystems(mounts_file: str = "/proc/mounts") -> list[tuple[str, str, str]]:
-    """(device, mountpoint, filesystem) for everything mounted."""
+    """(device, mountpoint, filesystem) for everything mounted (on Windows, each drive)."""
+    if WINDOWS:
+        from luxtunes.core import windows_devices
+        try:
+            return windows_devices.drives()
+        except OSError:
+            return []
     try:
         with open(mounts_file, encoding="utf-8", errors="replace") as handle:
             lines = handle.read().splitlines()
@@ -287,6 +299,12 @@ IPOD_FILESYSTEMS = {"vfat", "hfsplus", "exfat"}
 
 def apple_usb_connected(sys_usb: str = "/sys/bus/usb/devices") -> bool:
     """Quick check (no programs run): is any Apple USB device plugged in?"""
+    if WINDOWS:
+        from luxtunes.core import windows_devices
+        try:
+            return bool(windows_devices.apple_devices())
+        except OSError:
+            return False
     try:
         for entry in os.scandir(sys_usb):
             try:
@@ -303,6 +321,8 @@ def apple_usb_connected(sys_usb: str = "/sys/bus/usb/devices") -> bool:
 def unmounted_ipod_partitions(lsblk_output: str | None = None) -> list[str]:
     """Device paths (e.g. /dev/sdb2) of iPod music partitions that aren't mounted."""
     import json
+    if lsblk_output is None and WINDOWS:          # Windows opens drives itself
+        return []
     if lsblk_output is None:
         if not shutil.which("lsblk"):
             return []
@@ -436,6 +456,9 @@ def users_of(mountpoint: str, proc: str = "/proc") -> list[tuple[int, str, str]]
 def eject(ipod: IPod) -> str | None:
     """Unmount the iPod and power it off so it shows "OK to disconnect".
     Returns None, or what went wrong."""
+    if WINDOWS:
+        from luxtunes.core import windows_devices
+        return windows_devices.eject(ipod.mountpoint)
     commands = []
     if ipod.device and shutil.which("udisksctl"):
         commands.append(["udisksctl", "unmount", "-b", ipod.device])

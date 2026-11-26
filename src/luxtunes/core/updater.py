@@ -71,8 +71,14 @@ def installed_copy() -> bool:
         return False
 
 
+WINDOWS_SETUP_SUFFIX = "-Setup.exe"
+_downloaded_setup: Path | None = None        # Windows: the installer, once downloaded
+
+
 def kind() -> str:
-    """"appimage", "installed" or "source": how this copy updates."""
+    """"appimage", "windows", "installed" or "source": how this copy updates."""
+    if sys.platform == "win32" and getattr(sys, "frozen", False):
+        return "windows"
     if running_appimage():
         return "appimage"
     if installed_copy():
@@ -82,6 +88,9 @@ def kind() -> str:
 
 def launcher() -> list[str]:
     """The command that starts this copy again (to restart after an update)."""
+    if kind() == "windows" and _downloaded_setup is not None:
+        # The installer replaces LuxTunes (closed meanwhile) and starts it again.
+        return [str(_downloaded_setup), "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]
     appimage = running_appimage()
     if appimage:
         return [str(appimage)]
@@ -148,7 +157,8 @@ class Release:
 
     def asset(self, kind_: str | None = None) -> Asset | None:
         """The download this copy needs: the AppImage or the .whl package."""
-        suffix = ".AppImage" if (kind_ or kind()) == "appimage" else ".whl"
+        wanted = kind_ or kind()
+        suffix = {"appimage": ".AppImage", "windows": WINDOWS_SETUP_SUFFIX}.get(wanted, ".whl")
         return next((a for a in self.assets if a.name.endswith(suffix)), None)
 
 
@@ -221,6 +231,23 @@ def _checked_name(asset: Asset | None, prefix: str) -> Asset:
     if not net.allowed(asset.url):
         raise UpdateError(f"Unexpected download address in the release: {asset.url}")
     return asset
+
+
+# ---- Windows: the installer ------------------------------------------------------------
+
+def download_setup(release: Release, *, approved: bool, progress=None) -> Path:
+    """Download the release's Windows installer (checked against GitHub's checksum);
+    launcher() then runs it."""
+    global _downloaded_setup
+    net.require(approved, "Downloading an update")
+    asset = _checked_name(release.asset("windows"), "LuxTunes-")
+    target = Path(tempfile.mkdtemp(prefix="luxtunes-update-")) / asset.name
+    _fetch(asset, target, progress)
+    with open(target, "rb") as f:
+        if f.read(2) != b"MZ":
+            raise UpdateError("The downloaded file isn't a Windows installer.")
+    _downloaded_setup = target
+    return target
 
 
 # ---- Package (.whl) updates, for install.sh copies ----------------------------------
@@ -301,6 +328,9 @@ def download_and_install(release: Release, *, approved: bool, progress=None,
                          installing=None) -> None:
     """Update this copy, whichever kind it is. installing() is called once the
     download is done and the install step starts."""
+    if kind() == "windows":
+        download_setup(release, approved=approved, progress=progress)
+        return
     appimage = running_appimage()
     if appimage:
         replace_appimage(release, appimage, approved=approved, progress=progress)

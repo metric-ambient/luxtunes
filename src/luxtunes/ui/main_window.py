@@ -47,8 +47,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressDialog,
     QSplitter,
-    QStyle,
     QButtonGroup,
+    QSizePolicy,
     QStackedWidget,
     QToolButton,
     QVBoxLayout,
@@ -71,7 +71,7 @@ from luxtunes.ui.album_view import TrackTableView
 from luxtunes.ui.art_cache import ART_CACHE
 from luxtunes.ui.artwork_window import ArtworkWindow
 from luxtunes.ui.mini_player import MiniPlayer
-from luxtunes.ui.sleep_timer import SleepTimer, SleepTimerDialog, clock, left_text
+from luxtunes.ui.sleep_timer import SleepTimer, SleepTimerPopup, clock, left_text
 from luxtunes.ui.cover_flow import CoverFlow
 from luxtunes.ui.cd_page import CdPage
 from luxtunes.ui.device_page import DevicePage
@@ -86,7 +86,8 @@ from luxtunes.ui.featured_panel import FeaturedPanel
 from luxtunes.ui.radio_ui import OpinionDelegate, RadioBar
 from luxtunes.ui.genre_completer import FIELDS as SUGGESTED, FieldDelegate
 from luxtunes.ui.grid_view import GridView
-from luxtunes.ui.view_icons import view_icons
+from luxtunes.ui import line_icons
+from luxtunes.ui.media_bar import ArtCorner, ArtThumb, ElidedLabel, Follow, LibraryTab, TopBarSizer
 from luxtunes.ui.playlist_window import PlaylistWindow
 from luxtunes.ui import album_view
 from luxtunes.ui.preferences import PreferencesDialog, appearance
@@ -109,9 +110,11 @@ from luxtunes.ui.track_model import (
 from luxtunes.ui.widgets import (
     SOURCE_MOVIES,
     SOURCE_MUSIC,
+    SOURCE_AUDIOBOOKS,
     SOURCE_PODCASTS,
     SOURCE_RADIO,
     SOURCE_RADIO_LIKES,
+    SOURCE_TV_SHOWS,
     SOURCE_UP_NEXT,
     playlist_icon,
     ArtworkPane,
@@ -131,7 +134,15 @@ HEADER_LAYOUT_VERSION = 3  # 2: all columns added; 3: Album List columns
 NEW_COLUMNS = ("featured_artist", "radio_opinion", "radio_from", "artists")
 
 VIEW_MODES = ("list", "album", "grid", "coverflow")
-VIEW_TIPS = ("List", "Album List", "Grid", "Cover Flow")
+VIEW_TIPS = ("List", "Album", "Grid", "Carousel")
+VIEW_LABELS = ("List", "Album", "Grid", "Carousel")       # under the view buttons
+VIEW_SHAPES = ("list", "album", "grid", "carousel")
+MEDIA_MARGIN = 0                                        # the art fills the bar's corner
+# The library's sections, as tabs at the top left (their Library entries in the
+# sidebar are hidden; Preferences → General → Sources chooses which show).
+LIBRARY_TABS = ((SOURCE_MUSIC, "Music", "music"), (SOURCE_MOVIES, "Movies", "movie"),
+                (SOURCE_TV_SHOWS, "TV Shows", "tv_filled"), (SOURCE_PODCASTS, "Podcasts", "mic"),
+                (SOURCE_AUDIOBOOKS, "Audiobooks", "audiobooks"))
 # Columns shown in a fresh Album List layout, in order.
 ALBUM_LAYOUT = ("album_group", "album_track", "enabled", "name", "total_time",
                 "artist", "genre", "rating", "play_count")
@@ -143,6 +154,30 @@ class _NetRelay(QObject):
 
 
 class MainWindow(QMainWindow):
+    # ---- LuxTunes' own title bar (window_frame.py) -------------------------------------
+
+    def menuBar(self):
+        """The menus: in LuxTunes' own title bar when it has one."""
+        frame = getattr(self, "frame", None)
+        return frame.title_bar.menu_bar if frame is not None else super().menuBar()
+
+    def mouseMoveEvent(self, event):
+        if getattr(self, "frame", None) is not None:
+            self.frame.mouse_move(event)
+        super().mouseMoveEvent(event)
+
+    def mousePressEvent(self, event):
+        if getattr(self, "frame", None) is not None and self.frame.mouse_press(event):
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def changeEvent(self, event):
+        from PySide6.QtCore import QEvent
+        if event.type() == QEvent.Type.WindowStateChange and getattr(self, "frame", None):
+            self.frame.update_margins()
+        super().changeEvent(event)
+
     def __init__(self, conn: sqlite3.Connection):
         super().__init__()
         self.conn = conn
@@ -227,6 +262,9 @@ class MainWindow(QMainWindow):
         self._phone_names: set[str] = set()
         self._phone_tries: dict[str, int] = {}  # phone address -> times we tried to open it
         self._mount_tries: dict[str, int] = {}  # iPod partition -> times we tried to mount it
+        self.look = theme.Look()                 # View → Appearance… (read with the settings)
+        self._auto_accent: str | None = None     # Auto Accent's colour from the playing song's art
+        self._accent_token = None
         self._mount_ejected: set[str] = set()   # ejected here: left alone until replugged
         self._mounting: set[str] = set()        # iPods and phones being opened right now
         self._probing = False                   # a device check is running in the background
@@ -261,6 +299,11 @@ class MainWindow(QMainWindow):
         self._podcast_silent = False
         self._recent: list[int] = []            # Controls → Play Recent (newest first)
 
+        # LuxTunes' own title bar with the menus in it (Linux; see window_frame.py).
+        from luxtunes.ui import window_frame
+        self.frame = window_frame.Frame(self) if window_frame.wanted(self.settings) else None
+        if self.frame is not None:
+            self.frame.install()
         self._build_ui()
         self._build_menus()
         self._connect()
@@ -294,73 +337,74 @@ class MainWindow(QMainWindow):
     # ======================================================================
 
     def _build_ui(self):
-        style = self.style()
-        icon = lambda sp: style.standardIcon(sp)
-
-        # ---- Toolbar ------------------------------------------------------
+        # ---- Top bar: library tabs · the display (exactly centred) · views, search --
+        # The two sides always share the room equally, so the display stays in
+        # the middle of the window whatever is on either side.
         toolbar = QWidget()
         toolbar.setObjectName("toolbar")
         bar = QHBoxLayout(toolbar)
-        bar.setContentsMargins(10, 6, 10, 6)
-        bar.setSpacing(6)
-
-        self.prev_button = self._tool_button("transport", icon(QStyle.StandardPixmap.SP_MediaSeekBackward), "Previous")
-        self.play_button = self._tool_button("playButton", icon(QStyle.StandardPixmap.SP_MediaPlay), "Play")
-        self.next_button = self._tool_button("transport", icon(QStyle.StandardPixmap.SP_MediaSeekForward), "Next")
-        self._play_icon = icon(QStyle.StandardPixmap.SP_MediaPlay)
-        self._pause_icon = icon(QStyle.StandardPixmap.SP_MediaPause)
-        self._stop_icon = icon(QStyle.StandardPixmap.SP_MediaStop)
-        for button in (self.prev_button, self.play_button, self.next_button):
-            bar.addWidget(button)
-        bar.addSpacing(14)
-
-        quiet = QLabel()
-        quiet.setPixmap(icon(QStyle.StandardPixmap.SP_MediaVolumeMuted).pixmap(14, 14))
-        bar.addWidget(quiet)
-        self.volume = JumpSlider(Qt.Orientation.Horizontal)
-        self.volume.setRange(0, 100)
-        self.volume.setFixedWidth(100)
-        bar.addWidget(self.volume)
-        loud = QLabel()
-        loud.setPixmap(icon(QStyle.StandardPixmap.SP_MediaVolume).pixmap(14, 14))
-        bar.addWidget(loud)
-        # The sleep timer, while it runs: the time left; click to turn it off.
-        self.sleep_button = self._tool_button("sleepButton", None, "", "☾")
-        self.sleep_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        self.sleep_button.clicked.connect(self._sleep_timer_off)
-        self.sleep_button.hide()
-        bar.addWidget(self.sleep_button)
-        bar.addSpacing(20)
+        bar.setContentsMargins(12, 5, 12, 5)
+        bar.setSpacing(16)
+        top_left, top_right = QWidget(), QWidget()
+        for side in (top_left, top_right):
+            policy = QSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            policy.setHorizontalStretch(1)
+            side.setSizePolicy(policy)
+        tabs = QHBoxLayout(top_left)
+        tabs.setContentsMargins(0, 0, 0, 0)
+        tabs.setSpacing(2)
+        self.library_tabs = {}
+        for source, label, shape in LIBRARY_TABS:
+            tab = LibraryTab(source, label)
+            tab.setProperty("shape", shape)
+            tab.clicked.connect(lambda checked=False, s=source: self._pick_library_tab(s))
+            tabs.addWidget(tab)
+            self.library_tabs[source] = tab
+        tabs.addStretch(1)
+        bar.addWidget(top_left, 1)
 
         self.lcd = NowPlayingDisplay()
+        self.lcd.setMinimumWidth(260)
+        self.lcd.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         bar.addWidget(self.lcd, 1)
-        bar.addSpacing(20)
 
-        # View buttons: List, Album List, Grid, Cover Flow (joined).
+        right_row = QHBoxLayout(top_right)
+        right_row.setContentsMargins(0, 0, 0, 0)
+        right_row.setSpacing(10)
+        # No stretch before the views: it would share the spare room with the
+        # search (both stretch), leaving the search squeezed with a gap to the
+        # views' left. The side is sized to fit views + search (TopBarSizer), so
+        # the search takes all of the room it's given, up to its 240 maximum.
+        # The four views, named, smaller than the tabs so the display fits in the middle.
         self.view_group = QButtonGroup(self)
         self.view_buttons = []
         views_box = QHBoxLayout()
-        views_box.setSpacing(0)
-        for i, (mode, tip) in enumerate(zip(VIEW_MODES, VIEW_TIPS)):
-            button = self._tool_button("viewButton", None, tip)
+        views_box.setSpacing(2)
+        for mode, tip, label in zip(VIEW_MODES, VIEW_TIPS, VIEW_LABELS):
+            button = self._tool_button("viewTab", None, tip, label)
             button.setCheckable(True)
-            button.setProperty("segment", "first" if i == 0 else "last" if i == 3 else "middle")
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+            button.setIconSize(QSize(16, 16))
+            button.setFixedSize(54, 46)
+            button.setAccessibleName(tip)
             button.clicked.connect(lambda checked=False, m=mode: self._set_view_mode(m))
             self.view_group.addButton(button)
             policy = button.sizePolicy()
-            policy.setRetainSizeWhenHidden(True)      # hiding them doesn't shift the display
+            policy.setRetainSizeWhenHidden(True)      # hiding them doesn't shift anything
             button.setSizePolicy(policy)
             self.view_buttons.append(button)
             views_box.addWidget(button)
         self.view_buttons[0].setChecked(True)
-        bar.addLayout(views_box)
-        bar.addSpacing(20)
+        right_row.addLayout(views_box)
 
         self.search = QLineEdit()
         self.search.setObjectName("search")
         self.search.setPlaceholderText("Search Music")
         self.search.setClearButtonEnabled(True)
-        self.search.setFixedWidth(200)
+        self.search.setMinimumWidth(130)
+        self.search.setMaximumWidth(240)
+        self.search.setFixedHeight(34)
+        self.search.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         # The magnifier opens a menu: search everything, or only one kind of tag.
         self._search_menu = QMenu(self)
         heading = self._search_menu.addAction("Search")
@@ -382,9 +426,145 @@ class MainWindow(QMainWindow):
         policy = self.search.sizePolicy()
         policy.setRetainSizeWhenHidden(True)
         self.search.setSizePolicy(policy)
-        bar.addWidget(self.search)
+        right_row.addWidget(self.search, 1)
+        bar.addWidget(top_right, 1)
+        # Both sides as wide as the views and search need: the display fills the
+        # rest, out to the views, and stays centred (the search shrinks first).
+        self.top_sizer = TopBarSizer(toolbar, top_left, top_right, bar)
 
-        # ---- Left panel: sidebar + album art + small buttons --------------
+        # ---- Media bar along the bottom: art, sleep · playback and position · the
+        # screen's buttons (Sync, Display All…), volume and stats ---------------
+        self.media_bar = QWidget()
+        self.media_bar.setObjectName("mediaBar")
+        self.media_bar.setFixedHeight(76)
+        media = QHBoxLayout(self.media_bar)
+        media.setContentsMargins(MEDIA_MARGIN, 0, 16, 0)
+        media.setSpacing(16)
+        corner, sound = QWidget(), QWidget()
+        for side in (corner, sound):
+            policy = QSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            policy.setHorizontalStretch(1)
+            side.setSizePolicy(policy)
+        corner_row = QHBoxLayout(corner)
+        corner_row.setContentsMargins(0, 0, 0, 0)
+        corner_row.setSpacing(8)
+        self.art_thumb = ArtThumb()
+        self.art_corner_spacer = QWidget()
+        self.art_corner_spacer.setFixedWidth(0)
+        self.art_toggle = self._tool_button("barToggle", None, "Show the album art in the sidebar")
+        self.art_toggle.setFixedSize(28, 28)
+        # Above it: hide or show the whole sidebar (Playing, Devices, Playlists).
+        self.sidebar_toggle = self._tool_button("barToggle", None, "Hide the sidebar")
+        self.sidebar_toggle.setFixedSize(28, 28)
+        policy = self.art_toggle.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)     # hidden with the sidebar: the ◀ stays put
+        self.art_toggle.setSizePolicy(policy)
+        # The sleep timer, always here, just right of the art's arrow (so it
+        # never moves about): click to set it, or (while it runs) to turn it off.
+        self.sleep_button = self._tool_button("sleepToggle", None, "Sleep Timer…")
+        self.sleep_button.setCheckable(True)
+        # As on the phone: a solid moon, and the time left under it while it runs.
+        self.sleep_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        self.sleep_button.setIconSize(QSize(24, 24))
+        self.sleep_button.setFixedSize(56, 52)
+        self.sleep_button.setAccessibleName("Sleep Timer")
+        self.sleep_button.clicked.connect(self._sleep_button_clicked)
+        corner_row.addWidget(self.art_thumb)
+        corner_row.addWidget(self.art_corner_spacer)
+        arrows = QVBoxLayout()
+        arrows.setContentsMargins(0, 0, 0, 0)
+        arrows.setSpacing(2)
+        arrows.addStretch(1)
+        arrows.addWidget(self.sidebar_toggle)
+        arrows.addWidget(self.art_toggle)
+        arrows.addStretch(1)
+        corner_row.addLayout(arrows)
+        corner_row.addWidget(self.sleep_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        corner_row.addStretch(1)
+        media.addWidget(corner, 1)
+
+        center = QWidget()
+        center.setFixedWidth(520)
+        center_column = QVBoxLayout(center)
+        center_column.setContentsMargins(0, 4, 0, 6)
+        center_column.setSpacing(0)
+        controls = QHBoxLayout()
+        controls.setSpacing(18)
+        self.shuffle_button = self._tool_button("barToggle", None, "Shuffle")
+        self.shuffle_button.setCheckable(True)
+        self.prev_button = self._tool_button("transport", None, "Previous")
+        self.play_button = self._tool_button("playButton", None, "Play")
+        self.next_button = self._tool_button("transport", None, "Next")
+        self.repeat_button = self._tool_button("barToggle", None, "Repeat: off")
+        self.repeat_button.setCheckable(True)
+        self._play_icon = self._pause_icon = self._stop_icon = QIcon()   # drawn with the theme
+        for button, size in ((self.prev_button, QSize(28, 28)), (self.next_button, QSize(28, 28)),
+                             (self.play_button, QSize(24, 24)),
+                             (self.shuffle_button, QSize(24, 24 + line_icons.DOT_ROOM)),
+                             (self.repeat_button, QSize(24, 24 + line_icons.DOT_ROOM))):
+            button.setIconSize(size)
+        for button in (self.shuffle_button, self.repeat_button):
+            button.setFixedSize(40, 40)
+        controls.addStretch(1)
+        for button in (self.shuffle_button, self.prev_button, self.play_button,
+                       self.next_button, self.repeat_button):
+            button.setAccessibleName(button.toolTip())
+            controls.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
+        controls.addStretch(1)
+        center_column.addLayout(controls)
+        position = QHBoxLayout()
+        position.setSpacing(10)
+        self.lcd.slider.setObjectName("seekSlider")
+        self.lcd.slider.setAccessibleName("Position")
+        for label in (self.lcd.elapsed, self.lcd.remaining):
+            label.setObjectName("seekTime")
+            label.setMinimumWidth(38)
+        self.lcd.elapsed.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        position.addWidget(self.lcd.elapsed)
+        position.addWidget(self.lcd.slider, 1)
+        position.addWidget(self.lcd.remaining)
+        center_column.addLayout(position)
+        media.addWidget(center, 0)
+
+        sound_row = QHBoxLayout(sound)
+        sound_row.setContentsMargins(0, 0, 0, 0)
+        sound_row.setSpacing(18)
+        # The shown screen's own buttons, just right of the playback buttons:
+        # Display All, Radio's and Podcasts' buttons, an iPod's Sync, a CD's
+        # Import CD (each group is put in below, once it's made).
+        self.bar_actions = QWidget()
+        self.bar_actions.setObjectName("barActions")
+        self.bar_actions_row = QHBoxLayout(self.bar_actions)
+        self.bar_actions_row.setContentsMargins(0, 0, 0, 0)
+        self.bar_actions_row.setSpacing(12)
+        sound_row.addWidget(self.bar_actions, 0, Qt.AlignmentFlag.AlignVCenter)
+        sound_row.addStretch(1)
+        volume_column = QVBoxLayout()
+        volume_column.setSpacing(6)
+        volume_column.addStretch(1)
+        volume_row = QHBoxLayout()
+        volume_row.setSpacing(8)
+        self.volume_icon = QLabel()
+        self.volume_icon.setObjectName("volumeIcon")
+        self.volume = JumpSlider(Qt.Orientation.Horizontal)
+        self.volume.setObjectName("volumeSlider")
+        self.volume.setAccessibleName("Volume")
+        self.volume.setRange(0, 100)
+        self.volume.setFixedWidth(120)
+        volume_row.addStretch(1)
+        volume_row.addWidget(self.volume_icon)
+        volume_row.addWidget(self.volume)
+        volume_column.addLayout(volume_row)
+        self.summary_label = ElidedLabel()           # the library stats
+        self.summary_label.setObjectName("libraryStats")
+        self.summary_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        volume_column.addWidget(self.summary_label)
+        self.summary_label.setMinimumWidth(120)
+        volume_column.addStretch(1)
+        sound_row.addLayout(volume_column)
+        media.addWidget(sound, 1)
+
+        # ---- Left panel: the sidebar, and room for the opened album art ----
         left = QWidget()
         left.setObjectName("leftPanel")
         left_layout = QVBoxLayout(left)
@@ -393,26 +573,10 @@ class MainWindow(QMainWindow):
 
         self.sidebar = Sidebar()
         left_layout.addWidget(self.sidebar, 1)
-
-        self.art = ArtworkPane()
-        left_layout.addWidget(self.art)
-
-        buttons = QWidget()
-        buttons.setObjectName("sidebarButtons")
-        row = QHBoxLayout(buttons)
-        row.setContentsMargins(6, 3, 6, 3)
-        row.setSpacing(6)
-        self.new_playlist_button = self._tool_button("sidebarButton", None, "New playlist", "+")
-        self.shuffle_button = self._tool_button("sidebarButton", None, "Shuffle", "⇄")
-        self.shuffle_button.setCheckable(True)
-        self.repeat_button = self._tool_button("sidebarButton", None, "Repeat: off", "↻")
-        self.repeat_button.setCheckable(True)
-        self.art_toggle = self._tool_button("sidebarButton", None, "Show or hide artwork", "▾")
-        for button in (self.new_playlist_button, self.shuffle_button, self.repeat_button):
-            row.addWidget(button)
-        row.addStretch(1)
-        row.addWidget(self.art_toggle)
-        left_layout.addWidget(buttons)
+        self.art = ArtworkPane()                 # placed over the bottom-left corner (ArtCorner)
+        self.art_room = QWidget()                # keeps the list clear of the opened art
+        self.art_room.setFixedHeight(0)
+        left_layout.addWidget(self.art_room)
 
         # ---- Song list -----------------------------------------------------
         self.table = TrackTableView()
@@ -506,32 +670,40 @@ class MainWindow(QMainWindow):
         self.cd_page = CdPage()
         self.views.addWidget(self.cd_page)       # 3: an audio CD
 
-        # File → Display Duplicates: "Displaying Duplicates  [Display All]" along the bottom.
+        # File → Display Duplicates / Missing: [Display All] in the media bar, and
+        # "Displaying Duplicates" under the volume.
         self.dup_bar = QWidget()
-        self.dup_bar.setObjectName("dupBar")
-        bar = QVBoxLayout(self.dup_bar)
-        bar.setContentsMargins(4, 6, 4, 6)
-        bar.setSpacing(3)
-        self.filter_label = dup_label = QLabel("Displaying Duplicates")
-        dup_label.setObjectName("dupLabel")
-        dup_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.dup_bar.setObjectName("barGroup")
+        bar = QHBoxLayout(self.dup_bar)
+        bar.setContentsMargins(0, 0, 0, 0)
+        self.filter_label = QLabel("Displaying Duplicates", self.dup_bar)
+        self.filter_label.hide()
         self.dup_button = QToolButton()
         self.dup_button.setObjectName("dupButton")
         self.dup_button.setText("Display All")
-        bar.addWidget(dup_label)
-        bar.addWidget(self.dup_button, 0, Qt.AlignmentFlag.AlignHCenter)
+        bar.addWidget(self.dup_button)
         self.dup_bar.hide()
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(0)
         right_layout.addWidget(self.views, 1)
-        right_layout.addWidget(self.dup_bar)
         self.radio_bar = RadioBar()              # PLAYING → Radio: Save as Playlist, Refresh...
-        right_layout.addWidget(self.radio_bar)
         from luxtunes.ui.podcast_window import PodcastBar
         self.podcast_bar = PodcastBar(self)      # Podcasts: Subscribe…, Refresh, Podcasts…
-        right_layout.addWidget(self.podcast_bar)
+        # All of their buttons sit in the media bar; the stats line under the
+        # volume says what's shown ("Displaying Duplicates", the radio's name…).
+        self._bar_watch = Follow(self, self._refresh_stats)
+        for group in (self.dup_bar, self.radio_bar, self.podcast_bar,
+                      self.device_page.actions, self.cd_page.actions):
+            self.bar_actions_row.addWidget(group)
+        for group in (self.dup_bar, self.radio_bar, self.podcast_bar):
+            self._bar_watch.watch(group)
+        self._bar_watch.watch(self.device_page, self.device_page.actions)
+        self._bar_watch.watch(self.cd_page, self.cd_page.actions)
+        self.radio_bar.changed.connect(self._refresh_stats)
+        self.podcast_bar.changed.connect(self._refresh_stats)
+        self.cd_page.status_changed.connect(lambda _text: self._refresh_stats())
 
         # ---- Put it together ------------------------------------------------
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -556,13 +728,18 @@ class MainWindow(QMainWindow):
         self.body.addWidget(self.splitter)          # 0
         self.body.addWidget(self.video_panel)       # 1
         layout.addWidget(self.body, 1)
+        layout.addWidget(self.media_bar)
         self.toolbar = toolbar
         self.setCentralWidget(central)
+        self.art.setParent(central)
+        self.art_corner = ArtCorner(self.art, central, left, self.art_room, self.media_bar,
+                                    self.art_corner_spacer, MEDIA_MARGIN)
+        self.splitter.splitterMoved.connect(lambda *_: self.art_corner.place())
 
-        self.summary_label = QLabel()
-        self.summary_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.statusBar().addWidget(self.summary_label, 1)
-        self.statusBar().setSizeGripEnabled(True)
+        # No status bar: its short messages show for a moment where the library stats are.
+        self.statusBar().hide()
+        self._summary_text = ""
+        self.statusBar().messageChanged.connect(self._show_status_message)
 
     @staticmethod
     def _tool_button(name, icon=None, tooltip="", text="") -> QToolButton:
@@ -633,8 +810,8 @@ class MainWindow(QMainWindow):
         view_menu = menus.addMenu("&View")
         group = QActionGroup(self)
         self.view_actions = {}
-        for n, (mode, label) in enumerate(zip(VIEW_MODES, ("as List", "as Album List", "as Grid",
-                                                           "as Cover Flow"))):
+        for n, (mode, label) in enumerate(zip(VIEW_MODES, ("as List", "as Album", "as Grid",
+                                                           "as Carousel"))):
             action = self._action(view_menu, label, lambda checked=False, m=mode: self._set_view_mode(m),
                                   f"Ctrl+Shift+{n + 3}")
             action.setCheckable(True)
@@ -644,6 +821,10 @@ class MainWindow(QMainWindow):
         view_menu.addSeparator()
         self.show_art_action = self._action(view_menu, "Show Artwork", self._toggle_artwork, "Ctrl+G")
         self.show_art_action.setCheckable(True)
+        self.show_sidebar_action = self._action(view_menu, "Show Sidebar",
+                                                self._set_sidebar_visible)
+        self.show_sidebar_action.setCheckable(True)
+        self.show_sidebar_action.setChecked(True)
         self.equalizer_action = self._action(view_menu, "Show Equalizer", self._toggle_equalizer,
                                              "Ctrl+T")
         view_menu.aboutToShow.connect(lambda: self.equalizer_action.setText(
@@ -655,8 +836,7 @@ class MainWindow(QMainWindow):
         self._action(view_menu, "Pop-Out Player", self._open_art_window)
         self._action(view_menu, "Mini Player", self._open_mini_player, "Ctrl+Shift+M")
         view_menu.addSeparator()
-        self.dark_action = self._action(view_menu, "Dark Mode", self._toggle_dark_mode)
-        self.dark_action.setCheckable(True)
+        self._action(view_menu, "Appearance…", self._show_appearance)
 
         controls = menus.addMenu("&Controls")
         self.play_action = self._action(controls, "Play / Pause", self._on_play_clicked)  # Space: see _connect
@@ -738,11 +918,18 @@ class MainWindow(QMainWindow):
         self.shuffle_button.toggled.connect(self._set_shuffle)
         self.shuffle_action.toggled.connect(self._set_shuffle)
         self.repeat_button.clicked.connect(self._cycle_repeat)
-        self.art_toggle.clicked.connect(lambda: self._toggle_artwork(not self.art.isVisible()))
+        self.art_toggle.clicked.connect(lambda: self._toggle_artwork(not self.art_corner.open))
+        self.sidebar_toggle.clicked.connect(
+            lambda: self._set_sidebar_visible(self.left_panel.isHidden()))
+        self.art_thumb.clicked.connect(self._open_art_window)
+        self.art_thumb.view_requested.connect(self._view_full_size_art)
         self.art.header_clicked.connect(self._flip_art_mode)
         self.art.image_clicked.connect(self._open_art_window)
         self.art.view_requested.connect(self._view_full_size_art)
-        self.new_playlist_button.clicked.connect(self._new_playlist)
+        self.sidebar.new_playlist_requested.connect(self._new_playlist)
+        self.sidebar.new_smart_playlist_requested.connect(self._new_smart_playlist)
+        for tab in self.library_tabs.values():
+            tab.tracks_dropped.connect(self.sidebar.tracks_dropped)
         self.sidebar.playlist_renamed.connect(self._on_playlist_renamed)
         self.sidebar.menu_requested.connect(self._show_sidebar_menu)
         self.sidebar.delete_requested.connect(self._delete_source)
@@ -810,7 +997,11 @@ class MainWindow(QMainWindow):
         has_tv = look["show_tv_shows"]
         devices = [(key, self._device_name(ipod)) for key, ipod in self._players.items()]
         devices += [(key, disc.name) for key, disc in self._discs.items()]
-        self.sidebar.populate(playlists, has_movies, theme.section_color(self.dark_action.isChecked()),
+        for source, shown in ((SOURCE_MOVIES, has_movies), (SOURCE_TV_SHOWS, has_tv),
+                              (SOURCE_PODCASTS, look["show_podcasts"]),
+                              (SOURCE_AUDIOBOOKS, look["show_audiobooks"])):
+            self.library_tabs[source].setVisible(shown)
+        self.sidebar.populate(playlists, has_movies, theme.section_color(),
                               len(self.player.up_next), devices, has_tv,
                               look["show_podcasts"], look["show_audiobooks"])
         if self._current_source == SOURCE_RADIO_LIKES:
@@ -832,6 +1023,7 @@ class MainWindow(QMainWindow):
         drill_scroll = self.table.verticalScrollBar().value()
         self._remember_scroll()
         self._current_source = source
+        self._update_library_tabs()
         self._end_duplicates()
         self.radio_bar.hide()
         self.podcast_bar.setVisible(source == SOURCE_PODCASTS)
@@ -1033,11 +1225,11 @@ class MainWindow(QMainWindow):
             # Grid counts tiles: "3 albums, 54.8 minutes, 127.7 MB".
             groups = self.grid.model.groups
             tracks = [t for g in groups for t in g["tracks"]]
-            self.summary_label.setText(formatting.library_summary(
+            self._set_summary(formatting.library_summary(
                 len(groups), sum(t.get("total_time") or 0 for t in tracks),
                 sum(t.get("size") or 0 for t in tracks), noun=self.grid.grouping_noun()))
             return
-        self.summary_label.setText(self.model.summary(self._selected_rows()))
+        self._set_summary(self.model.summary(self._selected_rows()))
 
     def import_itunes_library(self):
         xml_path, _ = QFileDialog.getOpenFileName(
@@ -1325,18 +1517,21 @@ class MainWindow(QMainWindow):
             self._eq_window.show_song(track)
         self.model.set_missing(track["id"], False)  # it's back, if it was ever missing
         self.lcd.show_track(track)
+        self._find_auto_accent(track)
         self.model.set_now_playing(track["id"])
         # The art shows whatever happened last: a song starting, or you clicking one.
         self._art_mode = "playing"
         self._refresh_artwork()
         self._update_play_button()
         if self.player.shuffle and self._current_source == self._playing_source:
-            # The view follows a shuffle (scrolls to the song)
-            # but your selection stays where it was.
+            # The view follows a shuffle (scrolls to the song, and Carousel's
+            # covers glide to its album) but your selection stays where it was.
             row = self.model.row_of(track["id"])
             if row >= 0:
                 self.table.scrollTo(self.model.index(row, NAME_COLUMN),
                                     QAbstractItemView.ScrollHint.PositionAtCenter)
+                if self.cover_flow.isVisible():
+                    self.cover_flow.center_on_track(self.model.track_at(row))
         if self._art_window is not None:
             self._art_window.show_track(track, self._artwork_for(track))
             self._art_window.set_lyrics(self._lyrics_for(track),
@@ -1448,7 +1643,7 @@ class MainWindow(QMainWindow):
         if full and not self.showing_video():
             return
         self._video_full_screen = full
-        for bar in (self.menuBar(), self.toolbar, self.statusBar()):
+        for bar in (self.menuWidget(), self.toolbar, self.media_bar):
             bar.setVisible(not full)
         if full:
             self._was_maximized = self.isMaximized()
@@ -1470,22 +1665,51 @@ class MainWindow(QMainWindow):
         order = [REPEAT_OFF, REPEAT_ALL, REPEAT_ONE]
         self._set_repeat(order[(order.index(self.player.repeat) + 1) % 3])
 
-    def _set_repeat(self, mode: str):
+    def _set_repeat(self, mode: str, remember: bool = True):
         self.player.repeat = mode
-        self.settings.setValue("repeat", mode)        # remembered for next time
+        if remember:
+            self.settings.setValue("repeat", mode)    # remembered for next time
         self.repeat_actions[mode].setChecked(True)
-        self.repeat_button.setText("↻¹" if mode == REPEAT_ONE else "↻")
-        self.repeat_button.setCheckable(True)
+        colors = theme.current
+        self.repeat_button.setIcon(line_icons.toggle_icon(
+            "repeat_one" if mode == REPEAT_ONE else "repeat", colors["text_dim"],
+            colors["highlight"], 24, on_width=2.4))
         self.repeat_button.setChecked(mode != REPEAT_OFF)
         self.repeat_button.setToolTip(f"Repeat: {mode}")
+        self.repeat_button.setAccessibleName(f"Repeat, {mode}")
 
-    # ---- The four views: List, Album List, Grid, Cover Flow ----------------------
+    # ---- The four views: List, Album List, Grid, Carousel (mode "coverflow") -----
 
     def _refresh_view_icons(self):
-        color = theme.text_color(self.dark_action.isChecked())
-        for button, icon in zip(self.view_buttons, view_icons(color)):
-            button.setIcon(icon)
+        color = theme.text_color()
+        colors = theme.current
+        dim, chosen = colors["text_dim"], colors["tab_on_text"]
+        for button, shape in zip(self.view_buttons, VIEW_SHAPES):
+            button.setIcon(line_icons.tab_icon(shape, dim, chosen, 16))
+        for tab in self.library_tabs.values():
+            tab.setIcon(line_icons.tab_icon(tab.property("shape"), dim, chosen, 20))
         self._search_icon.setIcon(self._magnifier_icon(QColor(color)))
+        accent = colors["highlight"]
+        self.shuffle_button.setIcon(line_icons.toggle_icon("shuffle", dim, accent, 24,
+                                                           on_width=2.4))
+        self.sleep_button.setIcon(line_icons.toggle_icon("bedtime", dim, accent, 24,
+                                                         dot_when_on=False))
+        self._set_repeat(self.player.repeat, remember=False)
+        self.volume_icon.setPixmap(line_icons.icon("volume", dim, 18).pixmap(18, 18))
+        self._refresh_art_arrow()
+        self._refresh_sidebar_arrow()
+        self._refresh_transport_icons()
+
+    def _refresh_transport_icons(self):
+        """Previous, play/pause/stop and next, drawn in the theme's colours."""
+        colors = theme.current
+        plain = colors["text"]
+        self.prev_button.setIcon(line_icons.icon("skip_previous", plain, 28))
+        self.next_button.setIcon(line_icons.icon("skip_next", plain, 28))
+        self._play_icon = line_icons.icon("play", colors["play_fg"], 24)
+        self._pause_icon = line_icons.icon("pause", colors["play_fg"], 24)
+        self._stop_icon = line_icons.icon("stop", colors["play_fg"], 24)
+        self._update_play_button()
 
     @staticmethod
     def _magnifier_icon(color: QColor) -> QIcon:
@@ -1554,6 +1778,23 @@ class MainWindow(QMainWindow):
             index = self.table.currentIndex()
             self.cover_flow.center_on_track(self.model.track_at(index.row()) if index.isValid() else None)
             self.cover_flow.setFocus()
+            QTimer.singleShot(0, self._tighten_carousel_once)
+
+    def _tighten_carousel_once(self):
+        """Carousel used to leave a wide empty strip under the album's name.
+        The first time it shows now, it gets just as tall as its covers (the
+        same size as before), its name and its scrollbar need, and the song
+        list below gets the rest. Once only: after that the divider is yours."""
+        if self.settings.value("carousel_tight", False, type=bool):
+            return
+        sizes = self.songs_split.sizes()
+        if len(sizes) < 2 or sizes[0] <= 0:
+            return                                   # not laid out yet: next time
+        old = sizes[0]
+        new = self.cover_flow.height_for(self.cover_flow.old_cover_size(old))
+        if 0 < new < old:
+            self.songs_split.setSizes([new, sizes[1] + old - new])
+        self.settings.setValue("carousel_tight", True)
 
     def _header_key(self) -> str:
         return f"{self._column_group}/{self._table_layout}"
@@ -2176,7 +2417,7 @@ class MainWindow(QMainWindow):
         """Preferences → General: text sizes, icons, checkboxes, Grid colour,
         which sources show, and the library's name in the title bar."""
         look = appearance(self.settings)
-        theme.apply_theme(QApplication.instance(), self.dark_action.isChecked(), look["grid_dark"])
+        self._apply_colors(look["grid_dark"])
         base = QApplication.font()
         bigger = 2 if look["source_text"] == "large" else 0
         font = QFont(base)
@@ -3633,7 +3874,7 @@ class MainWindow(QMainWindow):
         self.device_page.set_filter("")
         self._device_search_hint(self.device_page.search_hint())
         self.search.show()
-        self.summary_label.setText(f"{record.name} — {ipod.model_name or 'iPod'}")
+        self._set_summary(f"{record.name} — {ipod.model_name or 'iPod'}")
         self._update_device_actions()
 
     def _device_search_hint(self, hint: str):
@@ -4339,7 +4580,7 @@ class MainWindow(QMainWindow):
         self.search.hide()          # nothing to search on a device's page
         total = sum(t.total_time for t in disc.tracks)
         count = len(disc.tracks)
-        self.summary_label.setText(f"{count} song{'s' if count != 1 else ''}, "
+        self._set_summary(f"{count} song{'s' if count != 1 else ''}, "
                                    f"{formatting.format_duration(total)} total time")
 
     def _on_cd_edited(self):
@@ -4510,28 +4751,56 @@ class MainWindow(QMainWindow):
     # ---- Sleep timer ---------------------------------------------------------------
 
     def _sleep_timer_dialog(self):
-        """Controls → Sleep Timer…: choose how long; the window shows when it stops."""
-        dialog = SleepTimerDialog(self.sleep_timer.minutes, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.sleep_timer.start(dialog.minutes)
-            self.statusBar().showMessage(
-                f"Sleep timer: the music stops at {clock(self.sleep_timer.end)}.", 5000)
+        """Controls → Sleep Timer… (or the moon): a little pop-up grows up from
+        just above the moon; click a time to start, or anywhere else to close it."""
+        old = getattr(self, "_sleep_popup", None)
+        if old is not None:
+            old.deleteLater()
+        popup = SleepTimerPopup(self.sleep_timer.minutes, self)
+        popup.chosen.connect(self._start_sleep_timer)
+        popup.closed.connect(self._sleep_popup_closed)
+        self._sleep_popup = popup
+        popup.open_above(self.sleep_button if self.media_bar.isVisible() else None, self)
+
+    def _sleep_popup_closed(self):
+        self._sleep_popup_closed_at = time.monotonic()
+        self._show_sleep_timer()           # the moon goes back to how the timer is
+
+    def _start_sleep_timer(self, minutes: int):
+        self.sleep_timer.start(minutes)
+        self.statusBar().showMessage(
+            f"Sleep timer: the music stops at {clock(self.sleep_timer.end)}.", 5000)
 
     def _sleep_timer_off(self):
         if self.sleep_timer.active:
             self.sleep_timer.stop()
             self.statusBar().showMessage("Sleep timer turned off.", 4000)
 
+    def _sleep_button_clicked(self):
+        """The moon in the media bar: set the sleep timer, or turn it off while it runs."""
+        # A click on the moon while the pop-up is open closes it (Qt does that
+        # for any click outside it); it mustn't open it again straight away.
+        if time.monotonic() - getattr(self, "_sleep_popup_closed_at", 0.0) < 0.3:
+            self._show_sleep_timer()
+            return
+        if self.sleep_timer.active:
+            self._sleep_timer_off()
+        else:
+            self._sleep_timer_dialog()
+        self._show_sleep_timer()
+
     def _show_sleep_timer(self):
         timer = self.sleep_timer
-        self.sleep_button.setVisible(timer.active)
         self.sleep_off_action.setVisible(timer.active)
+        self.sleep_button.setChecked(timer.active)          # lit, with a dot, while it runs
+        self.sleep_button.setText(left_text(timer.seconds_left()) if timer.active else "")
         if timer.active:
-            self.sleep_button.setText(f"☾ {left_text(timer.seconds_left())}")
-            self.sleep_button.setToolTip(f"Sleep timer: the music stops at {clock(timer.end)}. "
+            self.sleep_button.setToolTip(f"Sleep timer: {left_text(timer.seconds_left())} left; "
+                                         f"the music stops at {clock(timer.end)}. "
                                          "Click to turn it off.")
             self.sleep_action.setText(f"Sleep Timer… (stops at {clock(timer.end)})")
         else:
+            self.sleep_button.setToolTip("Sleep Timer…")
             self.sleep_action.setText("Sleep Timer…")
 
     def _update_controls_menu(self):
@@ -5130,8 +5399,6 @@ class MainWindow(QMainWindow):
     # ======================================================================
 
     def _refresh_artwork(self):
-        if not self.art.isVisible():
-            return
         selected = self.model.track_at(self.table.currentIndex().row())
         if self.player.current is not None and (self._art_mode == "playing" or selected is None):
             track = self.player.current
@@ -5148,6 +5415,91 @@ class MainWindow(QMainWindow):
                                               track.get("album_artist") or track.get("artist")) if t)
             self.art.set_image(artwork.read_embedded_artwork(find_file(track.get("location"))),
                                caption=caption)
+        self.art_thumb.set_picture(self.art.picture())
+        self.art_corner.place()                  # the picture's size can change the art's
+
+    def _set_sidebar_visible(self, visible: bool, remember: bool = True):
+        """The arrow above the art's arrow (and View → Show Sidebar): hide the
+        whole sidebar (Playing, Devices, Playlists) so the list gets the room,
+        or bring it back. The opened art lives in the sidebar, so while it's
+        hidden the art stays the thumbnail (which still opens the Pop-Out
+        Player) and its up arrow is hidden."""
+        visible = bool(visible)
+        self.left_panel.setVisible(visible)
+        if remember:
+            self.settings.setValue("sidebar_visible", visible)
+        if self.show_sidebar_action.isChecked() != visible:
+            self.show_sidebar_action.setChecked(visible)
+        self.art_toggle.setVisible(visible)
+        self.art_corner.place()
+        self._update_art_thumb()
+        self._refresh_sidebar_arrow()
+
+    def _update_art_thumb(self):
+        """The thumbnail shows unless the opened art is showing in its place."""
+        self.art_thumb.setVisible(not (self.art_corner.open and not self.left_panel.isHidden()))
+
+    def _refresh_sidebar_arrow(self):
+        shown = not self.left_panel.isHidden()
+        self.sidebar_toggle.setIcon(line_icons.icon("left" if shown else "right",
+                                                    theme.current["text_dim"], 18))
+        tip = "Hide the sidebar" if shown else "Show the sidebar"
+        self.sidebar_toggle.setToolTip(tip)
+        self.sidebar_toggle.setAccessibleName(tip)
+
+    def _refresh_art_arrow(self):
+        open_ = self.art_corner.open
+        colors = theme.current
+        self.art_toggle.setIcon(line_icons.icon("down" if open_ else "up", colors["text_dim"], 18))
+        tip = "Shrink the album art" if open_ else "Show the album art in the sidebar"
+        self.art_toggle.setToolTip(tip)
+        self.art_toggle.setAccessibleName(tip)
+
+    # ---- The library tabs (top left) ------------------------------------------------
+
+    def _pick_library_tab(self, source):
+        if not self.sidebar.select_source(source):
+            self.show_source(source)
+        self._update_library_tabs()
+
+    def _update_library_tabs(self):
+        for source, tab in self.library_tabs.items():
+            tab.setChecked(source == self._current_source)
+
+    # ---- The library stats (bottom right), and short messages in their place ------
+
+    def _set_summary(self, text: str):
+        self._summary_text = text
+        self._refresh_stats()
+
+    def _show_status_message(self, message: str):
+        self._status_message = message
+        self._refresh_stats()
+
+    def _bar_context(self) -> tuple[str, str]:
+        """What the shown screen's buttons are about, for the stats line (the
+        old bars' labels): text, and a tooltip with more."""
+        if not self.dup_bar.isHidden():
+            return self.filter_label.text(), ""
+        if not self.radio_bar.isHidden():
+            return self.radio_bar.label.text(), self.radio_bar.label.toolTip()
+        if not self.podcast_bar.isHidden():
+            return self.podcast_bar.label.text(), ""
+        if self.views.currentWidget() is self.cd_page:
+            return self.cd_page.status.text(), ""
+        return "", ""
+
+    def _refresh_stats(self):
+        """The line under the volume: a short message for a moment, otherwise
+        the stats, after what the screen is ("Displaying Duplicates · 12 songs…")."""
+        if not hasattr(self, "summary_label"):
+            return
+        message = getattr(self, "_status_message", "")
+        summary = getattr(self, "_summary_text", "")
+        context, tip = ("", "") if message else self._bar_context()
+        text = message or " · ".join(part for part in (context, summary) if part)
+        self.summary_label.setText(text)
+        self.summary_label.setToolTip("\n".join(part for part in (text, tip) if part))
 
     def _view_full_size_art(self):
         """Right-click the art → View Full Size Album Art: just the picture, in a
@@ -5171,18 +5523,76 @@ class MainWindow(QMainWindow):
         self._refresh_artwork()
 
     def _toggle_artwork(self, visible: bool):
-        self.art.setVisible(visible)
-        self.art_toggle.setText("▾" if visible else "▴")
+        """Open the album art (over the bottom-left corner, up into the sidebar)
+        or shrink it to the thumbnail in the media bar."""
+        self.art_corner.set_open(visible)
+        self._update_art_thumb()
+        self._refresh_art_arrow()
         if self.show_art_action.isChecked() != visible:
             self.show_art_action.setChecked(visible)
         self.settings.setValue("show_artwork", visible)
         self._refresh_artwork()
 
-    def _toggle_dark_mode(self, dark: bool):
-        theme.apply_theme(QApplication.instance(), dark, appearance(self.settings)["grid_dark"])
-        self.settings.setValue("dark_mode", dark)
+    # ---- View → Appearance… (as in the app) ---------------------------------------------
+
+    def _apply_colors(self, grid_dark: bool | None = None):
+        """The chosen style and colours, with Auto Accent's colour when it has one."""
+        if grid_dark is None:
+            grid_dark = appearance(self.settings)["grid_dark"]
+        accent = self._auto_accent if self.look.auto_accent else None
+        theme.apply_theme(QApplication.instance(), self.look, grid_dark, accent)
+        from luxtunes.ui import title_bar
+        title_bar.set_dark(QApplication.instance(), not theme.current["light"])
+        if self.frame is not None:
+            self.frame.title_bar.refresh(theme.current)
+        for part in [self.grid, *self.grid.findChildren(QWidget)]:   # repaint in the new colours
+            part.update()
+        self.table.viewport().update()
+
+    def _set_look(self, look):
+        """From the Appearance window: use and keep the new look at once."""
+        style_changed = look.style != self.look.style or look.current != self.look.current
+        self.look = look
+        theme.save_look(self.settings, look)
+        if look.auto_accent and self.player.current is not None and self._auto_accent is None:
+            self._find_auto_accent(self.player.current)
+        self._apply_colors()
         self._refresh_view_icons()
-        self.reload_library()  # re-colour the sidebar section titles
+        if style_changed:
+            self.reload_library()                  # re-colour the sidebar section titles
+
+    def _show_appearance(self):
+        from luxtunes.ui.appearance_window import AppearanceWindow
+        if getattr(self, "_appearance_window", None) is None:
+            self._appearance_window = AppearanceWindow(self.look, self._set_look, self)
+        self._appearance_window.show()
+        self._appearance_window.raise_()
+        self._appearance_window.activateWindow()
+
+    def _find_auto_accent(self, track: dict | None):
+        """Auto Accent: a colour from the playing song's art, found off the window's thread."""
+        if not self.look.auto_accent:
+            return
+        location = (track or {}).get("location")
+        background_colour = self.look.current[0]
+        token = object()
+        self._accent_token = token
+
+        def work():
+            from luxtunes.ui.art_cache import load_image
+            image = load_image(location, 96) if location else None
+            return theme.accent_from_image(image, background_colour)
+
+        def done(result):
+            if self._accent_token is not token:
+                return                             # another song started meanwhile
+            accent = result if isinstance(result, str) else None
+            if accent != self._auto_accent:
+                self._auto_accent = accent
+                self._apply_colors()
+                self._refresh_view_icons()
+        from luxtunes.ui import background
+        background.run(work, done, self)
 
     # ---- Going online by itself (Preferences → Network) -------------------------------
 
@@ -5503,9 +5913,11 @@ class MainWindow(QMainWindow):
 
     def _offer_restart(self, version: str):
         from luxtunes.core import updater
+        text = (f"LuxTunes {version} is downloaded. Install it now? LuxTunes closes while it "
+                "installs, then opens again." if updater.kind() == "windows" else
+                f"LuxTunes {version} is installed. Restart LuxTunes now to use it?")
         answer = QMessageBox.question(
-            self, "Updating LuxTunes",
-            f"LuxTunes {version} is installed. Restart LuxTunes now to use it?",
+            self, "Updating LuxTunes", text,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if answer == QMessageBox.StandardButton.Yes:
             command = updater.launcher()
@@ -5600,6 +6012,7 @@ class MainWindow(QMainWindow):
             self.resize(1280, 800)
         if s.value("splitter") is not None:
             self.splitter.restoreState(s.value("splitter"))
+        self._set_sidebar_visible(s.value("sidebar_visible", True, type=bool), remember=False)
         if s.value("header_version", 0, type=int) == HEADER_LAYOUT_VERSION:
             known = s.value("column_keys")
             self._known_columns = set(str(known).split(",")) if known else \
@@ -5622,14 +6035,11 @@ class MainWindow(QMainWindow):
         if s.value("songs_split") is not None:
             self.songs_split.restoreState(s.value("songs_split"))
 
-        dark = s.value("dark_mode", False, type=bool)
-        self.dark_action.setChecked(dark)
+        self.look = theme.load_look(s)
         self._apply_appearance()            # also sets the theme
 
         show_art = s.value("show_artwork", True, type=bool)
-        self.show_art_action.setChecked(show_art)
-        self.art.setVisible(show_art)
-        self.art_toggle.setText("▾" if show_art else "▴")
+        self._toggle_artwork(show_art)
 
         recent = s.value("recent_tracks", []) or []
         if isinstance(recent, str):         # QSettings returns one item as a plain string

@@ -1,6 +1,6 @@
 """The page an audio CD shows when you click it under DEVICES:
-its tracks with checkboxes, and Import Settings… / Import CD along the
-bottom. Names, artists, the album and the genre can be corrected before
+its tracks with checkboxes; Get Track Names, Import Settings… and Import CD
+are in the media bar while it's shown. Names, artists, the album and the genre can be corrected before
 importing (the album and genre apply to the whole disc). While importing,
 each track shows an orange "importing" mark, then a green tick.
 """
@@ -72,6 +72,7 @@ class CdPage(QWidget):
     settings_clicked = Signal()
     lookup_clicked = Signal()            # Get Track Names (asks before going online)
     edited = Signal()                    # a name / artist / album / genre was corrected
+    status_changed = Signal(str)         # shown under the volume in the media bar
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -102,12 +103,16 @@ class CdPage(QWidget):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
         self.table.itemChanged.connect(self._on_item_changed)
 
-        bar = QWidget()
-        bar.setObjectName("cdBar")
-        row = QHBoxLayout(bar)
-        row.setContentsMargins(12, 6, 12, 6)
-        self.status = QLabel()
+        # The buttons live in the window's media bar while this page is shown
+        # (main_window puts them there); the status shows under the volume.
+        self.actions = QWidget()
+        self.actions.setObjectName("barGroup")
+        row = QHBoxLayout(self.actions)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        self.status = QLabel(self)
         self.status.setObjectName("cdStatus")
+        self.status.hide()
         self.lookup_button = QPushButton("Get Track Names")
         self.lookup_button.setToolTip("Look up the song names online (LuxTunes asks first)")
         self.settings_button = QPushButton("Import Settings…")
@@ -117,7 +122,6 @@ class CdPage(QWidget):
         self.lookup_button.clicked.connect(self.lookup_clicked)
         self.settings_button.clicked.connect(self.settings_clicked)
         self.import_button.clicked.connect(self.import_clicked)
-        row.addWidget(self.status, 1)
         row.addWidget(self.lookup_button)
         row.addWidget(self.settings_button)
         row.addWidget(self.import_button)
@@ -126,7 +130,6 @@ class CdPage(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self.table, 1)
-        layout.addWidget(bar)
 
     # ---- Filling --------------------------------------------------------------------
 
@@ -204,6 +207,7 @@ class CdPage(QWidget):
 
     def set_status(self, text: str):
         self.status.setText(text)
+        self.status_changed.emit(text)
 
     # ---- Your corrections ------------------------------------------------------------------
 

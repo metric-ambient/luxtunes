@@ -26,7 +26,8 @@ Your ratings, plays and playlists are kept in LuxTunes' library file.</li>
 pauses.</li>
 <li><b>Ctrl+→ / Ctrl+←</b> go to the next or previous song. <b>Ctrl+L</b> shows the song
 that's playing.</li>
-<li><b>Shuffle</b> and <b>Repeat</b> are under the sidebar and in the Controls menu.
+<li><b>Shuffle</b> and <b>Repeat</b> are either side of the playback buttons in the bottom
+bar (lit, with a dot under them, while on), and in the Controls menu.
 Repeat goes Off → All → One. LuxTunes remembers both. Shuffle mixes the whole list
 afresh each time and leans towards albums you haven't played or skipped anything from in
 the last two weeks; songs you heard in the last couple of days come last. In a big
@@ -52,7 +53,7 @@ your own playlists, plays and ratings. Giving songs a genre helps a lot.</li>
 interested) skips it, takes it off the mix and keeps it off mixes like it; taking a song
 off the mix any other way (Delete, Remove from Radio Mix) counts the same. Click ♥ or ⊘
 again to undo.</li>
-<li>Along the bottom: <b>Save as Playlist</b> keeps the mix as a playlist (shown with its
+<li>In the bottom bar, beside the playback buttons: <b>Save as Playlist</b> keeps the mix as a playlist (shown with its
 name ready to edit); <b>Refresh</b> makes a new mix; <b>Discover</b> (lit while it's on)
 prioritizes related songs you rarely or never play; <b>Likes &amp; Dislikes…</b> (also
 View → Radio Mix Likes &amp; Dislikes) lists every song you've liked or disliked, where
@@ -79,12 +80,47 @@ where LRCLIB has it).</li>
 album art in the corner → <b>View Full Size Album Art</b>. Resize its window as you like.</li>
 </ul>"""),
 
+    ("The window", "What's where", """
+<ul>
+<li><b>Along the top:</b> the library's sections as tabs (Music, Movies, TV Shows, Podcasts,
+Audiobooks), the song playing in the middle, then the views (List, Album, Grid, Carousel)
+and the search box.</li>
+<li><b>Along the bottom:</b> the album art (click it for the Pop-Out Player), the sleep
+timer's moon, shuffle, previous, play, next and repeat with the song's position, then the
+buttons for what's on screen (an iPod's <b>Sync</b>, a CD's <b>Import CD</b>, <b>Display
+All</b>, the Radio Mix's and podcasts' buttons), and the volume with your library's totals
+under it. Short messages show there for a moment.</li>
+<li>The <b>up arrow</b> beside the art opens it big, over the bottom-left corner; the
+<b>left arrow</b> above it folds the sidebar away (and brings it back), as does
+<b>View → Show Sidebar</b>. While the sidebar is folded, the art stays small.</li>
+<li><b>+</b> and the bolt beside <b>PLAYLISTS</b> make a new playlist or smart playlist.</li>
+</ul>"""),
+
+    ("Appearance", "Styles and colours (View → Appearance…)", """
+<ul>
+<li><b>View → Appearance…</b> chooses how LuxTunes looks, the same way as the LuxTunes app
+for Android: three styles, <b>Dark</b>, <b>Material</b> (the one LuxTunes starts with) and
+<b>Light</b>.</li>
+<li>Each style has its own <b>background</b>, <b>text</b> and <b>accent</b> colour. Click a
+colour to pick another: a suggestion, any colour (More Colours…) or a hex value. Everything
+else (bars, the sidebar, row stripes, buttons) is mixed from those three, so text stays
+readable. Right-click a style to put its colours back.</li>
+<li><b>Auto Accent</b> takes the accent from the playing song's album art, when the art has a
+colour that stands out on the background; otherwise your own accent is used.</li>
+<li>The accent marks what's selected and the song that's playing.</li>
+<li>On Linux, LuxTunes draws its own title bar in the style's colours, with the menus in it.
+Untick <i>LuxTunes' own title bar</i> in View → Appearance… for the desktop's own (from the
+next time LuxTunes opens).</li>
+</ul>
+"""),
     ("Sleep timer", "Stop the music after a while", """
 <ul>
-<li><b>Controls → Sleep Timer…</b> (Ctrl+Shift+S): choose 15, 30 or 60 minutes, or 2, 4 or
-8 hours. The window shows the time the music will stop.</li>
-<li>While it runs, a ☾ button beside the volume shows the time left. Click it (or choose
-<b>Controls → Turn Off Sleep Timer</b>) to turn it off.</li>
+<li>Click the moon in the bottom bar (beside the album art's arrow), or choose
+<b>Controls → Sleep Timer…</b> (Ctrl+Shift+S): a small list opens above the moon with 15, 30
+or 60 minutes, or 2, 4 or 8 hours, each with the time the music would stop. Click one to
+start; click anywhere else (or press Esc) to close the list.</li>
+<li>While the timer runs the moon is lit and shows the time left under it; click it (or
+choose <b>Controls → Turn Off Sleep Timer</b>) to turn it off.</li>
 <li>At the end the music fades out and pauses; press Play to carry on.</li>
 </ul>"""),
 
@@ -102,7 +138,8 @@ checks your songs in the background (shown in the display, with ✕ to pause it)
     ("Playlists", "Make and fill your own lists", """
 <ul>
 <li><b>File → New Playlist</b> (Ctrl+N), or <b>New Playlist from Selection</b>
-(Ctrl+Shift+N) with songs selected.</li>
+(Ctrl+Shift+N) with songs selected, or <b>+</b> beside <b>PLAYLISTS</b> in the sidebar (the
+bolt beside it makes a smart playlist).</li>
 <li>Drag songs onto a playlist in the sidebar (when you drag several, a small icon shows
 how many), or right-click → <b>Add to Playlist</b>, or copy and paste them (see
 <i>Cut, copy, paste and undo</i>).</li>
@@ -182,8 +219,11 @@ album. If MusicBrainz is busy, LuxTunes waits a moment and tries again.
 
     ("Movies, TV Shows, Podcasts, Audiobooks", "The Library sections", """
 <ul>
+<li>The library's sections are the tabs at the top left: <b>Music</b>, <b>Movies</b>,
+<b>TV Shows</b>, <b>Podcasts</b> and <b>Audiobooks</b>. Preferences → General → Sources
+chooses which show.</li>
 <li>Videos you add go to <b>Movies</b>. To make one a TV episode, use Get Info →
-Options → Media Kind, or drag it onto <b>TV Shows</b>.</li>
+Options → Media Kind, or drag it onto the <b>TV Shows</b> tab.</li>
 <li>Choose which sections show in <b>Edit → Preferences… → General</b>.</li>
 <li>Movies play inside the window; press <b>F</b> or the full-screen button for full screen, <b>Esc</b> to leave it.</li>
 <li>Right-click a video → <b>Create iPod Version</b> to make a copy an iPod can play.</li>
@@ -265,6 +305,12 @@ artists or albums is quick to go through. Ticked rows stay ticked while hidden.<
 original iPods. iPod touch can't be synced.</li>
 <li>Before syncing an iPod nano 6th or 7th generation, LuxTunes keeps a copy of its song
 list (in <i>~/.local/share/luxtunes/iPod backups</i>), in case it needs to be put back.</li>
+<li><b>New iPod sync engine (experimental):</b> Preferences → Advanced → <b>Use the new iPod
+sync engine</b> has LuxTunes write the iPod's song list, album artwork and signatures itself,
+in place of libgpod (ported from ZenPod). It works with every iPod above except the
+shuffles. With it on, a copy of the song list (and the artwork list) is kept before every
+sync, and what was written is read back to check it. An iPod nano 5th generation must have
+been synced with iTunes once, as with libgpod.</li>
 <li>Play counts and ratings from the iPod come back to your library.</li>
 <li><b>An iPod synced with another computer?</b> When it's plugged in, LuxTunes offers to
 add the songs on it that aren't in your library: they're copied into your library with
@@ -274,7 +320,7 @@ later, right-click the iPod → <b>Add Songs to Library…</b>. Songs bought fro
 Store with copy protection can't be played here, so they're left out.</li>
 <li>Songs on the iPod that are missing their album artwork get it back at the next
 sync.</li>
-<li>While it syncs, the iPod's <b>Sync</b> button becomes <b>Stop Sync</b>: it stops after
+<li>While it syncs, the iPod's <b>Sync</b> button (in the bottom bar) becomes <b>Stop Sync</b>: it stops after
 the song being copied, and what's already copied stays.</li>
 <li>Click the eject button next to the iPod before unplugging it.</li>
 <li><b>Rockbox or RepriseOS on the iPod too?</b> The iPod's Summary shows them under
@@ -305,7 +351,7 @@ tick, or just chosen playlists, artists, albums and genres.
 Everything goes in one <i>LuxTunes</i> folder that any music player can use.</li>
 <li><b>Delete media not in this selection</b> keeps the phone tidy. LuxTunes only ever
 touches its own folder.</li>
-<li>While it syncs, the phone's <b>Sync</b> button becomes <b>Stop Sync</b>. It stops
+<li>While it syncs, the phone's <b>Sync</b> button (in the bottom bar) becomes <b>Stop Sync</b>. It stops
 straight away, even partway through a big audiobook or a step like adding album covers;
 what's already copied stays, and the next sync carries on from there.</li>
 <li>If the phone stops responding partway through a file, LuxTunes gives up on that file
@@ -334,9 +380,12 @@ them back.</li>
 Trash) and lets you delete it for good, after asking again.</li>
 </ul>"""),
 
-    ("Views and finding things", "List, Album List, Grid, Cover Flow", """
+    ("Views and finding things", "List, Album, Grid, Carousel", """
 <ul>
-<li>Switch views with the buttons at the top or <b>View</b> (Ctrl+Shift+3 to 6).
+<li>Switch views with the buttons at the top right or <b>View</b> (Ctrl+Shift+3 to 6).
+<b>Album</b> groups each album's songs beside its art; <b>Carousel</b> shows the covers above
+the list (drag the divider to make them bigger or smaller), and follows a shuffle to the
+album playing.
 <b>View Options…</b> (Ctrl+J) and a right-click on the column headers choose columns.</li>
 <li>Click a column header to sort by it. Each Library section and playlist keeps its own
 sort, and where you'd scrolled to while LuxTunes is open.</li>
@@ -347,7 +396,8 @@ Artists and Featured Artist), Album, Composer or Song (All searches them all). I
 back to All each time LuxTunes starts.</li>
 <li>Each Library section (Music, Movies, TV Shows…) keeps its own columns and their
 order; playlists use Music's.</li>
-<li><b>File → Display Duplicates</b> and <b>Display Missing</b> help clean up.</li>
+<li><b>File → Display Duplicates</b> and <b>Display Missing</b> help clean up;
+<b>Display All</b> in the bottom bar goes back.</li>
 </ul>"""),
 
     ("Podcasts", "Subscribe to podcasts and get new episodes", """
@@ -360,13 +410,16 @@ since the last check. LuxTunes asks before going online, unless you allow it in
 <b>Preferences → Network</b>, where podcasts can also be refreshed when LuxTunes starts.</li>
 <li><b>File → Podcasts…</b> lists every episode each podcast offers: select older ones and click
 <b>Download</b>, or <b>Unsubscribe</b> (the episodes you downloaded stay).</li>
+<li>In the Podcasts section, <b>Subscribe…</b>, <b>Refresh</b> and <b>Podcasts…</b> are in the
+bottom bar too.</li>
 <li>An episode you delete isn't downloaded again. Only secure (https://) addresses are used.</li>
 </ul>"""),
 
     ("Updates and privacy", "Nothing goes online unless you allow it", """
 <ul>
 <li>LuxTunes only goes online when you agree: CD names, Get Track Info Online…, Get Lyrics
-Online…, podcasts, and updates. The status bar says whenever it connects.</li>
+Online…, podcasts, and updates. The bottom bar (where the library's totals are) says
+whenever it connects.</li>
 <li><b>Preferences → Network</b> lets each of those go ahead without asking (all off at
 first; turning one on tells you what it sends, and to whom). Updates can be checked, and
 podcasts refreshed, when LuxTunes starts. Each connection only lasts as long as that one

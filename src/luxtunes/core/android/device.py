@@ -20,6 +20,9 @@ PREFIX = "mtp:host="
 
 
 def gvfs_folder() -> Path:
+    """Where GNOME's file manager mounts phones (none on Windows: not supported there yet)."""
+    if not hasattr(os, "getuid"):
+        return Path(os.devnull) / "gvfs"
     return Path(f"/run/user/{os.getuid()}/gvfs")
 
 

@@ -2,7 +2,8 @@
 
   tabs      Summary · Music · Movies · TV Shows · Podcasts · Audiobooks · Photos · Games
   bottom    a capacity bar (Audio / Video / Photos / Other / Free, as it
-            will be after syncing) and Sync, or Revert + Apply after changes.
+            will be after syncing). Sync, or Revert + Apply after changes, are
+            in `actions`, which the window shows in its media bar.
 
 The page only edits a copy of the iPod's settings; Apply saves them and asks
 the main window to sync (signal sync_requested).
@@ -448,7 +449,7 @@ class DevicePage(QWidget):
             scroll.setWidget(content)
             self.pages.addWidget(scroll)
 
-        # Capacity bar and buttons along the bottom.
+        # The capacity bar along the bottom (its buttons are in the media bar).
         bottom = QWidget()
         bottom.setObjectName("capacityPanel")
         bottom_row = QHBoxLayout(bottom)
@@ -461,17 +462,22 @@ class DevicePage(QWidget):
         bar_column.addWidget(self.capacity_bar)
         bar_column.addWidget(self.warning)
         bottom_row.addLayout(bar_column, 1)
-        buttons = QVBoxLayout()
+        # Revert / Apply / Sync live in the window's media bar, beside the
+        # playback buttons, while this page is shown (main_window puts them there).
+        self.actions = QWidget()
+        self.actions.setObjectName("barGroup")
+        buttons = QHBoxLayout(self.actions)
+        buttons.setContentsMargins(0, 0, 0, 0)
+        buttons.setSpacing(6)
         self.revert_button = QPushButton("Revert")
         self.apply_button = QPushButton("Apply")
         self.sync_button = QPushButton("Sync")
         for button in (self.revert_button, self.apply_button, self.sync_button):
-            button.setMinimumWidth(90)
+            button.setMinimumWidth(80)
             buttons.addWidget(button)
         self.revert_button.clicked.connect(self.revert)
         self.apply_button.clicked.connect(self.apply)
         self.sync_button.clicked.connect(self._on_sync_button)
-        bottom_row.addLayout(buttons)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)

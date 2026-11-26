@@ -29,7 +29,6 @@ No Qt in here; the window runs the commands so it can show progress.
 from __future__ import annotations
 
 import os
-import shutil
 import sqlite3
 from pathlib import Path
 
@@ -83,7 +82,8 @@ def replace_original(conn: sqlite3.Connection, original_id: int, copy_id: int) -
 
 
 def ffmpeg_path() -> str | None:
-    return shutil.which("ffmpeg")
+    from luxtunes.core.paths import find_program
+    return find_program("ffmpeg")
 
 
 def audio_format(track: dict) -> str | None:

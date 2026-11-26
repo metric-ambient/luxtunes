@@ -1,20 +1,32 @@
 """Controls → Sleep Timer…: music stops after a while.
 
-The window offers 15, 30 and 60 minutes and 2, 4 and 8 hours, and shows the
-time (by the computer's clock) the music will stop. While the timer runs, a
-moon button beside the volume shows the time left; clicking it turns the timer
-off. At the end the music fades out over a few seconds and pauses, and the
-volume goes back to where it was.
+Clicking the moon in the media bar (or Controls → Sleep Timer…) opens a small
+pop-up that grows up from just above the moon: 15, 30 and 60 minutes and 2, 4
+and 8 hours, each with the time (by the computer's clock) the music would
+stop. Click one to start the timer; click anywhere else (or press Esc) and the
+pop-up goes away. While the timer runs, the moon shows the time left under it;
+clicking it turns the timer off. At the end the music fades out over a few
+seconds and pauses, and the volume goes back to where it was.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import QObject, QTimer, Signal
-from PySide6.QtWidgets import (
-    QButtonGroup, QDialog, QDialogButtonBox, QLabel, QRadioButton, QVBoxLayout,
+from PySide6.QtCore import (
+    QEasingCurve,
+    QObject,
+    QPoint,
+    QPropertyAnimation,
+    QRect,
+    QRectF,
+    QSize,
+    Qt,
+    QTimer,
+    Signal,
 )
+from PySide6.QtGui import QColor, QFont, QPainter
+from PySide6.QtWidgets import QAbstractButton, QFrame, QLabel, QVBoxLayout, QWidget
 
 CHOICES = [(15, "15 minutes"), (30, "30 minutes"), (60, "1 hour"), (120, "2 hours"),
            (240, "4 hours"), (480, "8 hours")]
@@ -35,44 +47,149 @@ def left_text(seconds: float) -> str:
     return f"{minutes}m" if minutes else "<1m"
 
 
-class SleepTimerDialog(QDialog):
-    def __init__(self, minutes: int = 30, parent=None):
+class SleepChoice(QAbstractButton):
+    """One line of the pop-up: "30 minutes" on the left, when the music would
+    stop on the right. The one chosen last time is in the accent colour."""
+
+    def __init__(self, minutes: int, label: str, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Sleep Timer")
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Stop playing music after:"))
-        self.group = QButtonGroup(self)
+        self.minutes = minutes
+        self.setText(label)
+        self.setCheckable(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName(f"{label}, until {self.end_text()}")
+
+    def end_text(self) -> str:
+        return clock(datetime.now() + timedelta(minutes=self.minutes))
+
+    def sizeHint(self):
+        metrics = self.fontMetrics()
+        return QSize(metrics.horizontalAdvance(self.text()) + metrics.horizontalAdvance("Tue 12:00 PM")
+                     + 56, max(30, metrics.height() + 14))
+
+    def enterEvent(self, event):
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.update()
+        super().leaveEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.click()
+        elif event.key() == Qt.Key.Key_Down:
+            self.focusNextChild()
+        elif event.key() == Qt.Key.Key_Up:
+            self.focusPreviousChild()
+        else:
+            super().keyPressEvent(event)
+
+    def paintEvent(self, event):
+        from luxtunes.ui import theme
+        colors = theme.current
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self.underMouse() or self.hasFocus():
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(colors["button_top"]))
+            p.drawRoundedRect(QRectF(self.rect()).adjusted(0, 1, 0, -1), 5, 5)
+        font = QFont(self.font())
+        font.setBold(self.isChecked())
+        p.setFont(font)
+        text_rect = self.rect().adjusted(12, 0, -12, 0)
+        p.setPen(QColor(colors["highlight"] if self.isChecked() else colors["text"]))
+        p.drawText(text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self.text())
+        p.setFont(self.font())
+        p.setPen(QColor(colors["text_dim"]))
+        p.drawText(text_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                   self.end_text())
+        p.end()
+
+
+class SleepTimerPopup(QWidget):
+    """The little pop-up above the moon. It closes itself when a time is
+    chosen, or on a click anywhere outside it (a Qt pop-up does that)."""
+    chosen = Signal(int)          # minutes
+    closed = Signal()
+
+    GROW_MS = 150
+
+    def __init__(self, minutes: int = 30, parent=None):
+        super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint
+                         | Qt.WindowType.NoDropShadowWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.body = QFrame(self)                 # the rounded panel; it stays at the bottom
+        self.body.setObjectName("sleepPopup")    # while the pop-up grows upwards
+        column = QVBoxLayout(self.body)
+        column.setContentsMargins(6, 8, 6, 6)
+        column.setSpacing(0)
+        title = QLabel("Stop the music after")
+        title.setObjectName("sleepPopupTitle")
+        title.setContentsMargins(12, 0, 12, 4)
+        column.addWidget(title)
+        self.choices: list[SleepChoice] = []
         for value, label in CHOICES:
-            button = QRadioButton(label)
-            self.group.addButton(button, value)
-            layout.addWidget(button)
-            button.setChecked(value == minutes)
-        if self.group.checkedId() < 0:
-            self.group.button(30).setChecked(True)
-        self.preview = QLabel()
-        font = self.preview.font()
-        font.setBold(True)
-        self.preview.setFont(font)
-        layout.addSpacing(6)
-        layout.addWidget(self.preview)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
-                                   | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-        self.group.idToggled.connect(lambda *_: self._update_preview())
-        self._clock = QTimer(self)                # keeps the preview right as time passes
-        self._clock.timeout.connect(self._update_preview)
-        self._clock.start(1000)
-        self._update_preview()
+            choice = SleepChoice(value, label)
+            choice.setChecked(value == minutes)
+            choice.clicked.connect(lambda _=False, v=value: self._choose(v))
+            column.addWidget(choice)
+            self.choices.append(choice)
+        self.body.setFixedSize(self.body.sizeHint())
+        self._clock = QTimer(self)               # keeps the times right as the minutes pass
+        self._clock.timeout.connect(lambda: [c.update() for c in self.choices])
+        self._clock.start(10_000)
+        self._grow = QPropertyAnimation(self, b"geometry", self)
+        self._grow.setDuration(self.GROW_MS)
+        self._grow.setEasingCurve(QEasingCurve.Type.OutCubic)
 
     @property
     def minutes(self) -> int:
-        return self.group.checkedId()
+        return next((c.minutes for c in self.choices if c.isChecked()), 30)
 
-    def _update_preview(self):
-        end = datetime.now() + timedelta(minutes=self.minutes)
-        self.preview.setText(f"Music will stop at {clock(end)}.")
+    def _choose(self, minutes: int):
+        for choice in self.choices:
+            choice.setChecked(choice.minutes == minutes)
+        self.chosen.emit(minutes)
+        self.close()
+
+    def open_above(self, anchor: QWidget | None, window: QWidget | None = None):
+        """Grow up from just above `anchor` (or open in the middle of `window`
+        when the anchor isn't on screen)."""
+        size = self.body.size()
+        if anchor is not None and anchor.isVisible():
+            top_left = anchor.mapToGlobal(QPoint(anchor.width() // 2 - size.width() // 2,
+                                                 -size.height() - 6))
+            screen = anchor.screen()
+        else:
+            host = window or self.parentWidget()
+            centre = host.mapToGlobal(host.rect().center()) if host else QPoint(400, 300)
+            top_left = centre - QPoint(size.width() // 2, size.height() // 2)
+            screen = host.screen() if host else None
+        if screen is not None:
+            area = screen.availableGeometry()
+            top_left.setX(max(area.left(), min(top_left.x(), area.right() - size.width())))
+            top_left.setY(max(area.top(), top_left.y()))
+        final = QRect(top_left, size)
+        start = QRect(final.left(), final.bottom(), final.width(), 1)
+        self.setGeometry(start)
+        self.show()
+        current = next((c for c in self.choices if c.isChecked()), self.choices[0])
+        current.setFocus()
+        self._grow.setStartValue(start)
+        self._grow.setEndValue(final)
+        self._grow.start()
+
+    def resizeEvent(self, event):
+        # The panel keeps its full size, pinned to the bottom: growing the
+        # window upwards uncovers it from the moon up.
+        self.body.move(0, self.height() - self.body.height())
+        super().resizeEvent(event)
+
+    def hideEvent(self, event):
+        self.closed.emit()
+        super().hideEvent(event)
 
 
 class SleepTimer(QObject):

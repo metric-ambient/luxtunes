@@ -169,3 +169,31 @@ def mark_synced(conn: sqlite3.Connection, device_id: int, name: str | None = Non
     with conn:
         conn.execute("UPDATE devices SET last_sync = ?, pending_name = NULL, "
                      "name = COALESCE(?, name) WHERE id = ?", (now_utc(), name, device_id))
+
+
+# ---- Which engine writes the iPod (Preferences → Advanced) ------------------------------
+
+NEW_ENGINE_KEY = "ipod.new_engine"
+
+
+def new_engine_chosen(conn: sqlite3.Connection) -> bool:
+    """"Use the new iPod sync engine (experimental)" is ticked."""
+    from luxtunes.core.db import get_setting
+    return get_setting(conn, NEW_ENGINE_KEY) == "1"
+
+
+def set_new_engine(conn: sqlite3.Connection, on: bool) -> None:
+    from luxtunes.core.db import set_setting
+    set_setting(conn, NEW_ENGINE_KEY, "1" if on else None)
+
+
+def engine_for(conn: sqlite3.Connection, family_key: str, signature: str) -> str:
+    """"itdb" (LuxTunes' own engine) or "gpod" (libgpod) for this iPod. The new
+    engine when chosen and it can write this iPod, or when there's no libgpod
+    (Windows); libgpod otherwise."""
+    from luxtunes.core.ipod import gpod
+    from luxtunes.core.ipod.itdb import database
+    if database.supports(family_key, signature) and (new_engine_chosen(conn)
+                                                      or not gpod.available()):
+        return "itdb"
+    return "gpod"

@@ -125,8 +125,13 @@ CREATE INDEX IF NOT EXISTS idx_playlist_items_track ON playlist_items (track_id)
 def default_db_path() -> Path:
     """Where the library lives unless told otherwise.
 
-    Follows the Linux convention (XDG): ~/.local/share/luxtunes/library.db
+    Follows the Linux convention (XDG): ~/.local/share/luxtunes/library.db.
+    On Windows it's Music\\LuxTunes\\library.db, where iTunes kept its library
+    (Music\\iTunes), so it's backed up with your music.
     """
+    from luxtunes.core.paths import WINDOWS
+    if WINDOWS and not os.environ.get("XDG_DATA_HOME"):
+        return Path.home() / "Music" / "LuxTunes" / "library.db"
     return data_home() / "luxtunes" / "library.db"
 
 
