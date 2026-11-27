@@ -7,8 +7,8 @@ back.
 
 > **Disclaimer**
 >
-> LuxTunes was written entirely by an AI, Claude Opus 5.5
-> ("vibe-coded"). For copyright purposes, **metric-ambient is the author** of this software.
+> LuxTunes was written entirely by Claude Opus 5.5.
+> For the purpose of copyright, **metric-ambient is the author** of this software.
 >
 > The code has not been reviewed line by line by a person. It reads and writes your music
 > files and their tags, organizes folders, writes to iPods and phones, and talks to the
@@ -19,10 +19,10 @@ back.
 > including fitness for a particular purpose. You run it at your own risk; the author is not
 > liable for any damage or data loss. See the [GPL-3.0 license](LICENSE), sections 15 and 16.
 
-[![Screenshot-from-2026-10-29-13-09-43.png](https://i.postimg.cc/rFrpmNQf/Screenshot-from-2026-10-29-13-09-43.png)](https://postimg.cc/Yht7DYcF)
-[![Screenshot-from-2026-10-29-13-16-25.png](https://i.postimg.cc/m2HrDy85/Screenshot-from-2026-10-29-13-16-25.png)](https://postimg.cc/3d3hfmMX)
-[![Screenshot-from-2026-10-29-13-19-08.png](https://i.postimg.cc/8P6C5mtY/Screenshot-from-2026-10-29-13-19-08.png)](https://postimg.cc/kB7CYKrN)
-[![Screenshot-from-2026-10-29-13-11-15.png](https://i.postimg.cc/BQKv6BM7/Screenshot-from-2026-10-29-13-11-15.png)](https://postimg.cc/fJMsqm4Y)
+[![List view](https://luxtunes.org/screenshots/list-view.png)](https://luxtunes.org/screenshots/list-view.png)
+[![Carousel](https://luxtunes.org/screenshots/carousel.png)](https://luxtunes.org/screenshots/carousel.png)
+[![iPod sync](https://luxtunes.org/screenshots/ipod.png)](https://luxtunes.org/screenshots/ipod.png)
+[![Pop-Out Player with lyrics](https://luxtunes.org/screenshots/lyrics.png)](https://luxtunes.org/screenshots/lyrics.png)
 
 ## Why LuxTunes?
 
@@ -198,10 +198,12 @@ desktop's support for phones plugged in by USB. Most desktops have it; on KDE, i
 | Window and preference settings | `~/.config/LuxTunes/LuxTunes.conf` |
 | Your music files (by default) | `~/Music/LuxTunes/LuxTunes Media` |
 
-To go back to a backup, choose **File → Library → Restore from Backup…**. Your library as
-it was is kept in the Backups folder first, so you can change your mind. The music
-folder can be moved anywhere in Preferences → Advanced; LuxTunes then looks for your songs
-there.
+**Restoring a backup:** choose **File → Library → Restore from Backup…** and pick a week.
+Before it restores, LuxTunes saves your library as it is right now into the Backups folder,
+so if you change your mind you can restore that copy the same way.
+
+**Moved your music folder?** Point LuxTunes at the new location in **Edit → Preferences… →
+Advanced** and it finds your songs there.
 
 ## For developers
 
@@ -252,7 +254,7 @@ src/luxtunes/
 packaging/         install.sh / uninstall.sh, appimage/ (the ready-to-run app)
 docs/              the LuxTunes folder format on Android devices (read by the Android app)
 tests/
-    fixtures/      small FAKE test data only, never real music or real library files
+    fixtures/      small test data only
 ```
 
 ## Credits
