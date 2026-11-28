@@ -842,7 +842,7 @@ def test_video_plays_inside_the_window(window):
     assert panel.controls.isVisible() and panel.close_button.isVisible()
     window._on_position(5000, 60000)
     assert panel.elapsed.text() == "0:05" and panel.remaining.text() == "-0:55"
-    # The controls float over the picture, centred near the bottom.
+    # The controls float over the picture, centered near the bottom.
     geo = panel.controls.geometry()
     assert abs(geo.center().x() - panel.width() // 2) <= 1 and geo.bottom() < panel.height()
 
@@ -2802,8 +2802,8 @@ def test_phone_rename_question(window, monkeypatch):
     assert "Lantern Valley" in shown[0] and "My Library" in shown[0]
 
 
-def test_view_appearance_styles_colours_and_auto_accent(window, tmp_path):
-    """View → Appearance…: three styles, each with its own colours, applied at
+def test_view_appearance_styles_colors_and_auto_accent(window, tmp_path):
+    """View → Appearance…: three styles, each with its own colors, applied at
     once and kept; Material's chosen tab is filled with the accent; Auto Accent
     from the art."""
     from dataclasses import replace
@@ -2822,7 +2822,7 @@ def test_view_appearance_styles_colours_and_auto_accent(window, tmp_path):
     assert f"background: {theme.LUX_BLUE}" in material["tab_checked"]    # the accent box
     assert f"background: {material['play_bg']}" in app.styleSheet()
     dialog.grab()
-    # A style's own colours, kept per style.
+    # A style's own colors, kept per style.
     look = window.look.with_colors("light", ("#FFFFFF", "#212121", "#43A047"))
     dialog._changed(replace(look, style="light"))
     assert window.look.of("light")[2] == "#43A047" and window.look.of("dark") == theme.DEFAULTS["dark"]
@@ -2837,7 +2837,7 @@ def test_view_appearance_styles_colours_and_auto_accent(window, tmp_path):
     again = theme.load_look(settings)
     assert (again.style, again.auto_accent, again.of("light")) == \
         ("material", False, theme.DEFAULTS["light"])
-    # Auto Accent: a colourful cover gives its colour; a grey one gives none.
+    # Auto Accent: a colorful cover gives its color; a grey one gives none.
     red = QImage(40, 40, QImage.Format.Format_RGB32)
     red.fill(QColor("#E53935"))
     assert QColor(theme.accent_from_image(red, "#000000")).red() > 200
@@ -2863,7 +2863,7 @@ def test_every_style_stays_readable():
 
 
 def test_new_layout_tabs_media_bar_and_art_corner(window):
-    """Library tabs at the top left, the display exactly centred, the media
+    """Library tabs at the top left, the display exactly centered, the media
     bar along the bottom (playback, position, sleep, volume, library stats)
     and the album art that opens over the bottom-left corner."""
     from PySide6.QtWidgets import QApplication
@@ -2877,8 +2877,8 @@ def test_new_layout_tabs_media_bar_and_art_corner(window):
     app.processEvents()
     assert window._current_source == SOURCE_MUSIC
     assert window.library_tabs[SOURCE_MUSIC].isChecked()
-    centre = window.lcd.mapTo(window, window.lcd.rect().center()).x()
-    assert abs(centre - window.width() / 2) <= 2                    # exactly in the middle
+    center = window.lcd.mapTo(window, window.lcd.rect().center()).x()
+    assert abs(center - window.width() / 2) <= 2                    # exactly in the middle
     assert window.media_bar.isVisible() and not window.statusBar().isVisible()
     assert window.summary_label.text()                              # the library stats
     window.statusBar().showMessage("Saved.", 1000)

@@ -53,7 +53,7 @@ def test_find_and_read_ipod(tmp_path):
     [ipod] = device.find_ipods(mounts)
     assert ipod.mountpoint == str(mount) and ipod.device == "/dev/sdb2"
     assert ipod.name == "IPOD" and ipod.song_count == 1234
-    assert ipod.model_name == "iPod classic (7th generation)" and ipod.colour == "black"
+    assert ipod.model_name == "iPod classic (7th generation)" and ipod.color == "black"
     assert ipod.serial == "TEST0000XYZ" and ipod.software_version == "2.0.4"
     assert ipod.key == "000A270012345678" and ipod.format_name == "Windows" and ipod.needs_hash
     space = device.space(ipod)
@@ -418,7 +418,7 @@ def test_libgpod_knows_every_model_number():
     models.model_table.cache_clear()
     nano = models.identify("MA004", "")
     assert nano.name == "iPod nano (1st generation)" and nano.capacity_label == "2 GB"
-    assert nano.colour == "white"
+    assert nano.color == "white"
     assert models.identify("M9282", "").name == "iPod (4th generation)"
     assert models.identify("MA079", "").family.photos                           # iPod photo
     # A nano 3G whose SysInfo doesn't say its model still gets signed.

@@ -64,7 +64,7 @@ class Player(QObject):
     problem = Signal(dict, str)        # track, message (e.g. a file that won't decode)
     file_missing = Signal(dict)        # you asked for this song, but its file is gone
     track_unavailable = Signal(dict)   # skipped during continuous play: file is gone
-    relocated = Signal(dict, str)      # found the file under different capitalisation
+    relocated = Signal(dict, str)      # found the file under different capitalization
     queue_changed = Signal()           # Up Next changed
     bookmark_changed = Signal(dict, int)  # "Remember playback position": where it stopped (ms)
 
@@ -494,7 +494,7 @@ class Player(QObject):
             pos += step
 
     def _locate(self, track: dict) -> str | None:
-        """The song's file path if it exists (fixing capitalisation if needed)."""
+        """The song's file path if it exists (fixing capitalization if needed)."""
         location = find_file(track.get("location"))
         if location is not None and location != track.get("location"):
             track["location"] = location

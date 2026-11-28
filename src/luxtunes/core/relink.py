@@ -2,7 +2,7 @@
 the remaining files in this location?").
 
 When you point LuxTunes at one missing song's file, the old and new paths
-usually differ in the same way for its neighbours: a drive or folder was
+usually differ in the same way for its neighbors: a drive or folder was
 renamed or moved ("E:/Users/Alex/Music" became "/home/alex/Music"). So,
 for every other missing song, we try, in order:
 

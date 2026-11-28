@@ -1,4 +1,4 @@
-"""View → Appearance…: the style (Dark, Material, Light), its three colours
+"""View → Appearance…: the style (Dark, Material, Light), its three colors
 (background, text, accent) and Auto Accent, as in the LuxTunes app for
 Android (its Settings → Appearance). Changes show at once and are kept."""
 
@@ -29,7 +29,7 @@ SLOTS = (("Background", 0, theme.BACKGROUND_SUGGESTIONS), ("Text", 1, theme.TEXT
 
 class StylePreview(QWidget):
     """A small drawing of the window in a style: toolbar, sidebar, a few rows
-    (one selected, one playing). Click to use it; right-click to reset its colours."""
+    (one selected, one playing). Click to use it; right-click to reset its colors."""
     chosen = Signal(str)
     reset = Signal(str)
 
@@ -39,7 +39,7 @@ class StylePreview(QWidget):
         self.colors = theme.DEFAULTS[style]
         self.selected = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip(f"Use {theme.STYLE_NAMES[style]}. Right-click to reset its colours.")
+        self.setToolTip(f"Use {theme.STYLE_NAMES[style]}. Right-click to reset its colors.")
         self.setFixedHeight(146)
         self.setMinimumWidth(150)
 
@@ -56,7 +56,7 @@ class StylePreview(QWidget):
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
-        menu.addAction(f"Reset {theme.STYLE_NAMES[self.style_key]} Colours",
+        menu.addAction(f"Reset {theme.STYLE_NAMES[self.style_key]} Colors",
                        lambda: self.reset.emit(self.style_key))
         menu.exec(event.globalPos())
 
@@ -105,8 +105,8 @@ class StylePreview(QWidget):
             elif i % 2:
                 p.setBrush(QColor(c["alt_base"]))
                 p.drawRect(row)
-            colour = c["highlight_text"] if i == 1 else c["now_playing_text"] if i == 3 else text
-            p.setBrush(QColor(colour))
+            color = c["highlight_text"] if i == 1 else c["now_playing_text"] if i == 3 else text
+            p.setBrush(QColor(color))
             p.drawRect(QRectF(left, y + 2, width * (0.7 if i % 2 else 0.5), 3))
         p.setPen(QColor(theme.current["text"] if self.selected else theme.current["text_dim"]))
         font = p.font()
@@ -118,7 +118,7 @@ class StylePreview(QWidget):
 
 
 class Swatch(QWidget):
-    """A colour in a circle."""
+    """A color in a circle."""
     clicked = Signal()
 
     def __init__(self, color: str, size: int = 34, parent=None):
@@ -147,7 +147,7 @@ class Swatch(QWidget):
 
 
 class ColorPicker(QDialog):
-    """Pick a colour: the app's suggestions, any colour (More Colours…), or a hex value."""
+    """Pick a color: the app's suggestions, any color (More Colors…), or a hex value."""
 
     def __init__(self, title: str, current: str, suggestions, parent=None):
         super().__init__(parent)
@@ -157,14 +157,14 @@ class ColorPicker(QDialog):
         layout = QVBoxLayout(self)
         grid = QGridLayout()
         self.swatches = []
-        for i, colour in enumerate(suggestions):
-            swatch = Swatch(colour)
-            swatch.setToolTip(colour)
-            swatch.clicked.connect(lambda c=colour: self._choose(c))
+        for i, color in enumerate(suggestions):
+            swatch = Swatch(color)
+            swatch.setToolTip(color)
+            swatch.clicked.connect(lambda c=color: self._choose(c))
             grid.addWidget(swatch, i // 5, i % 5)
             self.swatches.append(swatch)
         layout.addLayout(grid)
-        more = QPushButton("More Colours…")
+        more = QPushButton("More Colors…")
         more.clicked.connect(self._more)
         layout.addWidget(more)
         row = QHBoxLayout()
@@ -190,8 +190,8 @@ class ColorPicker(QDialog):
         layout.addWidget(buttons)
         self._choose(self.original)
 
-    def _choose(self, colour: str):
-        self.picked = colour.upper()
+    def _choose(self, color: str):
+        self.picked = color.upper()
         self.new.set_color(self.picked)
         if self.hex.text() != self.picked[1:]:
             self.hex.setText(self.picked[1:])
@@ -206,9 +206,9 @@ class ColorPicker(QDialog):
             self.ok.setEnabled(False)
 
     def _more(self):
-        colour = QColorDialog.getColor(QColor(self.picked), self, self.windowTitle())
-        if colour.isValid():
-            self._choose(colour.name())
+        color = QColorDialog.getColor(QColor(self.picked), self, self.windowTitle())
+        if color.isValid():
+            self._choose(color.name())
 
 
 class AppearanceWindow(QDialog):
@@ -231,24 +231,24 @@ class AppearanceWindow(QDialog):
             self.previews[style] = preview
         layout.addLayout(styles)
 
-        # The chosen style's three colours, side by side under the previews.
-        colours = QHBoxLayout()
+        # The chosen style's three colors, side by side under the previews.
+        colors = QHBoxLayout()
         self.rows = []
         for name, index, suggestions in SLOTS:
             swatch = Swatch("#000000", 30)
-            swatch.setToolTip(f"Choose the {name.lower()} colour")
+            swatch.setToolTip(f"Choose the {name.lower()} color")
             swatch.clicked.connect(lambda n=name, i=index, s=suggestions: self._edit(n, i, s))
             label = QLabel()
-            colours.addStretch(1)
-            colours.addWidget(swatch)
-            colours.addWidget(label)
+            colors.addStretch(1)
+            colors.addWidget(swatch)
+            colors.addWidget(label)
             self.rows.append((swatch, label, name))
-        colours.addStretch(1)
-        layout.addLayout(colours)
+        colors.addStretch(1)
+        layout.addLayout(colors)
 
         self.auto = QCheckBox("Auto Accent: take the accent from the playing song's album art")
-        self.auto.setToolTip("When the art has no colour that stands out on the background, your "
-                             "own accent colour is used. Works in all three styles.")
+        self.auto.setToolTip("When the art has no color that stands out on the background, your "
+                             "own accent color is used. Works in all three styles.")
         self.auto.toggled.connect(self._auto_toggled)
         layout.addWidget(self.auto)
 
@@ -288,7 +288,7 @@ class AppearanceWindow(QDialog):
     def _note(text: str) -> QLabel:
         label = QLabel(text)
         label.setWordWrap(True)
-        label.setObjectName("deviceNote")              # the dimmed note colour
+        label.setObjectName("deviceNote")              # the dimmed note color
         return label
 
     def _show(self):
@@ -301,7 +301,7 @@ class AppearanceWindow(QDialog):
         self.auto.blockSignals(True)
         self.auto.setChecked(self.look.auto_accent)
         self.auto.blockSignals(False)
-        self.reset_button.setText(f"Reset {theme.STYLE_NAMES[self.look.style]} Colours")
+        self.reset_button.setText(f"Reset {theme.STYLE_NAMES[self.look.style]} Colors")
 
     def _changed(self, look: theme.Look):
         self.look = look

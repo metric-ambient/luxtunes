@@ -6,7 +6,7 @@ button (♪ in the controls) lays the song's lyrics over the art; with timed
 lyrics (LRC, from Get Lyrics Online… or the file), the line being sung is
 highlighted and kept in the middle as the song plays. It opens
 at the picture's own size (up to 90% of the screen) and can be stretched
-bigger or smaller with the grip in the bottom-right corner. Colours come
+bigger or smaller with the grip in the bottom-right corner. Colors come
 from the app theme (light/dark) via the stylesheet in theme.py.
 """
 
@@ -253,7 +253,7 @@ class ArtworkWindow(QWidget):
         self.lyrics_view.setVisible(shown)
         self._layout_children()
         if shown and self._timed:
-            self._show_timed(lrc.line_at(self._timed, self._position))   # placed: now centre it
+            self._show_timed(lrc.line_at(self._timed, self._position))   # placed: now center it
         self.lyrics_toggled.emit(shown)
 
     def _center_lyrics(self):

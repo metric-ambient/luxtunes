@@ -15,7 +15,7 @@ FIXTURE = Path(__file__).parent / "fixtures" / "small_library.xml"
 def make_media_folder(tmp_path: Path) -> Path:
     """Create a fake 'LuxTunes Media' folder containing two of the fixture's files.
 
-    The album folder is deliberately capitalised differently from the XML
+    The album folder is deliberately capitalized differently from the XML
     ("first album" vs "First Album") to test case-insensitive matching.
     """
     media = tmp_path / "LuxTunes Media"

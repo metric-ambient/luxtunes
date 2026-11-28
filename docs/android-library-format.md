@@ -3,7 +3,7 @@
 LuxTunes syncs to an Android device over USB ("File transfer" mode). Everything goes in
 one folder, `LuxTunes`, at the top of the storage chosen on the device's page (the
 device's own storage or an SD card). Any music player can scan it; a player that wants
-ratings, play counts and playlists exactly as LuxTunes has them reads `library.db`.
+ratings, play counts, and playlists exactly as LuxTunes has them reads `library.db`.
 
 ```
 LuxTunes/
@@ -19,7 +19,7 @@ LuxTunes/
 ```
 
 Songs keep their own embedded artwork (also converted ones: "Convert higher bit rate
-songs" writes the details, lyrics and artwork back into the converted copy). Each album
+songs" writes the details, lyrics, and artwork back into the converted copy). Each album
 folder also gets a `cover.jpg` (or `.png`) from the first of its songs (in disc and track
 order) that has artwork, written as soon as a song with artwork is copied. When an album's
 songs carry different pictures (say the standard edition's cover on the first 12 and the
@@ -47,7 +47,7 @@ UTF-8 `.m3u8` files with `#EXTM3U`, `#PLAYLIST:<name>` and `#EXTINF:<seconds>,<a
 Treat it as read-only: LuxTunes replaces it at every sync, also one that's stopped
 part-way or cancelled at the sync question (it then lists exactly the songs on the
 phone). This page describes format version **2** (LuxTunes 0.6.0 and newer); version 1
-lacked the smart playlist rules, the extra song details and the reference tables.
+lacked the smart playlist rules, the extra song details, and the reference tables.
 
 | Table | Columns |
 |---|---|
@@ -84,7 +84,7 @@ them as playlists. A folder's songs are those of all its playlists.
 
 ### Equalizer
 
-Added in LuxTunes 0.7.0, within format version 2 (only new columns, a new table and new
+Added in LuxTunes 0.7.0, within format version 2 (only new columns, a new table, and new
 `info` keys, so earlier readers are unaffected).
 
 - `info.equalizer_on` is `1` or `0`; `info.equalizer_preset` is the chosen preset's name,
@@ -288,6 +288,6 @@ again while a sync is reading the file, the newer name stays in the file for the
 Right after merging (at the start of the sync), LuxTunes writes
 `{"version": 2, "tracks": [], "playlists": []}`. If the player wrote to the file in
 between, what it added is kept: plays and skips above what was merged, other ratings,
-other playlist entries, songs added since and edits that are new or different. An empty file means everything was delivered. A player should
+other playlist entries, songs added since, and edits that are new or different. An empty file means everything was delivered. A player should
 keep adding to the file between syncs, avoid writing while the phone is connected for
 file transfer, and start from the new `library.db` afterwards.

@@ -1,12 +1,12 @@
-"""Colour themes: View → Appearance…, as in the LuxTunes app for Android.
+"""Color themes: View → Appearance…, as in the LuxTunes app for Android.
 
-Three styles (Dark, Material, Light), each with three colours you choose:
-background, text and accent. Every other colour (bars, the sidebar, row
+Three styles (Dark, Material, Light), each with three colors you choose:
+background, text and accent. Every other color (bars, the sidebar, row
 stripes, buttons, dimmed text) is mixed from those, the same way the app
 mixes its own (its LuxPalette), so any choice stays readable. Material has
-an accent-coloured toolbar, as the app has an accent-coloured tab bar.
+an accent-colored toolbar, as the app has an accent-colored tab bar.
 With Auto Accent, the accent comes from the playing song's album art
-(accent_from_image, the app's AccentPicker), when the art has a colour that
+(accent_from_image, the app's AccentPicker), when the art has a color that
 stands out on the background.
 """
 
@@ -28,7 +28,7 @@ LUX_BLUE = "#0099CC"
 DEFAULTS = {"dark": ("#000000", "#FFFFFF", LUX_BLUE),
             "material": ("#303030", "#FFFFFF", LUX_BLUE),
             "light": ("#F1F5FA", "#000000", LUX_BLUE)}
-# The suggestions in the colour picker, as in the app.
+# The suggestions in the color picker, as in the app.
 ACCENT_SUGGESTIONS = ("#0099CC", "#1E88E5", "#00ACC1", "#26A69A", "#43A047",
                       "#FDD835", "#FB8C00", "#E53935", "#D81B60", "#8E24AA")
 BACKGROUND_SUGGESTIONS = ("#000000", "#121212", "#1E1F22", "#303030", "#1B2631",
@@ -87,7 +87,7 @@ def _valid(value, default: str) -> str:
         and value.startswith("#") and len(value) == 7 else default
 
 
-# ---- Mixing colours (as the app's LuxPalette) -----------------------------------------------
+# ---- Mixing colors (as the app's LuxPalette) -----------------------------------------------
 
 def mix(a: str, b: str, t: float) -> str:
     """From a (t = 0) towards b (t = 1)."""
@@ -118,7 +118,7 @@ def on_color(color: str) -> str:
 
 
 def build_colors(style: str, background: str, text: str, accent: str) -> dict:
-    """Every colour the stylesheet uses, from a style's three."""
+    """Every color the stylesheet uses, from a style's three."""
     light = luminance(background) > 0.5
     bar = mix(background, text, 0.075 if light else 0.12)          # chrome: the window, headers
     panel = mix(background, text, 0.12 if light else 0.17)         # the display, menus
@@ -126,7 +126,7 @@ def build_colors(style: str, background: str, text: str, accent: str) -> dict:
     border = mix(background, text, 0.2 if light else 0.24)
     on_accent = on_color(accent)
     material = style == "material"
-    # Dark: the background colour is the frame (toolbar, headers) and the lists
+    # Dark: the background color is the frame (toolbar, headers) and the lists
     # sit on the slightly lifted shade. Light and Material keep the app's way:
     # the background under the lists, the frame a shade off it.
     frame, content = (background, bar) if style == "dark" else (bar, background)
@@ -190,20 +190,20 @@ def build_colors(style: str, background: str, text: str, accent: str) -> dict:
     }
 
 
-current: dict = build_colors("material", *DEFAULTS["material"])     # the colours in use
+current: dict = build_colors("material", *DEFAULTS["material"])     # the colors in use
 
 
 # ---- Auto Accent (the app's AccentPicker) ----------------------------------------------------
 
 MIN_CONTRAST = 3.0          # against the background: the usual minimum for icons and lines
 _MIN_SHARE = 0.003          # specks smaller than this part of the picture don't count
-_COLORFUL = 0.15            # chroma that counts as a colour rather than a grey
+_COLORFUL = 0.15            # chroma that counts as a color rather than a grey
 
 
 def accent_from_image(image, background: str) -> str | None:
     """An accent from album art (a QImage) that stands out on `background`:
-    the cover's most prominent colour if it's colourful and readable, else its
-    strongest readable splash of colour, else None (only greys: the style's
+    the cover's most prominent color if it's colorful and readable, else its
+    strongest readable splash of color, else None (only greys: the style's
     own accent is used). Never a grey, so the accent can't look "off"."""
     if image is None or image.isNull():
         return None
@@ -395,7 +395,7 @@ QCheckBox::indicator:indeterminate, QAbstractItemView::indicator:indeterminate {
                                 stop:0.41 #ffffff, stop:0.59 #ffffff, stop:0.6 $highlight,
                                 stop:1 $highlight);
 }
-/* The song list's checkboxes stay quiet: a plain box with a tick in the text colour. */
+/* The song list's checkboxes stay quiet: a plain box with a tick in the text color. */
 QTableView::indicator:checked {
     background: $base; border-color: $indicator_border; image: url("$list_check_icon");
 }
@@ -418,6 +418,7 @@ QWidget#capacityPanel {
     background: $bottom_bar;
     border-top: 1px solid $border;
 }
+QLabel#hintNote { color: $text_dim; }      /* tips under options: the text, dimmed */
 QLabel#capacityWarning { color: $warning; font-weight: bold; }
 QWidget#cdBar {
     background: $bottom_bar;
@@ -590,7 +591,7 @@ QSplitter::handle { background: $border; }
 
 
 def text_color(dark: bool | None = None) -> QColor:
-    """The theme's text colour, read straight from the theme (the widgets'
+    """The theme's text color, read straight from the theme (the widgets'
     palettes only catch up after Qt processes the theme change)."""
     return QColor(current["text"])
 
@@ -605,7 +606,7 @@ def toolbar_icon_color() -> QColor:
 
 
 # Preferences → General → Grid View: the album wall dark or light. On the
-# matching kind of style it takes that style's colours; otherwise these.
+# matching kind of style it takes that style's colors; otherwise these.
 GRID_DARK = {"grid_bg": "#262729", "grid_line": "#222", "grid_tab_text": "#e6e6e6",
              "grid_tab_checked": "#1d1d1d", "grid_tab_border": "#555", "grid_tab_hover": "#484848",
              "grid_title": "#f2f2f2", "grid_subtitle": "#a8a8a8", "grid_empty_art": "#4a4a4a"}
@@ -616,7 +617,7 @@ grid_colors = dict(GRID_DARK)       # read by the Grid view when it paints
 
 
 def _grid_from(colors: dict) -> dict:
-    """The Grid in the style's own colours."""
+    """The Grid in the style's own colors."""
     background, text = colors["base"], colors["text"]
     return {"grid_bg": background, "grid_line": colors["border"], "grid_tab_text": text,
             "grid_tab_checked": colors["button_checked"], "grid_tab_border": colors["border"],
@@ -631,8 +632,8 @@ def now_playing_color() -> QColor:
 
 def apply_theme(app: QApplication, look: Look, grid_dark: bool = True,
                 accent: str | None = None) -> dict:
-    """Use this look. `accent`: Auto Accent's colour from the album art (None:
-    the style's own accent). Returns the colours in use."""
+    """Use this look. `accent`: Auto Accent's color from the album art (None:
+    the style's own accent). Returns the colors in use."""
     background, text, own_accent = look.current
     colors = build_colors(look.style, background, text, accent or own_accent)
     dark_style = not colors["light"]

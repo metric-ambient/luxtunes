@@ -1,12 +1,12 @@
 """The window's title bar in the style's light or dark, where the system lets
 an app ask for it. The title bar is drawn by the desktop, not by LuxTunes, so
-its exact colour can't be chosen; only its light or dark version:
+its exact color can't be chosen; only its light or dark version:
 
   - Linux (X11, e.g. Cinnamon on Linux Mint): each window is given the
     _GTK_THEME_VARIANT property ("dark" or "light"), which the window manager
     reads to draw that window's title bar from the dark or light version of
     your desktop theme, as it does for GTK apps;
-  - Windows and Wayland desktops: Qt's colour scheme, which Qt passes on.
+  - Windows and Wayland desktops: Qt's color scheme, which Qt passes on.
 """
 
 from __future__ import annotations

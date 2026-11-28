@@ -511,7 +511,7 @@ class InfoDialog(QDialog):
             "Shown after the song's name: “Song (ft. Ann, Bo)”.")
         self.artists_note = QLabel()
         self.artists_note.setWordWrap(True)
-        self.artists_note.setEnabled(False)          # greyed: just a note
+        self.artists_note.setObjectName("hintNote")      # a tip: the dimmed text color (theme.py)
         for key in ("year", "track_number", "track_count", "disc_number", "disc_count", "bpm"):
             self.edits[key] = _number_edit(56 if key == "year" else 44)
         self.comments = QPlainTextEdit()

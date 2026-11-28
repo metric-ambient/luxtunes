@@ -32,7 +32,7 @@ class IPod:
     name: str = ""                   # what you named the iPod
     model_number: str = ""
     model_name: str = ""
-    colour: str = ""
+    color: str = ""
     serial: str = ""
     firewire_guid: str = ""
     software_version: str = ""
@@ -178,7 +178,7 @@ def read_ipod(mountpoint: str, device: str = "", filesystem: str = "") -> IPod:
             import dataclasses
             ipod.identity = dataclasses.replace(ipod.identity, capacity_gb=size)
     ipod.model_name = ipod.identity.name
-    ipod.colour = ipod.identity.colour
+    ipod.color = ipod.identity.color
     ipod.serial = info.get("pszSerialNumber") or info.get("SerialNumber", "")
     guid = info.get("FirewireGuid") or info.get("FireWireGUID", "")
     if not guid and usb_serial:

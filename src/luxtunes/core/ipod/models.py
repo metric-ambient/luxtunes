@@ -34,7 +34,7 @@ class Family:
     note: str = ""                 # shown on the device page
 
 
-TOUCH = ("iPod touch, iPhone and iPad keep their music in a different way that "
+TOUCH = ("iPod touch, iPhone, and iPad keep their music in a different way that "
          "LuxTunes doesn't support.")
 HASH_AB_NOTE = ("New in LuxTunes: LuxTunes keeps a copy of this iPod's song list before each "
                 "sync, in case it needs to be put back.")
@@ -108,7 +108,7 @@ USB_PRODUCTS = {
 
 
 # The video iPods and classics, for when libgpod isn't there to ask:
-# model number -> (family, capacity GB, colour).
+# model number -> (family, capacity GB, color).
 BUILT_IN = {
     "A002": ("video_1", 30, "white"), "A146": ("video_1", 30, "black"),
     "A003": ("video_1", 60, "white"), "A147": ("video_1", 60, "black"),
@@ -149,7 +149,7 @@ class Identity:
     family_key: str
     family: Family
     capacity_gb: float | None = None       # as sold (None: unknown)
-    colour: str = ""                       # "black", "silver", "pink"...
+    color: str = ""                       # "black", "silver", "pink"...
 
     @property
     def name(self) -> str:
@@ -178,7 +178,7 @@ def model_table() -> dict:
             for number, capacity, name, generation in rows}
 
 
-def _colour(model_name: str) -> str:
+def _color(model_name: str) -> str:
     """ "Nano (Black)" -> "black"; "Video U2" -> "black" (the U2 editions are black)."""
     if "U2" in model_name:
         return "black"
@@ -192,12 +192,12 @@ def identify(model_number: str = "", usb_product: str = "") -> Identity:
     number = (model_number or "").upper()[-4:]
     known = model_table().get(number) if number else None
     if known is None and number in BUILT_IN:
-        key, capacity, colour = BUILT_IN[number]
-        return Identity(key, FAMILIES[key], capacity, colour)
+        key, capacity, color = BUILT_IN[number]
+        return Identity(key, FAMILIES[key], capacity, color)
     if known:
         capacity, name, generation = known
         key = GENERATIONS.get(generation, "unknown")
-        return Identity(key, FAMILIES[key], capacity, _colour(name))
+        return Identity(key, FAMILIES[key], capacity, _color(name))
     key = USB_PRODUCTS.get((usb_product or "").lower(), "unknown")
     return Identity(key, FAMILIES[key])
 

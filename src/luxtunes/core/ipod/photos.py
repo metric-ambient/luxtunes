@@ -166,8 +166,10 @@ def as_jpeg(path: str, folder: str) -> str | None:
     commands = []
     if Path(path).suffix.lower() in (".heic", ".heif") and shutil.which("heif-convert"):
         commands.append(["heif-convert", "-q", "92", path, target])
-    if shutil.which("ffmpeg"):
-        commands.append(["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-i", path,
+    from luxtunes.core.paths import find_program
+    ffmpeg = find_program("ffmpeg")                 # (also the one inside the AppImage)
+    if ffmpeg:
+        commands.append([ffmpeg, "-nostdin", "-loglevel", "error", "-y", "-i", path,
                          "-frames:v", "1", "-q:v", "2", target])
     for command in commands:
         try:

@@ -2,15 +2,15 @@
 
 The desktop's title bar is turned off and this one takes its place: the
 LuxTunes icon, File / Edit / View / Controls / Help, the window's name in the
-middle, and minimise, maximise and close on the right, all in the theme's
-colours. What the desktop's bar did still works:
+middle, and minimize, maximize and close on the right, all in the theme's
+colors. What the desktop's bar did still works:
 
   - drag the bar to move the window (handed to the desktop, so snapping to
     screen edges and moving between screens work as usual);
-  - double-click it to maximise or restore;
-  - right-click it for Minimise / Maximise / Close;
+  - double-click it to maximize or restore;
+  - right-click it for Minimize / Maximize / Close;
   - drag any edge or corner of the window to resize it (a thin border is kept
-    for that while the window isn't maximised);
+    for that while the window isn't maximized);
   - Alt and the menu letters still open the menus from the keyboard.
 
 Preferences can put the desktop's own title bar back (View → Appearance…),
@@ -45,9 +45,9 @@ def _window_icon(kind: str, color: str, size: int = 12) -> QIcon:
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setPen(QPen(QColor(color), 1.3))
         s = size
-        if kind == "minimise":
+        if kind == "minimize":
             p.drawLine(QRectF(1, s / 2, s - 2, 0).topLeft(), QRectF(1, s / 2, s - 2, 0).topRight())
-        elif kind == "maximise":
+        elif kind == "maximize":
             p.drawRect(QRectF(1.5, 1.5, s - 3, s - 3))
         elif kind == "restore":
             p.drawRect(QRectF(1.5, 3.5, s - 5, s - 5))
@@ -78,7 +78,7 @@ class TitleBar(QWidget):
         self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         window.windowTitleChanged.connect(self.title.setText)
         self.buttons = {}
-        for kind, tip in (("minimise", "Minimise"), ("maximise", "Maximise"), ("close", "Close")):
+        for kind, tip in (("minimize", "Minimize"), ("maximize", "Maximize"), ("close", "Close")):
             button = QToolButton()
             button.setObjectName("closeButton" if kind == "close" else "windowButton")
             button.setToolTip(tip)
@@ -86,8 +86,8 @@ class TitleBar(QWidget):
             button.setFixedSize(46, 34)
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             self.buttons[kind] = button
-        self.buttons["minimise"].clicked.connect(window.showMinimized)
-        self.buttons["maximise"].clicked.connect(self.toggle_maximised)
+        self.buttons["minimize"].clicked.connect(window.showMinimized)
+        self.buttons["maximize"].clicked.connect(self.toggle_maximized)
         self.buttons["close"].clicked.connect(window.close)
 
         # Menus on the left, the name in the exact middle, the buttons on the right.
@@ -117,24 +117,24 @@ class TitleBar(QWidget):
         row.addWidget(right, 1)
 
     def refresh(self, colors: dict):
-        """Icons in the theme's colours (after a theme change)."""
+        """Icons in the theme's colors (after a theme change)."""
         text = colors["text"]
         icon = self.window_.windowIcon()
         self.app_icon.setPixmap(icon.pixmap(18, 18) if not icon.isNull() else QPixmap())
-        self.buttons["minimise"].setIcon(_window_icon("minimise", text))
+        self.buttons["minimize"].setIcon(_window_icon("minimize", text))
         self.buttons["close"].setIcon(_window_icon("close", text))
-        self.update_maximised(colors)
+        self.update_maximized(colors)
 
-    def update_maximised(self, colors: dict | None = None):
+    def update_maximized(self, colors: dict | None = None):
         from luxtunes.ui import theme
         colors = colors or theme.current
-        maximised = self.window_.isMaximized()
-        button = self.buttons["maximise"]
-        button.setIcon(_window_icon("restore" if maximised else "maximise", colors["text"]))
-        button.setToolTip("Restore" if maximised else "Maximise")
+        maximized = self.window_.isMaximized()
+        button = self.buttons["maximize"]
+        button.setIcon(_window_icon("restore" if maximized else "maximize", colors["text"]))
+        button.setToolTip("Restore" if maximized else "Maximize")
         button.setAccessibleName(button.toolTip())
 
-    def toggle_maximised(self):
+    def toggle_maximized(self):
         if self.window_.isMaximized():
             self.window_.showNormal()
         else:
@@ -151,14 +151,14 @@ class TitleBar(QWidget):
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self.toggle_maximised()
+            self.toggle_maximized()
             event.accept()
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
-        menu.addAction("Minimise", self.window_.showMinimized)
-        menu.addAction("Restore" if self.window_.isMaximized() else "Maximise",
-                       self.toggle_maximised)
+        menu.addAction("Minimize", self.window_.showMinimized)
+        menu.addAction("Restore" if self.window_.isMaximized() else "Maximize",
+                       self.toggle_maximized)
         menu.addSeparator()
         menu.addAction("Close", self.window_.close)
         menu.exec(event.globalPos())
@@ -194,7 +194,7 @@ class Frame:
     def update_margins(self):
         edge = 0 if self.window.isMaximized() or self.window.isFullScreen() else EDGE
         self.window.setContentsMargins(edge, edge, edge, edge)
-        self.title_bar.update_maximised()
+        self.title_bar.update_maximized()
 
     def edges_at(self, pos: QPoint):
         w = self.window

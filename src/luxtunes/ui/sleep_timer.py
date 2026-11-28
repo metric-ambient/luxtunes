@@ -49,7 +49,7 @@ def left_text(seconds: float) -> str:
 
 class SleepChoice(QAbstractButton):
     """One line of the pop-up: "30 minutes" on the left, when the music would
-    stop on the right. The one chosen last time is in the accent colour."""
+    stop on the right. The one chosen last time is in the accent color."""
 
     def __init__(self, minutes: int, label: str, parent=None):
         super().__init__(parent)
@@ -164,8 +164,8 @@ class SleepTimerPopup(QWidget):
             screen = anchor.screen()
         else:
             host = window or self.parentWidget()
-            centre = host.mapToGlobal(host.rect().center()) if host else QPoint(400, 300)
-            top_left = centre - QPoint(size.width() // 2, size.height() // 2)
+            center = host.mapToGlobal(host.rect().center()) if host else QPoint(400, 300)
+            top_left = center - QPoint(size.width() // 2, size.height() // 2)
             screen = host.screen() if host else None
         if screen is not None:
             area = screen.availableGeometry()

@@ -52,7 +52,7 @@ from luxtunes.ui.widgets import playlist_icon
 
 TABS = ("Summary", "Music", "Movies", "TV Shows", "Podcasts", "Audiobooks", "Photos", "Games")
 
-COLOURS = {"Audio": "#4b9be6", "Video": "#a95fcd", "Photos": "#ef8650", "Other": "#e7c638",
+COLORS = {"Audio": "#4b9be6", "Video": "#a95fcd", "Photos": "#ef8650", "Other": "#e7c638",
            "Free": "#5d6574"}
 
 
@@ -200,8 +200,8 @@ def checked_keys(widget: QListWidget) -> list:
             if widget.item(i).checkState() == Qt.CheckState.Checked]
 
 
-# Body colours for the iPod picture (from the model's colour name).
-BODY_COLOURS = {
+# Body colors for the iPod picture (from the model's color name).
+BODY_COLORS = {
     "black": "#2c2c2e", "white": "#f2f2f3", "silver": "#d9dbde", "grayscale": "#f2f2f3",
     "color": "#f2f2f3", "stainless": "#cfd1d4", "pink": "#e9a6c3", "blue": "#7cafdd",
     "green": "#a0cf85", "gold": "#d9c58b", "red": "#c8333c", "yellow": "#e7d35b",
@@ -242,17 +242,17 @@ FAMILY_SHAPES = {
 
 class IPodPicture(QWidget):
     """A drawn iPod for the Summary tab, shaped like the kind of iPod it is
-    (classic, mini, nano, shuffle...) and in its colour."""
+    (classic, mini, nano, shuffle...) and in its color."""
 
-    def __init__(self, colour: str = "black", family: str = "", parent=None):
+    def __init__(self, color: str = "black", family: str = "", parent=None):
         super().__init__(parent)
-        self.colour = colour
+        self.color = color
         self.family = family
         self.setFixedSize(110, 140)
 
     @property
-    def default_colour(self) -> str:
-        """When the model's colour isn't known: the colour most of its kind came in."""
+    def default_color(self) -> str:
+        """When the model's color isn't known: the color most of its kind came in."""
         if self.family.startswith(("mini", "nano", "shuffle")):
             return "silver"
         if self.family in ("first", "second", "third", "fourth", "photo"):
@@ -268,8 +268,8 @@ class IPodPicture(QWidget):
         try:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             shape = self.shape
-            base = QColor(BODY_COLOURS.get((self.colour or "").lower(),
-                                           BODY_COLOURS[self.default_colour]))
+            base = QColor(BODY_COLORS.get((self.color or "").lower(),
+                                           BODY_COLORS[self.default_color]))
             dark = base.lightness() < 110
             x, y, w, h, radius = shape["body"]
             body = QRectF(x, y, w, h)
@@ -327,7 +327,7 @@ class IPodPicture(QWidget):
 
 
 class CapacityBar(QWidget):
-    """The rounded bar at the bottom with its coloured legend."""
+    """The rounded bar at the bottom with its colored legend."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -347,7 +347,7 @@ class CapacityBar(QWidget):
             path = QPainterPath()
             path.addRoundedRect(bar, 6, 6)
             painter.setPen(QPen(QColor("#2e3440"), 1))
-            painter.setBrush(QColor(COLOURS["Free"]))
+            painter.setBrush(QColor(COLORS["Free"]))
             painter.drawPath(path)
             painter.setClipPath(path)
             x = bar.left()
@@ -357,9 +357,9 @@ class CapacityBar(QWidget):
                     continue
                 width = bar.width() * min(size, total) / total
                 fill = QLinearGradient(0, bar.top(), 0, bar.bottom())
-                colour = QColor(COLOURS[name])
-                fill.setColorAt(0, colour.lighter(125))
-                fill.setColorAt(1, colour.darker(110))
+                color = QColor(COLORS[name])
+                fill.setColorAt(0, color.lighter(125))
+                fill.setColorAt(1, color.darker(110))
                 painter.fillRect(QRectF(x, bar.top(), width, bar.height()), fill)
                 x += width
             painter.setClipping(False)
@@ -377,7 +377,7 @@ class CapacityBar(QWidget):
                 if size <= 0 and name not in ("Free", "Other"):
                     continue
                 painter.setPen(QPen(QColor("#2e3440"), 1))
-                painter.setBrush(QColor(COLOURS[name]))
+                painter.setBrush(QColor(COLORS[name]))
                 painter.drawRoundedRect(QRectF(legend_x, 42, 11, 11), 2, 2)
                 painter.setPen(QColor("white"))
                 painter.setFont(bold)
@@ -847,7 +847,7 @@ class DevicePage(QWidget):
 
     def hidden_tabs(self) -> set[str]:
         """Tabs that don't apply: a phone has no Photos or Games; an iPod
-        without video has no Movies or TV Shows, one without a colour screen
+        without video has no Movies or TV Shows, one without a color screen
         no Photos."""
         if self.is_android:
             return {"Photos", "Games"}
@@ -887,7 +887,7 @@ class DevicePage(QWidget):
             self._fill_phone_summary()
             return
         ipod = self.ipod
-        self.picture.colour = ipod.colour or ""
+        self.picture.color = ipod.color or ""
         identity = getattr(ipod, "identity", None)
         self.picture.family = identity.family_key if identity is not None else ""
         self.picture.update()
@@ -1368,7 +1368,7 @@ class DevicePage(QWidget):
                 why = "Tick the folders below whose photos should go on the iPod."
             else:
                 why = (f"No photos found in {s.photos_folder}. LuxTunes looks for JPEG, PNG, "
-                       "HEIC, WebP, GIF, BMP and TIFF files in it and the folders inside it.")
+                       "HEIC, WebP, GIF, BMP, and TIFF files in it and the folders inside it.")
             self.photos_off_note.setText(why)
             self.photos_off_note.show()
         elif s.sync_photos:

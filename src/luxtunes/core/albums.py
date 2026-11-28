@@ -65,7 +65,7 @@ def album_key(track: dict) -> tuple:
 
 
 def consecutive_groups(tracks: list[dict]) -> list[tuple[int, int]]:
-    """Runs of neighbouring songs from the same album, as (first_row, count).
+    """Runs of neighboring songs from the same album, as (first_row, count).
     Used by Album List view: each run gets one album cell beside it."""
     groups = []
     start = 0

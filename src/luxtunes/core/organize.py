@@ -18,7 +18,7 @@ thousand songs:
     extension) to 36, then trailing spaces are removed.
   * / \\ : * ? " < > | ; and curly quotes become "_". A leading "." becomes
     "_", and so does a trailing "." on a folder name.
-  * Folder names are matched ignoring capitalisation (Windows ignores it),
+  * Folder names are matched ignoring capitalization (Windows ignores it),
     so "Storm!" and "STORM!" share one folder, whichever exists first.
   * If another file already has the name, " 1", " 2", ... is added.
 
@@ -98,7 +98,7 @@ def relocate_media_folder(conn: sqlite3.Connection, old: str | os.PathLike,
             relative = Path(location).relative_to(old_root)
         except ValueError:
             continue                                  # not in the old folder
-        target = find_file(str(new_root / relative))  # also finds a different capitalisation
+        target = find_file(str(new_root / relative))  # also finds a different capitalization
         if target is None:
             result.not_found += 1
         else:
@@ -291,7 +291,7 @@ def apply_move(conn: sqlite3.Connection, move: Move, root: Path | None = None) -
         if target.exists() and not _same_file(source, target):
             raise OrganizeError(f"{target.name} already exists")
         if _same_file(source, target):
-            # Only the capitalisation changes: go through a temporary name.
+            # Only the capitalization changes: go through a temporary name.
             temporary = source.with_name(source.name + ".luxtunes-rename")
             os.rename(source, temporary)
             os.rename(temporary, target)

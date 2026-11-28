@@ -1,11 +1,11 @@
 """Carousel (View → as Carousel; called "cover flow" inside the code): album
-covers in a row on black, the centred one facing you and the others turned
+covers in a row on black, the centered one facing you and the others turned
 sideways, with reflections underneath.
 
 - Scroll with the scrollbar, the mouse wheel or the arrow keys, or click a
-  side cover: it glides to the centre and `album_centered` is sent, so the
+  side cover: it glides to the center and `album_centered` is sent, so the
   song list below can highlight that album's first song.
-- Double-click the centre cover to play the album.
+- Double-click the center cover to play the album.
 - center_on_track() moves it quietly (no signal) when you pick a song in the list.
 """
 
@@ -19,11 +19,11 @@ from luxtunes.core.albums import album_key
 from luxtunes.ui.art_cache import ART_CACHE
 
 ART_LOAD_SIZE = 320       # art is loaded at this size and scaled when drawn
-VISIBLE_EACH_SIDE = 7     # how many covers are drawn left and right of the centre
+VISIBLE_EACH_SIDE = 7     # how many covers are drawn left and right of the center
 # Proportions (all as fractions of the front cover's size):
 SIDE_WIDTH = 0.62         # a turned cover's visible width
 SIDE_SPACING = 0.18       # how far apart the stacked side covers are
-FIRST_GAP = 0.81          # centre of the first side cover, from the middle (touches the front cover)
+FIRST_GAP = 0.81          # center of the first side cover, from the middle (touches the front cover)
 OUTER_EDGE = 0.94         # height of a side cover's outer edge (it faces you)
 INNER_EDGE = 0.72         # height of its inner edge (it recedes behind the front cover)
 
@@ -78,7 +78,7 @@ class CoverFlow(QWidget):
     # ---- Data -------------------------------------------------------------------
 
     def set_albums(self, albums: list[dict]):
-        """Show these albums (in this order), keeping the current one centred if possible."""
+        """Show these albums (in this order), keeping the current one centered if possible."""
         current_key = self.albums[self._target]["key"] if self.albums else None
         self.albums = albums
         self._index_of_key = {a["key"]: i for i, a in enumerate(albums)}
@@ -209,7 +209,7 @@ class CoverFlow(QWidget):
         fade.setColorAt(1.0, QColor(0, 0, 0, 255))
         painter.fillRect(QRectF(0, floor, self.width(), self.height() - floor), fade)
 
-        # Title and artist of the centred album.
+        # Title and artist of the centered album.
         album = self.albums[self._target]
         bold = QFont(self.font())
         bold.setBold(True)
@@ -225,22 +225,22 @@ class CoverFlow(QWidget):
                          album["subtitle"])
 
     def _draw_cover(self, painter, index, offset, cx, top, size):
-        """offset = how far this cover is from the centre, in albums (can be fractional)."""
+        """offset = how far this cover is from the center, in albums (can be fractional)."""
         distance = abs(offset)
         side = 1 if offset > 0 else -1
         turn = min(1.0, distance)                    # 0 = facing you, 1 = fully turned
         width = size * (1 - turn * (1 - SIDE_WIDTH))
         if distance <= 1:
-            centre_x = cx + side * distance * size * FIRST_GAP
+            center_x = cx + side * distance * size * FIRST_GAP
         else:
-            centre_x = cx + side * (size * FIRST_GAP + (distance - 1) * size * SIDE_SPACING)
+            center_x = cx + side * (size * FIRST_GAP + (distance - 1) * size * SIDE_SPACING)
         # Side covers face inward: the OUTER edge is toward you and
         # the INNER edge (next to the front cover) recedes. Both shrink evenly
         # above and below the middle line, as real perspective does.
         outer_h = size * (1 - turn * (1 - OUTER_EDGE))
         inner_h = size * (1 - turn * (1 - INNER_EDGE))
         middle = top + size / 2
-        left_x, right_x = centre_x - width / 2, centre_x + width / 2
+        left_x, right_x = center_x - width / 2, center_x + width / 2
         if side > 0:   # on the right: the left edge is the inner one
             left_h, right_h = inner_h, outer_h
         else:          # on the left: the right edge is the inner one

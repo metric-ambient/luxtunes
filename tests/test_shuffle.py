@@ -6,7 +6,7 @@ from collections import Counter
 from luxtunes.core.shuffle import spread_shuffle
 
 
-def same_artist_neighbours(order, key):
+def same_artist_neighbors(order, key):
     return sum(1 for a, b in zip(order, order[1:]) if key(a) == key(b))
 
 
@@ -27,8 +27,8 @@ def test_spreads_artists_apart():
         rng = random.Random(seed)
         plain = songs[:]
         rng.shuffle(plain)
-        plain_total += same_artist_neighbours(plain, key)
-        spread_total += same_artist_neighbours(spread_shuffle(songs, key, random.Random(seed)), key)
+        plain_total += same_artist_neighbors(plain, key)
+        spread_total += same_artist_neighbors(spread_shuffle(songs, key, random.Random(seed)), key)
     assert spread_total < plain_total / 3
 
 
@@ -54,7 +54,7 @@ def test_albums_and_artists_are_kept_apart():
                            rng=random.Random(3))
     assert sorted(order) == sorted(songs)
     body = order[:-20]               # (the last few songs are whatever is left over)
-    assert same_artist_neighbours(body, lambda s: s[0]) == 0
+    assert same_artist_neighbors(body, lambda s: s[0]) == 0
     near = sum(1 for i in range(len(body)) for back in range(1, shuffle.ALBUM_GAP + 1)
                if i >= back and body[i][1] == body[i - back][1])
     assert near == 0

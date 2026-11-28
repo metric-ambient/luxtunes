@@ -161,7 +161,7 @@ class JumpSlider(QSlider):
 
 class ScrollingLabel(QWidget):
     """One line of text that scrolls sideways when it doesn't fit (pausing at
-    the start of each pass); centred and still when it does."""
+    the start of each pass); centered and still when it does."""
 
     STEP_MS = 30          # one pixel per step
     PAUSE_MS = 2000       # rest at the start before scrolling again
@@ -516,19 +516,19 @@ def cd_icon() -> QIcon:
 
 def radio_icon() -> QIcon:
     """PLAYING → Radio Mix: two joined notes inside a circular arrow (a mix of
-    songs that keeps going), drawn here in the text colour. Not a radio, a
+    songs that keeps going), drawn here in the text color. Not a radio, a
     Wi-Fi signal or sparkles: nothing about it goes online or is "AI"."""
     import math
     from PySide6.QtGui import QBrush, QPainter, QPixmap, QPolygonF
     size = 64
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
-    colour = QApplication.palette().color(QPalette.ColorRole.WindowText)
+    color = QApplication.palette().color(QPalette.ColorRole.WindowText)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     # The loop: a circle of radius 26 round the middle, open at the top right
     # (Qt's angles go anticlockwise from 3 o'clock, in 16ths of a degree).
-    painter.setPen(QPen(colour, 4))
+    painter.setPen(QPen(color, 4))
     painter.drawArc(QRectF(6, 6, 52, 52), 20 * 16, -310 * 16)
     # Its arrowhead, pointing clockwise where the loop ends.
     angle = math.radians(-70)
@@ -536,7 +536,7 @@ def radio_icon() -> QIcon:
     along = (math.cos(angle + math.pi / 2), math.sin(angle + math.pi / 2))
     out = (math.cos(angle), math.sin(angle))
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QBrush(colour))
+    painter.setBrush(QBrush(color))
     painter.drawPolygon(QPolygonF([QPointF(x + along[0] * 8, y + along[1] * 8),
                                    QPointF(x + out[0] * 6, y + out[1] * 6),
                                    QPointF(x - out[0] * 6, y - out[1] * 6)]))
@@ -544,13 +544,13 @@ def radio_icon() -> QIcon:
     heads = (QPointF(24.5, 40.5), QPointF(40.5, 36.5))
     for head in heads:
         painter.drawEllipse(head, 4.8, 3.6)
-    stem = QPen(colour, 2.5)
+    stem = QPen(color, 2.5)
     stem.setCapStyle(Qt.PenCapStyle.FlatCap)
     painter.setPen(stem)
     tops = [QPointF(h.x() + 4.2, h.y() - 16.8) for h in heads]
     for head, top in zip(heads, tops):
         painter.drawLine(QPointF(head.x() + 4.2, head.y()), top)
-    beam = QPen(colour, 4.2)
+    beam = QPen(color, 4.2)
     beam.setCapStyle(Qt.PenCapStyle.FlatCap)
     painter.setPen(beam)
     painter.drawLine(tops[0], tops[1])
@@ -560,7 +560,7 @@ def radio_icon() -> QIcon:
 
 def playlist_icon(p: dict) -> QIcon:
     """The sidebar icon for a playlist, as in the LuxTunes app: a folder, a
-    bolt in the accent colour (smart) or the playlist icon (QueueMusic)."""
+    bolt in the accent color (smart) or the playlist icon (QueueMusic)."""
     from luxtunes.ui import line_icons, theme
     if p["is_folder"]:
         return themed_icon(["folder"], QStyle.StandardPixmap.SP_DirIcon)
@@ -572,7 +572,7 @@ def playlist_icon(p: dict) -> QIcon:
 EJECT_WIDTH = 22
 
 
-def draw_sync_arrows(painter, colour, cx: float, cy: float, angle: float) -> None:
+def draw_sync_arrows(painter, color, cx: float, cy: float, angle: float) -> None:
     """The "syncing" symbol shown instead of eject: a thin ring split into two
     arcs that chase each other clockwise, each ending in an arrowhead that
     points inwards off the ring. Turned by `angle` degrees (it spins)."""
@@ -586,7 +586,7 @@ def draw_sync_arrows(painter, colour, cx: float, cy: float, angle: float) -> Non
     painter.translate(cx, cy)
     painter.rotate(angle)
     # A fresh pen: the one the painter has may be switched off (Qt.NoPen).
-    pen = QPen(colour, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap)
+    pen = QPen(color, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap)
     ring = QRectF(-radius, -radius, 2 * radius, 2 * radius)
     for tail in (126, -54):                          # the two arcs, half a turn apart
         end = tail - span                            # each runs clockwise from its tail
@@ -594,7 +594,7 @@ def draw_sync_arrows(painter, colour, cx: float, cy: float, angle: float) -> Non
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawArc(ring, int(end * 16), int(span * 16))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(colour)
+        painter.setBrush(color)
         painter.drawPolygon(QPolygonF([point(radius + width / 2, end),
                                        point(radius - inner, end),
                                        point(radius + 0.1, end - tip_angle)]))
@@ -649,15 +649,15 @@ class SidebarDelegate(QStyledItemDelegate):
         painter.save()
         try:
             painter.setRenderHint(painter.RenderHint.Antialiasing)
-            colour = opt.palette.color(QPalette.ColorRole.HighlightedText if selected
+            color = opt.palette.color(QPalette.ColorRole.HighlightedText if selected
                                        else QPalette.ColorRole.Text)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(colour)
+            painter.setBrush(color)
             cx = opt.rect.right() - EJECT_WIDTH // 2
             cy = opt.rect.center().y()
             sidebar = self.parent()
             if sidebar is not None and sidebar.is_busy(source[1]):
-                draw_sync_arrows(painter, colour, cx, cy, sidebar.spin_angle)
+                draw_sync_arrows(painter, color, cx, cy, sidebar.spin_angle)
                 return
             painter.drawPolygon(QPolygonF([QPointF(cx - 5, cy + 1), QPointF(cx + 5, cy + 1),
                                            QPointF(cx, cy - 5)]))

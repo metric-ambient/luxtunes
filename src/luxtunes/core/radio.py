@@ -354,7 +354,7 @@ def scores(conn, library_tracks: list[dict], radio: Radio, seeds: list[dict]) ->
         year = math.exp(-abs(track["year"] - seed_year) / 10) \
             if seed_year and track.get("year") else 0.0
         # Your listening only counts as far as the song is related at all, so a
-        # favourite from another genre doesn't land on every radio.
+        # favorite from another genre doesn't land on every radio.
         related = max(genre, artist, 0.25 if not near else 0.0)
         personal = (w["playlist"] * shared + w["plays"] * plays + w["unheard"] * (1 - plays)
                     + w["rating"] * rating + w["year"] * year)

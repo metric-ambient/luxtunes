@@ -38,9 +38,9 @@ def state_icon(state: str | None) -> QIcon:
     painter = QPainter(pixmap)
     try:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        colour = {"importing": "#f39a1e", "done": "#46a83a", "failed": "#d23c32"}[state]
+        color = {"importing": "#f39a1e", "done": "#46a83a", "failed": "#d23c32"}[state]
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(colour))
+        painter.setBrush(QColor(color))
         painter.drawEllipse(QRectF(2, 2, 24, 24))
         pen = QPen(QColor("white"), 3)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)

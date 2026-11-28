@@ -1,7 +1,7 @@
 """The line icons of the top and bottom bars (library tabs, views, shuffle,
-repeat, sleep, volume…), drawn in the theme's colours from small SVGs, so
+repeat, sleep, volume…), drawn in the theme's colors from small SVGs, so
 they suit any background. A two-state icon is dim while off, and in the
-accent (with a dot under it, so on/off isn't told by colour alone) while on.
+accent (with a dot under it, so on/off isn't told by color alone) while on.
 """
 
 from __future__ import annotations
@@ -103,7 +103,7 @@ def icon(name: str, color: str, size: int = 20) -> QIcon:
 
 def toggle_icon(name: str, off_color: str, on_color: str, size: int = 22,
                 dot_when_on: bool = True, on_width: float = 2) -> QIcon:
-    """Dim while off; the on colour plus a dot under it while on (a checkable
+    """Dim while off; the on color plus a dot under it while on (a checkable
     button's state), its lines on_width wide. Both the same size: size wide,
     size + DOT_ROOM tall."""
     result = QIcon()
@@ -115,7 +115,7 @@ def toggle_icon(name: str, off_color: str, on_color: str, size: int = 22,
 
 
 def tab_icon(name: str, off_color: str, on_color: str, size: int = 20) -> QIcon:
-    """A tab's icon: dim while not chosen, the chosen colour while it is (no dot:
+    """A tab's icon: dim while not chosen, the chosen color while it is (no dot:
     a chosen tab has its own accent bar or box)."""
     return toggle_icon(name, off_color, on_color, size, dot_when_on=False)
 

@@ -1,7 +1,7 @@
 """Edit → Preferences (Ctrl+,).
 
 General: the library's name, which sources show in the sidebar, text sizes,
-the Grid view's colour, source icons and list checkboxes, and what happens
+the Grid view's color, source icons and list checkboxes, and what happens
 when you insert a CD (plus Import Settings…) and the sounds when an import
 or an iPod sync ends.
 Advanced: the LuxTunes Media folder and keeping it organized.
@@ -280,7 +280,7 @@ class PreferencesDialog(QDialog):
                              (self.mini_on_top, on_top_note)):
             note.setWordWrap(True)
             note.setContentsMargins(24, 0, 0, 0)
-            note.setEnabled(False)
+            note.setObjectName("hintNote")      # a tip: the dimmed text color (theme.py)
             layout.addWidget(widget)
             if widget is self.crossfade:
                 layout.addLayout(fade_row)
@@ -311,7 +311,7 @@ class PreferencesDialog(QDialog):
                       "is renamed or moved.")
         note.setWordWrap(True)
         note.setContentsMargins(24, 0, 0, 0)
-        note.setEnabled(False)            # lighter grey, like the Playback notes
+        note.setObjectName("hintNote")      # a tip: the dimmed text color (theme.py)
 
         self.move_files = QCheckBox("Move original files on import")
         self.move_files.setChecked(add_files.move_when_adding(self.conn))
@@ -322,7 +322,7 @@ class PreferencesDialog(QDialog):
                            "don't stay behind.")
         move_note.setWordWrap(True)
         move_note.setContentsMargins(24, 0, 0, 0)
-        move_note.setEnabled(False)            # lighter grey, like the Playback notes
+        move_note.setObjectName("hintNote")      # a tip: the dimmed text color (theme.py)
 
         self.delete_original = QCheckBox("Delete original after conversion")
         self.delete_original.setChecked(convert.delete_original(self.conn))
@@ -332,7 +332,7 @@ class PreferencesDialog(QDialog):
                              "playlists.")
         delete_note.setWordWrap(True)
         delete_note.setContentsMargins(24, 0, 0, 0)
-        delete_note.setEnabled(False)            # lighter grey, like the Playback notes
+        delete_note.setObjectName("hintNote")      # a tip: the dimmed text color (theme.py)
 
         from luxtunes.core.ipod import settings as ipod_settings
         self.new_engine = QCheckBox("Use the new iPod sync engine (experimental)")
@@ -343,7 +343,7 @@ class PreferencesDialog(QDialog):
                              "libgpod. A copy of the iPod's song list is kept before each sync.")
         engine_note.setWordWrap(True)
         engine_note.setContentsMargins(24, 0, 0, 0)
-        engine_note.setEnabled(False)            # lighter grey, like the Playback notes
+        engine_note.setObjectName("hintNote")      # a tip: the dimmed text color (theme.py)
 
         layout = QVBoxLayout(page)
         layout.addWidget(box)
@@ -390,7 +390,7 @@ class PreferencesDialog(QDialog):
                       "→ Get Track Info Online… or Get Lyrics Online…); ticking them just skips the "
                       "question. Updates are never installed without asking.")
         note.setWordWrap(True)
-        note.setEnabled(False)            # lighter grey, like the other notes
+        note.setObjectName("hintNote")      # a tip: the dimmed text color (theme.py)
         layout.addSpacing(6)
         layout.addWidget(note)
         layout.addStretch(1)

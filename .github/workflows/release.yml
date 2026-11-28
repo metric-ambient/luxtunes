@@ -7,7 +7,8 @@
 #
 # Safety: actions are pinned to exact commits (a tag can be moved), every
 # package is pinned in packaging/build-constraints.txt, appimagetool is pinned
-# with its checksum (build.sh), and the repository token isn't left on disk for
+# with its checksum (build.sh), FFmpeg and what it's built with are checked
+# against their signature, checksum or commit (build_ffmpeg.sh), and the repository token isn't left on disk for
 # the tests and builds to find: only the steps that publish are given it.
 name: Release
 
@@ -80,7 +81,8 @@ jobs:
 
       - name: Build the AppImage
         run: |
-          sudo apt-get update -q && sudo apt-get install -y -q libxcb-cursor0 desktop-file-utils
+          sudo apt-get update -q && sudo apt-get install -y -q libxcb-cursor0 desktop-file-utils \
+            build-essential nasm pkg-config zlib1g-dev gnupg
           python -m pip install -q -c packaging/build-constraints.txt . pyinstaller
           bash packaging/appimage/build.sh
 

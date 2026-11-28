@@ -5,7 +5,7 @@ A Python translation of hashab by Dylan Staley (https://github.com/dstaley/hasha
 who reverse-engineered it from iPod nano 6th generation firmware and released
 the C code under the Unlicense. Its lookup tables are in hashab_tables.py,
 copied unchanged from that code. The EDON-R function it uses comes, through
-hashab, from RHash's edonr.c by Aleksey Kravchenko (permissive licence).
+hashab, from RHash's edonr.c by Aleksey Kravchenko (permissive license).
 Thank you to both: without their work no iPod nano 6th or 7th generation
 could be synced outside iTunes.
 

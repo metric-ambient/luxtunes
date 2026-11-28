@@ -263,7 +263,7 @@ class MainWindow(QMainWindow):
         self._phone_tries: dict[str, int] = {}  # phone address -> times we tried to open it
         self._mount_tries: dict[str, int] = {}  # iPod partition -> times we tried to mount it
         self.look = theme.Look()                 # View → Appearance… (read with the settings)
-        self._auto_accent: str | None = None     # Auto Accent's colour from the playing song's art
+        self._auto_accent: str | None = None     # Auto Accent's color from the playing song's art
         self._accent_token = None
         self._mount_ejected: set[str] = set()   # ejected here: left alone until replugged
         self._mounting: set[str] = set()        # iPods and phones being opened right now
@@ -337,7 +337,7 @@ class MainWindow(QMainWindow):
     # ======================================================================
 
     def _build_ui(self):
-        # ---- Top bar: library tabs · the display (exactly centred) · views, search --
+        # ---- Top bar: library tabs · the display (exactly centered) · views, search --
         # The two sides always share the room equally, so the display stays in
         # the middle of the window whatever is on either side.
         toolbar = QWidget()
@@ -429,7 +429,7 @@ class MainWindow(QMainWindow):
         right_row.addWidget(self.search, 1)
         bar.addWidget(top_right, 1)
         # Both sides as wide as the views and search need: the display fills the
-        # rest, out to the views, and stays centred (the search shrinks first).
+        # rest, out to the views, and stays centered (the search shrinks first).
         self.top_sizer = TopBarSizer(toolbar, top_left, top_right, bar)
 
         # ---- Media bar along the bottom: art, sleep · playback and position · the
@@ -648,7 +648,7 @@ class MainWindow(QMainWindow):
         self.drill_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         drill.addWidget(self.drill_back)
         drill.addWidget(self.drill_title, 1)
-        drill.addSpacing(self.drill_back.sizeHint().width())   # keeps the title centred
+        drill.addSpacing(self.drill_back.sizeHint().width())   # keeps the title centered
         self.drill_bar.hide()
 
         songs_page = QWidget()
@@ -1701,7 +1701,7 @@ class MainWindow(QMainWindow):
         self._refresh_transport_icons()
 
     def _refresh_transport_icons(self):
-        """Previous, play/pause/stop and next, drawn in the theme's colours."""
+        """Previous, play/pause/stop and next, drawn in the theme's colors."""
         colors = theme.current
         plain = colors["text"]
         self.prev_button.setIcon(line_icons.icon("skip_previous", plain, 28))
@@ -2218,7 +2218,7 @@ class MainWindow(QMainWindow):
             "Get Track Info Online",
             f"Look up {'“' + tracks[0].get('name', '') + '”' if count == 1 else f'{count:,} songs'} "
             "on the internet?",
-            "LuxTunes will send the song names, artists and album names to MusicBrainz, a free "
+            "LuxTunes will send the song names, artists, and album names to MusicBrainz, a free "
             "online music database, and download suggested corrections, plus missing album covers "
             "from the Cover Art Archive. You'll see every change before anything is saved."
             + (f"\n\nThis takes about {max(1, lookups * 2 // 60)} minute(s): MusicBrainz allows "
@@ -2270,7 +2270,7 @@ class MainWindow(QMainWindow):
             "Get Lyrics Online",
             f"Look up lyrics for {'“' + tracks[0].get('name', '') + '”' if count == 1 else f'{count:,} songs'} "
             "on the internet?",
-            "LuxTunes will send the song names, artists, albums and lengths to LRCLIB, a free "
+            "LuxTunes will send the song names, artists, albums, and lengths to LRCLIB, a free "
             "online lyrics library, and download the lyrics it has. Songs that already have "
             "lyrics keep them; where LRCLIB knows when each line is sung, the Pop-Out Player "
             "highlights it as the song plays.",
@@ -2414,7 +2414,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "LuxTunes Media Folder", "\n\n".join(lines))
 
     def _apply_appearance(self):
-        """Preferences → General: text sizes, icons, checkboxes, Grid colour,
+        """Preferences → General: text sizes, icons, checkboxes, Grid color,
         which sources show, and the library's name in the title bar."""
         look = appearance(self.settings)
         self._apply_colors(look["grid_dark"])
@@ -2435,7 +2435,7 @@ class MainWindow(QMainWindow):
         formatting.set_group_compilations(look["group_compilations"])
         if self._table_layout == "album":
             self.table.refresh_album_layout()
-        for part in [self.grid, *self.grid.findChildren(QWidget)]:   # repaint in the new colours
+        for part in [self.grid, *self.grid.findChildren(QWidget)]:   # repaint in the new colors
             part.update()
         self._refresh_view_icons()
         self.setWindowTitle(f"LuxTunes — {library.library_name(self.conn)}")
@@ -2530,7 +2530,7 @@ class MainWindow(QMainWindow):
         answer = QMessageBox.warning(
             self, "Restore from Backup",
             f"Replace your library with “{Path(path).name}” ({songs:,} items)?\n\n"
-            "Ratings, play counts, playlists and edits made since that backup will be "
+            "Ratings, play counts, playlists, and edits made since that backup will be "
             "replaced by the backup's. Your library as it is now is kept in the Backups "
             "folder first, so you can go back to it the same way. Your music files aren't "
             "touched.",
@@ -5346,7 +5346,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue("recent_tracks", self._recent)
 
     def _media_icon(self, movie: bool) -> QIcon:
-        """A small music note or film strip, drawn in the menu's text colour."""
+        """A small music note or film strip, drawn in the menu's text color."""
         color = self.palette().color(QPalette.ColorRole.Text)
         pixmap = QPixmap(16, 16)
         pixmap.fill(QColor(0, 0, 0, 0))
@@ -5536,7 +5536,7 @@ class MainWindow(QMainWindow):
     # ---- View → Appearance… (as in the app) ---------------------------------------------
 
     def _apply_colors(self, grid_dark: bool | None = None):
-        """The chosen style and colours, with Auto Accent's colour when it has one."""
+        """The chosen style and colors, with Auto Accent's color when it has one."""
         if grid_dark is None:
             grid_dark = appearance(self.settings)["grid_dark"]
         accent = self._auto_accent if self.look.auto_accent else None
@@ -5545,7 +5545,7 @@ class MainWindow(QMainWindow):
         title_bar.set_dark(QApplication.instance(), not theme.current["light"])
         if self.frame is not None:
             self.frame.title_bar.refresh(theme.current)
-        for part in [self.grid, *self.grid.findChildren(QWidget)]:   # repaint in the new colours
+        for part in [self.grid, *self.grid.findChildren(QWidget)]:   # repaint in the new colors
             part.update()
         self.table.viewport().update()
 
@@ -5559,7 +5559,7 @@ class MainWindow(QMainWindow):
         self._apply_colors()
         self._refresh_view_icons()
         if style_changed:
-            self.reload_library()                  # re-colour the sidebar section titles
+            self.reload_library()                  # re-color the sidebar section titles
 
     def _show_appearance(self):
         from luxtunes.ui.appearance_window import AppearanceWindow
@@ -5570,18 +5570,18 @@ class MainWindow(QMainWindow):
         self._appearance_window.activateWindow()
 
     def _find_auto_accent(self, track: dict | None):
-        """Auto Accent: a colour from the playing song's art, found off the window's thread."""
+        """Auto Accent: a color from the playing song's art, found off the window's thread."""
         if not self.look.auto_accent:
             return
         location = (track or {}).get("location")
-        background_colour = self.look.current[0]
+        background_color = self.look.current[0]
         token = object()
         self._accent_token = token
 
         def work():
             from luxtunes.ui.art_cache import load_image
             image = load_image(location, 96) if location else None
-            return theme.accent_from_image(image, background_colour)
+            return theme.accent_from_image(image, background_color)
 
         def done(result):
             if self._accent_token is not token:
@@ -5971,7 +5971,7 @@ class MainWindow(QMainWindow):
         answer = QMessageBox.question(
             self, "Remove LuxTunes",
             "Remove LuxTunes from the applications menu and delete it from your Applications "
-            "folder?\n\nYour library, playlists, settings and music files are kept, so they're "
+            "folder?\n\nYour library, playlists, settings, and music files are kept, so they're "
             "all there if you install LuxTunes again.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No)

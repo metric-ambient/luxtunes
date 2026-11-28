@@ -222,7 +222,7 @@ class RuleRow(QWidget):
             self.field.setEnabled(False)
             self.op.setEnabled(False)
             note = QLabel("kept as it is")
-            note.setEnabled(False)
+            note.setObjectName("hintNote")      # a tip: the dimmed text color (theme.py)
             self.value_slot.addWidget(note)
             return
         for f in FIELD_ORDER:

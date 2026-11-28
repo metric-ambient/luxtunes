@@ -102,7 +102,7 @@ def integrate(appimage: Path) -> Path:
         "Type=Application\n"
         "Name=LuxTunes\n"
         "GenericName=Music Player\n"
-        "Comment=Play and organize your music, import CDs and sync your iPod\n"
+        "Comment=Play and organize your music, import CDs, and sync your iPod\n"
         f"Exec={_quote(target)} %U\n"
         "Icon=luxtunes\n"
         "Terminal=false\n"

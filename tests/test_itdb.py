@@ -22,7 +22,7 @@ GUID = "000A27001387CE50"
 
 
 def png(rgb=(200, 30, 30), w=40, h=30) -> bytes:
-    """A small one-colour PNG, made by hand (no image library needed)."""
+    """A small one-color PNG, made by hand (no image library needed)."""
     def block(kind, data):
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
     rows = b"".join(b"\0" + bytes(rgb) * w for _ in range(h))

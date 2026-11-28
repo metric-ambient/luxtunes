@@ -1,15 +1,15 @@
 """The short guides in Help → LuxTunes Help: (title, what it's about, the guide).
 
-Each guide is a few lines of simple HTML. Keep them short, friendly and true to
+Each guide is a few lines of simple HTML. Keep them short, friendly, and true to
 the menus as they are; update a guide when its feature changes.
 """
 
 GUIDES = [
     ("Getting started", "Bring your music in", """
-<p>LuxTunes keeps your music, movies, TV shows, podcasts and audiobooks in one library.</p>
+<p>LuxTunes keeps your music, movies, TV shows, podcasts, and audiobooks in one library.</p>
 <ul>
 <li><b>Coming from an iTunes library?</b> Choose <b>File → Library → Import iTunes Library…</b>
-and pick its <i>iTunes Music Library.xml</i> file. Your songs, ratings, play counts and
+and pick its <i>iTunes Music Library.xml</i> file. Your songs, ratings, play counts, and
 playlists (smart ones too) come along.</li>
 <li><b>Adding files:</b> <b>File → Add File to Library…</b> (Ctrl+O) or
 <b>Add Folder to Library…</b>. Adding happens in the background; the display at the top
@@ -17,10 +17,10 @@ shows progress, with ✕ to stop.</li>
 <li>What you add is copied into your LuxTunes Media folder, so your whole library lives in
 one place; the originals stay where they were. Or turn off <b>Keep LuxTunes Media folder
 organized</b> and songs stay where they are (see <i>Your LuxTunes Media folder</i>).
-Your ratings, plays and playlists are kept in LuxTunes' library file.</li>
+Your ratings, plays, and playlists are kept in LuxTunes' library file.</li>
 </ul>"""),
 
-    ("Playing music", "Play, shuffle, repeat and Up Next", """
+    ("Playing music", "Play, shuffle, repeat, and Up Next", """
 <ul>
 <li>Double-click a song, or select it and press <b>Enter</b>. <b>Space</b> plays and
 pauses.</li>
@@ -47,10 +47,10 @@ the list plays and what plays next follows it.</li>
 or <b>From This Artist</b>. A mix of related songs from your library starts playing, under
 <i>PLAYING → Radio Mix</i> (“Ember Lane Radio”, say). Starting another one replaces it.</li>
 <li>Songs are related by genre (LuxTunes knows how about 3,300 genres connect), helped by
-your own playlists, plays and ratings. Giving songs a genre helps a lot.</li>
+your own playlists, plays, and ratings. Giving songs a genre helps a lot.</li>
 <li>It starts with 50 songs and keeps adding more near the end, so it doesn't stop.</li>
 <li>In front of each song: <b>♥</b> likes it on mixes like this one; <b>⊘</b> (not
-interested) skips it, takes it off the mix and keeps it off mixes like it; taking a song
+interested) skips it, takes it off the mix, and keeps it off mixes like it; taking a song
 off the mix any other way (Delete, Remove from Radio Mix) counts the same. Click ♥ or ⊘
 again to undo.</li>
 <li>In the bottom bar, beside the playback buttons: <b>Save as Playlist</b> keeps the mix as a playlist (shown with its
@@ -83,12 +83,12 @@ album art in the corner → <b>View Full Size Album Art</b>. Resize its window a
     ("The window", "What's where", """
 <ul>
 <li><b>Along the top:</b> the library's sections as tabs (Music, Movies, TV Shows, Podcasts,
-Audiobooks), the song playing in the middle, then the views (List, Album, Grid, Carousel)
+Audiobooks), the song playing in the middle, then the views (List, Album, Grid, Carousel),
 and the search box.</li>
 <li><b>Along the bottom:</b> the album art (click it for the Pop-Out Player), the sleep
-timer's moon, shuffle, previous, play, next and repeat with the song's position, then the
+timer's moon, shuffle, previous, play, next, and repeat with the song's position, then the
 buttons for what's on screen (an iPod's <b>Sync</b>, a CD's <b>Import CD</b>, <b>Display
-All</b>, the Radio Mix's and podcasts' buttons), and the volume with your library's totals
+All</b>, and the Radio Mix's and podcasts' buttons), and the volume with your library's totals
 under it. Short messages show there for a moment.</li>
 <li>The <b>up arrow</b> beside the art opens it big, over the bottom-left corner; the
 <b>left arrow</b> above it folds the sidebar away (and brings it back), as does
@@ -96,19 +96,19 @@ under it. Short messages show there for a moment.</li>
 <li><b>+</b> and the bolt beside <b>PLAYLISTS</b> make a new playlist or smart playlist.</li>
 </ul>"""),
 
-    ("Appearance", "Styles and colours (View → Appearance…)", """
+    ("Appearance", "Styles and colors (View → Appearance…)", """
 <ul>
 <li><b>View → Appearance…</b> chooses how LuxTunes looks, the same way as the LuxTunes app
 for Android: three styles, <b>Dark</b>, <b>Material</b> (the one LuxTunes starts with) and
 <b>Light</b>.</li>
-<li>Each style has its own <b>background</b>, <b>text</b> and <b>accent</b> colour. Click a
-colour to pick another: a suggestion, any colour (More Colours…) or a hex value. Everything
+<li>Each style has its own <b>background</b>, <b>text</b> and <b>accent</b> color. Click a
+color to pick another: a suggestion, any color (More Colors…), or a hex value. Everything
 else (bars, the sidebar, row stripes, buttons) is mixed from those three, so text stays
-readable. Right-click a style to put its colours back.</li>
+readable. Right-click a style to put its colors back.</li>
 <li><b>Auto Accent</b> takes the accent from the playing song's album art, when the art has a
-colour that stands out on the background; otherwise your own accent is used.</li>
+color that stands out on the background; otherwise your own accent is used.</li>
 <li>The accent marks what's selected and the song that's playing.</li>
-<li>On Linux, LuxTunes draws its own title bar in the style's colours, with the menus in it.
+<li>On Linux, LuxTunes draws its own title bar in the style's colors, with the menus in it.
 Untick <i>LuxTunes' own title bar</i> in View → Appearance… for the desktop's own (from the
 next time LuxTunes opens).</li>
 </ul>
@@ -116,15 +116,15 @@ next time LuxTunes opens).</li>
     ("Sleep timer", "Stop the music after a while", """
 <ul>
 <li>Click the moon in the bottom bar (beside the album art's arrow), or choose
-<b>Controls → Sleep Timer…</b> (Ctrl+Shift+S): a small list opens above the moon with 15, 30
-or 60 minutes, or 2, 4 or 8 hours, each with the time the music would stop. Click one to
+<b>Controls → Sleep Timer…</b> (Ctrl+Shift+S): a small list opens above the moon with 15, 30,
+or 60 minutes, or 2, 4, or 8 hours, each with the time the music would stop. Click one to
 start; click anywhere else (or press Esc) to close the list.</li>
 <li>While the timer runs the moon is lit and shows the time left under it; click it (or
 choose <b>Controls → Turn Off Sleep Timer</b>) to turn it off.</li>
 <li>At the end the music fades out and pauses; press Play to carry on.</li>
 </ul>"""),
 
-    ("Crossfade, gapless and Sound Check", "Edit → Preferences… → Playback", """
+    ("Crossfade, gapless, and Sound Check", "Edit → Preferences… → Playback", """
 <ul>
 <li><b>Crossfade songs</b> (1 to 15 seconds): the next song fades in as the current one
 fades out.</li>
@@ -159,7 +159,7 @@ the songs.</li>
 it.</li>
 </ul>"""),
 
-    ("Cut, copy, paste and undo", "The Edit menu", """
+    ("Cut, copy, paste, and undo", "The Edit menu", """
 <ul>
 <li><b>Copy</b> (Ctrl+C) and <b>Paste</b> (Ctrl+V) songs into a playlist or Up Next.
 <b>Cut</b> (Ctrl+X) from one playlist and paste into another moves them.</li>
@@ -172,7 +172,7 @@ that's already in Music isn't pasted into Music again.</li>
 <b>Audiobooks</b> only non-video files. Moving between Movies and TV Shows is fine, and
 Music also takes music videos.</li>
 <li><b>Undo</b> (Ctrl+Z) and <b>Redo</b> (Ctrl+Shift+Z) work for playlist changes,
-moves between sections, pasted copies and removing songs from the library. The menu
+moves between sections, pasted copies, and removing songs from the library. The menu
 says what it would undo.</li>
 <li>Files moved to the Trash can't be brought back with Undo (look in your Trash
 instead).</li>
@@ -181,10 +181,10 @@ instead).</li>
     ("Get Info", "Edit a song's details", """
 <ul>
 <li>Select songs and press <b>Ctrl+I</b> (or right-click → <b>Get Info</b>).</li>
-<li><b>Info</b>: name, artist, album, genre and more; changes are written into the
+<li><b>Info</b>: name, artist, album, genre, and more; changes are written into the
 file too. <b>Lyrics</b>: type or paste them. <b>Artwork</b>: paste or choose a
 picture.</li>
-<li>While you type an artist, album, composer or grouping, names already in your library
+<li>While you type an artist, album, composer, or grouping, names already in your library
 are suggested. <b>Genre</b> suggests yours first, then LuxTunes' list of about 3,300
 genres. A genre LuxTunes doesn't know is fine, but it's noted under the box, since it
 can't be matched with related genres.</li>
@@ -203,16 +203,16 @@ since a comma can be part of a name.</li>
 compilations. An artist who's only ever on compilations doesn't get an entry of their
 own.</li>
 <li><b>Options</b>: Volume Adjustment (it snaps back to None near the middle),
-Equalizer Preset, Media Kind, Start and Stop Time, Remember playback position and
+Equalizer Preset, Media Kind, Start and Stop Time, Remember playback position, and
 Skip when shuffling.</li>
-<li><b>Video</b> (movies and TV shows): Show, Season Number, Episode ID, Episode Number and
+<li><b>Video</b> (movies and TV shows): Show, Season Number, Episode ID, Episode Number, and
 Description.</li>
 <li>With several songs selected you get <i>Multiple Item Information</i>: only the
 fields you change are applied (a whole season's episodes at once, for example).</li>
 <li>Right-click → <b>Get Track Info Online…</b> looks songs up on MusicBrainz (after you
 say yes, or straight away if Preferences → Network allows it) and shows every suggested correction, and missing covers, for you to tick
 before anything changes. A credit like <i>Lümen &amp; Grayfield feat. Ann</i> fills in the
-Artist, each of the Artists and the Featured Artist; genres come from the song, else its
+Artist, each of the Artists, and the Featured Artist; genres come from the song, else its
 album. If MusicBrainz is busy, LuxTunes waits a moment and tries again.
 <b>Get Lyrics Online…</b> fills in missing lyrics.</li>
 </ul>"""),
@@ -239,15 +239,16 @@ library lives in one place, and files are named and filed as Artist / Album /
 <li>Turn it off to use a folder just as it is, for example a shared drive other programs
 read too: choose it as the media folder, and songs you add from it (or anywhere) stay
 where they are. LuxTunes never renames or moves them. New files it makes itself (CDs you
-import, converted copies, songs from an iPod or phone) still go into the media folder.</li>
+import, converted copies, and songs from an iPod or phone) still go into the media folder.</li>
 <li><b>Moved the folder to another drive?</b> Change its location in Preferences →
 Advanced and click OK: songs that are in the new place are pointed there.</li>
 <li><b>File → Library → Organize Library…</b> tidies everything at once (only while the
 folder is kept organized).</li>
 <li>Once a week LuxTunes keeps a copy of your library (ratings, plays, playlists) in a
 <i>Backups</i> folder next to it, the last four weeks. To go back to one, choose
-<b>File → Library → Restore from Backup…</b>; your library as it was is kept there too,
-so you can change your mind.</li>
+<b>File → Library → Restore from Backup…</b> and pick a week. Before it restores, LuxTunes
+saves your library as it is right now into the Backups folder, so if you change your mind
+you can restore that copy the same way.</li>
 </ul>"""),
 
     ("Importing CDs", "Rip a CD into your library", """
@@ -256,22 +257,23 @@ so you can change your mind.</li>
 Preferences → General (for example <i>Ask to Import CD</i>).</li>
 <li>LuxTunes asks before looking up the CD's names online (unless Preferences → Network
 allows it without asking).</li>
-<li>Choose the format (MP3, AAC, Apple Lossless, AIFF or WAV) with
+<li>Choose the format (MP3, AAC, Apple Lossless, AIFF, or WAV) with
 <b>Import Settings…</b> in Preferences.</li>
 </ul>"""),
 
-    ("Converting files", "MP3, AAC and iPod versions", """
+    ("Converting files", "MP3, AAC, and iPod versions", """
 <ul>
 <li>Right-click songs → <b>Create MP3 Version</b> (320 kbps) or <b>Create AAC Version</b>
 (256 kbps). Each format offers the other: an MP3 gets an AAC version, an AAC file an MP3
-one, and FLAC, WAV, AIFF, Apple Lossless and others both. From an MP3, AAC, Ogg or Opus
+one, and FLAC, WAV, AIFF, Apple Lossless, and others both. From an MP3, AAC, Ogg, or Opus
 file the new version is never made at a higher bit rate than the original (a 128 kbps
 MP3 makes a 128 kbps AAC): re-encoding can't bring back quality. Videos → <b>Create iPod
-Version</b>. The new file is made beside the original. (Needs FFmpeg:
+Version</b>. The new file is made beside the original. (This uses FFmpeg, which comes
+with the LuxTunes AppImage; a copy of LuxTunes installed another way needs it installed:
 <code>sudo apt install ffmpeg</code>.)</li>
 <li><b>Delete original after conversion</b> (Preferences → Advanced, off unless you turn
 it on): the original goes to the Trash and the new version takes its place, keeping
-its plays, rating and playlists.</li>
+its plays, rating, and playlists.</li>
 <li><b>No need to convert for your iPod:</b> keep FLACs in your library. Songs the iPod
 can't play (FLAC, Ogg, Opus) are converted while they sync, and only the iPod's copy
 changes. On the iPod's Summary, <b>Sync lossless songs as</b> chooses AAC (small) or
@@ -295,18 +297,18 @@ while the equalizer is on.</li>
 <li>Plug the iPod in: it appears under <b>Devices</b>. Choose what to sync on its tabs
 (Music, Movies, Podcasts, Audiobooks, Photos…), then click <b>Sync</b>. The Music tab offers the
 entire library with all playlists, the entire library with chosen playlists, or chosen
-playlists, artists, albums and genres.</li>
+playlists, artists, albums, and genres.</li>
 <li>Click anywhere on a row (or a movie's or audiobook's cover) to tick it. On the
 TV Shows and Podcasts tabs, clicking a show lists its episodes, so tick its box to sync it.
 Ticked shows are used with "episodes of selected shows"; ticked episodes always go.</li>
 <li>The search box filters the lists on the tab you're looking at, so a long list of
 artists or albums is quick to go through. Ticked rows stay ticked while hidden.</li>
-<li>Works with iPod classic, mini, shuffle and nano 1st–7th generation, and the
+<li>Works with iPod classic, mini, shuffle, and nano 1st–7th generation, and the
 original iPods. iPod touch can't be synced.</li>
 <li>Before syncing an iPod nano 6th or 7th generation, LuxTunes keeps a copy of its song
 list (in <i>~/.local/share/luxtunes/iPod backups</i>), in case it needs to be put back.</li>
 <li><b>New iPod sync engine (experimental):</b> Preferences → Advanced → <b>Use the new iPod
-sync engine</b> has LuxTunes write the iPod's song list, album artwork and signatures itself,
+sync engine</b> has LuxTunes write the iPod's song list, album artwork, and signatures itself,
 in place of libgpod (ported from ZenPod). It works with every iPod above except the
 shuffles. With it on, a copy of the song list (and the artwork list) is kept before every
 sync, and what was written is read back to check it. An iPod nano 5th generation must have
@@ -314,7 +316,7 @@ been synced with iTunes once, as with libgpod.</li>
 <li>Play counts and ratings from the iPod come back to your library.</li>
 <li><b>An iPod synced with another computer?</b> When it's plugged in, LuxTunes offers to
 add the songs on it that aren't in your library: they're copied into your library with
-their details, play counts and ratings, and nothing on the iPod changes. Do it before
+their details, play counts, and ratings, and nothing on the iPod changes. Do it before
 syncing, since a sync takes songs that aren't in your library off the iPod. To do it
 later, right-click the iPod → <b>Add Songs to Library…</b>. Songs bought from the iTunes
 Store with copy protection can't be played here, so they're left out.</li>
@@ -331,7 +333,7 @@ iPod's own software. Rockbox reads the song files themselves, so with
 <li>writes your playlists into the iPod's <i>Playlists</i> folder (your own playlists there are
 left alone);</li>
 <li>gives the iPod's copies of your songs their details and a cover Rockbox can show (a small
-plain JPEG; needs FFmpeg). Your library's files are never changed. The first sync checks
+plain JPEG, made with FFmpeg). Your library's files are never changed. The first sync checks
 every song once, which takes a while; after that only new or edited songs;</li>
 <li>adds plays from Rockbox to your library, if Rockbox's <i>Last.fm scrobbler</i> plugin is
 on. Its log isn't changed, and no play is counted twice.</li>
@@ -343,11 +345,11 @@ coded names), and update its database after a sync: Settings → General Setting
 
     ("Syncing an Android phone", "Put your music on your phone", """
 <ul>
-<li>Unlock the phone, plug it in and choose <b>File transfer</b> in its USB notification.
+<li>Unlock the phone, plug it in, and choose <b>File transfer</b> in its USB notification.
 It appears under <b>Devices</b>.</li>
 <li>Choose internal storage or an SD card, and what to sync, then click <b>Sync</b>. On the
 Music tab you can sync your entire library with all playlists or only the ones you
-tick, or just chosen playlists, artists, albums and genres.
+tick, or just chosen playlists, artists, albums, and genres.
 Everything goes in one <i>LuxTunes</i> folder that any music player can use.</li>
 <li><b>Delete media not in this selection</b> keeps the phone tidy. LuxTunes only ever
 touches its own folder.</li>
@@ -355,7 +357,7 @@ touches its own folder.</li>
 straight away, even partway through a big audiobook or a step like adding album covers;
 what's already copied stays, and the next sync carries on from there.</li>
 <li>If the phone stops responding partway through a file, LuxTunes gives up on that file
-after a while (instead of waiting forever), stops the sync and says so. Unlock the phone
+after a while (instead of waiting forever), stops the sync, and says so. Unlock the phone
 and sync again. Don't unplug the phone while it's still syncing.</li>
 <li>Keep the phone unlocked with its screen on during a big sync: some phones slow down or
 pause file transfers when the screen turns off.</li>
@@ -366,7 +368,7 @@ on a computer.</li>
 <li>Each sync keeps a log of what it did, file by file. If something goes wrong,
 <b>Help → Show Sync Logs</b> opens the folder.</li>
 <li>With the LuxTunes app for Android on the phone (luxtunes-mobile on GitHub), plays,
-ratings, playlists and the equalizer come back at the next sync. Songs you add on the phone are copied into your
+ratings, playlists, and the equalizer come back at the next sync. Songs you add on the phone are copied into your
 library, and details you edit there (names, albums, years…) are saved here too.</li>
 </ul>"""),
 
@@ -392,7 +394,7 @@ sort, and where you'd scrolled to while LuxTunes is open.</li>
 <li>Type in the search box to filter what's shown. Accents and capitals don't matter:
 <i>lumen</i> finds <i>Lümen</i> and <i>sigur ros</i> finds <i>Sigur Rós</i>. Click the
 magnifier to search only one kind of tag: Artist (which also covers Album Artist,
-Artists and Featured Artist), Album, Composer or Song (All searches them all). It goes
+Artists, and Featured Artist), Album, Composer, or Song (All searches them all). It goes
 back to All each time LuxTunes starts.</li>
 <li>Each Library section (Music, Movies, TV Shows…) keeps its own columns and their
 order; playlists use Music's.</li>

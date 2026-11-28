@@ -41,3 +41,24 @@ def test_a_big_log_keeps_its_newest_part(tmp_path):
     small.write_bytes(b"one crash\n")
     trim_log(small)
     assert small.read_bytes() == b"one crash\n"                                 # left alone
+
+
+def test_the_appimages_own_ffmpeg_is_used_when_none_is_installed(tmp_path, monkeypatch):
+    import shutil
+    import stat
+
+    from luxtunes.core import paths
+    bundled = tmp_path / "usr" / "lib" / "ffmpeg" / "ffmpeg"
+    bundled.parent.mkdir(parents=True)
+    bundled.write_text("#!/bin/sh\n")
+    bundled.chmod(bundled.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setattr(paths, "WINDOWS", False)
+    monkeypatch.setenv("APPDIR", str(tmp_path))
+    monkeypatch.setattr(shutil, "which", lambda name: None)          # nothing installed
+    assert paths.find_program("ffmpeg") == str(bundled)
+    assert paths.find_program("ffprobe") is None                       # not in this AppImage
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/" + name)
+    assert paths.find_program("ffmpeg") == "/usr/bin/ffmpeg"          # an installed one wins
+    monkeypatch.delenv("APPDIR")
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    assert paths.find_program("ffmpeg") is None                        # not an AppImage

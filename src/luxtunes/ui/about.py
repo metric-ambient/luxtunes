@@ -2,7 +2,7 @@
 
 Three tabs, like most desktop apps:
   About        the icon, version, a one-line description and the copyright.
-  Licenses     LuxTunes' own licence (GPL v3, with "View License…") and the
+  Licenses     LuxTunes' own license (GPL v3, with "View License…") and the
                open-source parts it's built on.
   System Info  versions and file locations, with "Copy" for bug reports.
 """
@@ -38,17 +38,17 @@ from luxtunes.core import organize
 RESOURCES = Path(__file__).resolve().parent.parent / "resources"
 # Shown under the version in the About tab.
 COPYRIGHT = "Copyright © 2026 metric-ambient. Written entirely by Claude Opus 5.5."
-DESCRIPTION = "A native Linux music manager for your library, your CDs and your iPod Classic."
+DESCRIPTION = "A native Linux music manager for your library, your CDs, and your iPod Classic."
 
-# (name, what LuxTunes uses it for, licence, link)
+# (name, what LuxTunes uses it for, license, link)
 THIRD_PARTY = [
-    ("Qt 6", "windows, drawing and audio playback", "GNU LGPL v3",
+    ("Qt 6", "windows, drawing, and audio playback", "GNU LGPL v3",
      "https://www.qt.io/licensing/open-source-lgpl-obligations"),
     ("PySide6 (Qt for Python)", "using Qt from Python", "GNU LGPL v3",
      "https://doc.qt.io/qtforpython-6/licenses.html"),
     ("Mutagen", "reading and writing tags in music files", "GNU GPL v2 or later",
      "https://github.com/quodlibet/mutagen"),
-    ("FFmpeg", "playing video, Create MP3 Version and encoding imported CDs (used as a separate "
+    ("FFmpeg", "playing video, Create MP3 Version, and encoding imported CDs (used as a separate "
      "program)",
      "GNU LGPL v2.1 or later; GPL v2 or later for some builds", "https://ffmpeg.org/legal.html"),
     ("LAME", "the MP3 encoder inside FFmpeg", "GNU LGPL v2 or later", "https://lame.sourceforge.io/"),
@@ -98,7 +98,11 @@ def _ffmpeg_version() -> str:
                                timeout=3).stdout.splitlines()[0]
     except (OSError, subprocess.SubprocessError, IndexError):
         return path
-    return first.replace("ffmpeg version ", "").split(" Copyright")[0]
+    version = first.replace("ffmpeg version ", "").split(" Copyright")[0]
+    appdir = os.environ.get("APPDIR")
+    if appdir and path.startswith(appdir):
+        version += " (comes with LuxTunes)"
+    return version
 
 
 def _system_name() -> str:
@@ -198,12 +202,12 @@ class AboutDialog(QDialog):
         browser = QTextBrowser()
         browser.setOpenExternalLinks(True)
         rows = "".join(
-            f"<p><b>{name}</b> — {use}<br>{licence} · <a href='{url}'>{url}</a></p>"
-            for name, use, licence, url in THIRD_PARTY)
+            f"<p><b>{name}</b> — {use}<br>{license} · <a href='{url}'>{url}</a></p>"
+            for name, use, license, url in THIRD_PARTY)
         browser.setHtml(
             "<h3>LuxTunes</h3>"
             "<p>GNU General Public License v3.0 or later. The icon was made for LuxTunes "
-            "and is under the same licence.</p>"
+            "and is under the same license.</p>"
             "<h3>Built with</h3>" + rows)
         view = QPushButton("View License…")
         view.clicked.connect(self._show_license)
@@ -220,7 +224,7 @@ class AboutDialog(QDialog):
         try:
             text = path.read_text(encoding="utf-8")
         except OSError:
-            text = "The licence text is at https://www.gnu.org/licenses/gpl-3.0.txt"
+            text = "The license text is at https://www.gnu.org/licenses/gpl-3.0.txt"
         dialog = QDialog(self)
         dialog.setWindowTitle("GNU General Public License v3")
         dialog.resize(640, 560)

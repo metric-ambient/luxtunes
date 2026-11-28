@@ -118,7 +118,7 @@ def test_untagged_video_is_added_as_a_movie(tmp_path):
         assert 1500 < track["total_time"] < 2500
 
 
-def test_podcasts_and_audiobooks_are_recognised(tmp_path):
+def test_podcasts_and_audiobooks_are_recognized(tmp_path):
     from mutagen.id3 import ID3, PCST
 
     conn, root = setup(tmp_path)

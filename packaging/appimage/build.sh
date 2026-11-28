@@ -5,8 +5,12 @@
 # Ubuntu 24.04 / Linux Mint 22 or newer, from the project folder:
 #     python3 -m venv build/venv && source build/venv/bin/activate
 #     pip install . pyinstaller
+#     sudo apt install libxcb-cursor0 build-essential nasm pkg-config zlib1g-dev gnupg
 #     bash packaging/appimage/build.sh
 # Everything it makes goes into build/ and dist/ in the project folder.
+# The AppImage carries its own small FFmpeg (build_ffmpeg.sh). Building it takes
+# a few minutes, so it's kept in build/ffmpeg/ and only built again when
+# build_ffmpeg.sh changes (a new version, or formats added).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -51,6 +55,15 @@ echo "2/3  Making the AppDir"
 mkdir -p "$APPDIR/usr/lib"
 cp -a "$BUNDLE" "$APPDIR/usr/lib/luxtunes"
 install -m 755 "$HERE/AppRun" "$APPDIR/AppRun"
+# FFmpeg, in usr/lib/ffmpeg, where LuxTunes looks when none is installed
+# (core/paths.py, find_program).
+FFMPEG_CACHE="$ROOT/build/ffmpeg/$(sha256sum "$HERE/build_ffmpeg.sh" | cut -c1-16)"
+if [ ! -x "$FFMPEG_CACHE/ffmpeg" ] || [ ! -x "$FFMPEG_CACHE/ffprobe" ]; then
+    echo "     Building FFmpeg (once; it's kept in build/ffmpeg)"
+    rm -rf "$ROOT/build/ffmpeg"             # an older FFmpeg's build
+    bash "$HERE/build_ffmpeg.sh" "$FFMPEG_CACHE"
+fi
+cp -a "$FFMPEG_CACHE" "$APPDIR/usr/lib/ffmpeg"
 cp "$HERE/luxtunes.desktop" "$APPDIR/luxtunes.desktop"
 cp "$ROOT/src/luxtunes/resources/luxtunes-256.png" "$APPDIR/luxtunes.png"
 ln -s luxtunes.png "$APPDIR/.DirIcon"

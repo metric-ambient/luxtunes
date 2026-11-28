@@ -35,9 +35,9 @@ FEATURES = {
 SENDS = {
     "updates": "LuxTunes asks GitHub for its latest version each time it starts. Nothing about "
                "you or your library is sent, and an update is never installed without asking.",
-    "track_info": "The names, artists and albums of the songs you choose are sent to "
+    "track_info": "The names, artists, and albums of the songs you choose are sent to "
                   "MusicBrainz, and covers come from the Cover Art Archive.",
-    "lyrics": "The names, artists, albums and lengths of the songs you choose are sent to "
+    "lyrics": "The names, artists, albums, and lengths of the songs you choose are sent to "
               "LRCLIB.",
     "cd_names": "When you insert a CD, its layout (track lengths, not your music) is sent to "
                 "MusicBrainz, and its cover comes from the Cover Art Archive.",

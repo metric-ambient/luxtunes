@@ -29,12 +29,21 @@ def cache_home() -> Path:
 
 
 def find_program(name: str) -> str | None:
-    """A program LuxTunes runs (ffmpeg, ffprobe): the one installed, or on
-    Windows the one that comes with LuxTunes (in ffmpeg\\ beside LuxTunes.exe)."""
+    """A program LuxTunes runs (ffmpeg, ffprobe): the one installed, else the
+    one that comes with LuxTunes: inside the AppImage (usr/lib/ffmpeg, from
+    packaging/appimage/build_ffmpeg.sh) or, on Windows, in ffmpeg\\ beside
+    LuxTunes.exe."""
     import shutil
     found = shutil.which(name)
-    if found or not WINDOWS:
+    if found:
         return found
+    if not WINDOWS:
+        appdir = os.environ.get("APPDIR")            # set while running as an AppImage
+        if appdir:
+            bundled = Path(appdir) / "usr" / "lib" / "ffmpeg" / name
+            if bundled.is_file() and os.access(bundled, os.X_OK):
+                return str(bundled)
+        return None
     base = Path(sys.executable).parent if getattr(sys, "frozen", False) else \
         Path(__file__).resolve().parents[3]
     for candidate in (base / "ffmpeg" / f"{name}.exe", base / f"{name}.exe"):
@@ -69,7 +78,7 @@ def trim_log(path: Path, most: int = 1024 * 1024, keep: int = 256 * 1024) -> Non
 
 
 def resolve_case_insensitive(path: Path) -> Path:
-    """Find `path` on disk even if folder/file capitalisation differs.
+    """Find `path` on disk even if folder/file capitalization differs.
 
     Windows ignores case, so a library imported from Windows can contain
     "What Keeps Me Up At Night" in the XML while the folder on disk is

@@ -9,7 +9,7 @@ here goes online.
 
 How close two genres are comes from the links: subgenre/parent, overlapping,
 fusion, part of, influence (strongest first). From a starting genre, a random
-walk that keeps returning to it spreads over its neighbours; a genre linked to
+walk that keeps returning to it spreads over its neighbors; a genre linked to
 everything (Rock, Pop, Electronic) is discounted so it doesn't make every pair
 of genres look related. No Qt in here.
 """
@@ -162,11 +162,11 @@ class Catalogue:
             nxt: dict[int, float] = defaultdict(float)
             for genre, mass in here.items():
                 visits[genre] += RETURN * mass
-                neighbours = self.links.get(genre)
-                if not neighbours:
+                neighbors = self.links.get(genre)
+                if not neighbors:
                     continue
-                total = sum(neighbours.values())
-                for other, weight in neighbours.items():
+                total = sum(neighbors.values())
+                for other, weight in neighbors.items():
                     nxt[other] += (1 - RETURN) * mass * weight / total
             here = nxt
         scores = {g: v / len(self.links[g]) ** HUB_DISCOUNT
