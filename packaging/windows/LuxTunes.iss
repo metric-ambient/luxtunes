@@ -49,7 +49,8 @@ Type: filesandordirs; Name: "{app}\_internal"
 Source: "{#AppFolder}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#FFmpegFolder}\ffmpeg.exe"; DestDir: "{app}\ffmpeg"; Flags: ignoreversion
 Source: "{#FFmpegFolder}\ffprobe.exe"; DestDir: "{app}\ffmpeg"; Flags: ignoreversion
-Source: "{#FFmpegFolder}\LICENSE"; DestDir: "{app}\ffmpeg"; DestName: "LICENSE.txt"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#FFmpegFolder}\LICENSE"; DestDir: "{app}\ffmpeg"; DestName: "LICENSE.txt"; Flags: ignoreversion
+Source: "{#FFmpegFolder}\SOURCES.txt"; DestDir: "{app}\ffmpeg"; Flags: ignoreversion
 Source: "{#LicenseFile}"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
 [Icons]
